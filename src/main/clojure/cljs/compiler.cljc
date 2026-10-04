@@ -2237,6 +2237,9 @@
             :source-map-path (:source-map-path opts)
             :source-map-timestamp (:source-map-timestamp opts)
             :source-map-pretty-print (:source-map-pretty-print opts)
+            ;; ES modules are bundled from the output directory, which
+            ;; doesn't have the sources (jar ones aren't files)
+            :sources-content (when (esm-mode? opts) [(slurp src)])
             :relpaths {(util/path src)
                        (util/ns->relpath (first (:provides opts)) (:ext opts))}})))))
 

@@ -7,10 +7,13 @@
 // TypeScript files they import.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { pruneChunks, renameProps } from './prune.js';
+import os from 'node:os';
+import { Worker } from 'node:worker_threads';
+import { pruneChunks, propertyRenames } from './prune.js';
 
 const EVENT_PREFIX = '[cljs.esm] ';
 const NPM_AS = 'cljs-npm-as:';
@@ -36,16 +39,53 @@ function ednValue(v) {
 }
 
 // oxc's minifier shipped with Rolldown, as used by Vite
-async function loadMinifier(root) {
+function resolveFromProject(root, specifier, purpose) {
   for (const base of [root, process.cwd()]) {
     try {
-      const resolved = createRequire(path.join(base, 'noop.js')).resolve('rolldown/utils');
-      return (await import(pathToFileURL(resolved).href)).minify;
+      return createRequire(path.join(base, 'noop.js')).resolve(specifier);
     } catch (e) {
       // try the next location
     }
   }
-  throw new Error('rolldown/utils not found, can not minify');
+  throw new Error(`${specifier} not found, can not ${purpose}`);
+}
+
+async function loadFromProject(root, specifier, purpose) {
+  return import(pathToFileURL(resolveFromProject(root, specifier, purpose)).href);
+}
+
+// Statement summaries of chunks for pruning (prune.js), parsed with oxc's
+// parser (shipped with Rolldown, at oxcPath) in worker threads, the largest
+// chunks first.
+async function summarizeChunks(oxcPath, chunks) {
+  const order = chunks.map((c, i) => i).sort((a, b) => chunks[b].code.length - chunks[a].code.length);
+  const results = new Array(chunks.length);
+  const size = Math.min(chunks.length, os.availableParallelism());
+  const workers = Array.from({ length: size }, () => new Worker(new URL('./prune-worker.js', import.meta.url)));
+  try {
+    await Promise.all(workers.map(async worker => {
+      for (let i = order.shift(); i !== undefined; i = order.shift()) {
+        const { fileName, code } = chunks[i];
+        const reply = await new Promise((resolve, reject) => {
+          worker.once('message', resolve);
+          worker.once('error', reject);
+          worker.postMessage({ id: i, oxcPath, fileName, code });
+        });
+        worker.removeAllListeners('error');
+        if (reply.error) throw new Error(reply.error);
+        results[i] = reply.summary;
+      }
+    }));
+  } finally {
+    await Promise.all(workers.map(w => w.terminate()));
+  }
+  return results;
+}
+
+// Composes source maps of the pruned, minified chunks with the bundler's,
+// which the project depends on: @jridgewell/remapping.
+async function loadRemapping(root) {
+  return (await loadFromProject(root, '@jridgewell/remapping', 'compose source maps')).default;
 }
 
 // Whether a dependency pre-bundled by Vite's dev server was CommonJS, from the
@@ -149,6 +189,18 @@ export default function cljs(options) {
     }
   }
 
+  // Source map sources: compiled namespaces by classpath path (app/main.cljs),
+  // other files relative to cwd (the project), not to the machine that built
+  // them; the maps embed their content. source is relative to directory dir.
+  function sourcePath(dir, source) {
+    if (source == null) return source;
+    const file = path.resolve(dir, source);
+    const compiled = file.startsWith(outputDir + path.sep);
+    // already transformed (Vite rewrites the maps of chunks it edits)
+    if (!compiled && !existsSync(file)) return source;
+    return (compiled ? path.relative(outputDir, file) : path.relative(cwd, file)).split(path.sep).join('/');
+  }
+
   async function writeManifest(manifest) {
     if (!manifestName) return;
     const file = path.resolve(config.root, config.build.outDir, manifestName);
@@ -180,6 +232,9 @@ export default function cljs(options) {
           rollupOptions: {
             input: Object.fromEntries(Object.entries(info.main).map(([ns, file]) => [ns, path.join(outputDir, file)])),
             preserveEntrySignatures: false,
+            output: {
+              sourcemapPathTransform: (source, sourcemapPath) => sourcePath(path.dirname(sourcemapPath), source),
+            },
           },
         };
         // Production bundles: bundlers treat every
@@ -221,6 +276,15 @@ export default function cljs(options) {
     },
 
     async load(id) {
+      // compiled namespaces with their source maps, to the ClojureScript sources
+      if (config.command === 'build' && config.build.sourcemap && id.startsWith(outputDir + path.sep) && id.endsWith('.js')) {
+        try {
+          const [code, map] = await Promise.all([fs.readFile(id, 'utf8'), fs.readFile(id + '.map', 'utf8')]);
+          return { code, map: JSON.parse(map) };
+        } catch (e) {
+          return null;
+        }
+      }
       if (!id.startsWith('\0' + NPM_AS)) return null;
       const target = id.slice(NPM_AS.length + 1);
       const file = target.split('?')[0];
@@ -242,30 +306,54 @@ export default function cljs(options) {
           `export default keys.length === 1 && keys[0] === 'default' ? m[keys[0]] : m;\n`;
     },
 
-    async generateBundle(outputOptions, bundle) {
+    // after Vite's own generateBundle hooks, i.e. its preloading of dynamic
+    // imports' dependencies, which edits chunks and their source maps
+    generateBundle: { order: 'post', async handler(outputOptions, bundle) {
       if (config.command !== 'build') return;
       const chunks = Object.values(bundle).filter(c => c.type === 'chunk');
       if (options.prune !== false) {
-        const parse = code => this.parse(code);
         const start = Date.now();
-        const pruned = pruneChunks(chunks.map(c => c.code), parse);
+        const oxcPath = resolveFromProject(config.root, 'rolldown/utils', 'prune and minify');
+        const oxc = await import(pathToFileURL(oxcPath).href);
+        const pruned = pruneChunks(chunks.map(c => c.code), await summarizeChunks(oxcPath, chunks));
         const pruneMs = Date.now() - start;
-        const renamed = renameProps(pruned.codes, parse);
-        const renameMs = Date.now() - start - pruneMs;
-        const minifier = minify ? await loadMinifier(config.root) : null;
+        const renames = propertyRenames(pruned.codes);
+        const minifier = minify ? oxc.minify : null;
+        const remapping = minifier && chunks.some(c => c.map) ? await loadRemapping(config.root) : null;
         await Promise.all(chunks.map(async (chunk, i) => {
-          let code = renamed.codes[i];
+          let code = pruned.codes[i];
           if (minifier) {
-            const result = await minifier(chunk.fileName, code, { module: true, compress: true, mangle: true });
+            // the file name in the chunk's directory: the source the map's
+            // sources are composed relative to
+            const result = await minifier(path.basename(chunk.fileName), code, {
+              module: true,
+              compress: true,
+              mangle: true,
+              // the renames apply across chunks, cljs$ properties are the
+              // compiler's, only accessed as properties (or quoted)
+              mangleProps: { include: /^cljs\$/, quoted: true, cache: renames },
+              sourcemap: Boolean(chunk.map),
+            });
             if (result.errors?.length) this.warn(`minifying ${chunk.fileName}: ${result.errors[0].message}`);
             code = result.code;
+            if (chunk.map) {
+              // blanking kept the positions of the bundler's map
+              const map = remapping([result.map, JSON.parse(chunk.map.toString())], () => null);
+              const dir = path.join(path.resolve(config.root, config.build.outDir), path.dirname(chunk.fileName));
+              map.sources = map.sources.map(source => sourcePath(dir, source));
+              chunk.map = map;
+              // the bundler has emitted the chunk's map file already
+              const asset = bundle[chunk.fileName + '.map'];
+              if (asset?.type === 'asset') asset.source = map.toString();
+              // the minifier drops the bundler's source map comment
+              if (config.build.sourcemap === true) code += `\n//# sourceMappingURL=${path.basename(chunk.fileName)}.map\n`;
+            }
           }
           chunk.code = code;
-          chunk.map = null;
         }));
         config.logger.info(`[cljs] removed ${pruned.removed} unused statements (${pruneMs}ms), ` +
-          `renamed ${renamed.renamed} properties (${renameMs}ms), ` +
-          `minified (${Date.now() - start - pruneMs - renameMs}ms)`);
+          `renamed ${Object.keys(renames).length} properties, ` +
+          `minified (${Date.now() - start - pruneMs}ms)`);
       }
       if (manifestName) {
         // entry points' chunks, with the chunks they import statically
@@ -291,7 +379,7 @@ export default function cljs(options) {
         }
         this.emitFile({ type: 'asset', fileName: manifestName, source: JSON.stringify(manifest, null, 2) });
       }
-    },
+    } },
 
     // Hot updates of compiled modules wait for the compile (and its build
     // hooks, i.e. generated CSS) to finish.

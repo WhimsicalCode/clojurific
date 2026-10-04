@@ -186,8 +186,13 @@ macros.
 Bundlers treat `Type.prototype.cljs$core$ISeq$_first$arity$1 = ...` as a side
 effect, which keeps every protocol implementation of a used type. The Vite
 plugin removes those of protocol methods never invoked in the bundle (and the
-code only they reference), across chunks, shortens `cljs$...` property names
-and minifies with oxc.
+code only they reference), across chunks: chunks are parsed and summarized in
+worker threads, removed statements are blanked, which keeps the bundler's
+source maps valid. oxc then minifies the chunks in parallel, renaming
+`cljs$...` properties with one mapping for the whole bundle (`mangleProps`).
+Source maps (`build.sourcemap`) are composed through these steps to the
+ClojureScript sources, which the compiler's maps embed (`sourcesContent`).
+On the Whimsical app this pass takes ~5.5s (2.2s pruning).
 
 ## Status
 
@@ -222,9 +227,6 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
   stable ids from a `WeakMap` rather than failing.
 
 - REPL: not supported under `:module-format :esm` yet.
-- Size: protocol pruning and property renaming are a bundle post pass in
-  JavaScript (11s on the Whimsical app).
-- Production source maps are dropped by the prune pass.
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`,
   which keeps them in every bundle.
 - Closure's `:modules` aren't supported, lazy loading uses `import()`.

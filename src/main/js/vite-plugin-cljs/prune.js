@@ -1,14 +1,15 @@
 // Removes ClojureScript protocol method implementations and other compiler
 // generated cljs$ properties never read in a bundle, together with the code
-// only they reference, and renames the remaining ones to short names.
+// only they reference, and maps the remaining ones to short names (renamed
+// by the minifier).
 //
 // Bundlers treat every `Type.prototype.cljs$core$ISeq$_first$arity$1 = ...` as
 // a side effect, the Closure Compiler removes them per property. Protocols are
 // dispatched in one chunk and implemented in others, both passes work on all
 // chunks of a bundle at once.
 //
-// parse is the bundler's parser returning an ESTree Program, i.e. the plugin
-// context's this.parse.
+// Chunks are parsed (oxc's ESTree) and summarized in worker threads
+// (prune-worker.js), propagation runs on all chunks' summaries.
 
 const CLJS_PROP = /^cljs\$/;
 
@@ -99,38 +100,50 @@ function collect(node, ids, props) {
   }
 }
 
-// The top-level statements of a chunk with what they declare and reference.
-function analyze(code, parse) {
-  const ast = parse(code);
-  const declared = new Set();
-  const stmts = ast.body.map(node => {
-    const s = { node, live: false, ids: new Set(), props: new Set() };
+/**
+ * The top-level statements of a chunk (code, its ESTree AST) with what they
+ * declare and reference: {start, end, kind, names, object, prop, ids, props},
+ * plain data a worker can send.
+ */
+export function summarize(code, ast) {
+  return ast.body.map(node => {
+    const s = { start: node.start, end: node.end };
+    const ids = new Set(), props = new Set();
     const pa = propAssignment(node);
     const defonce = defonceDecl(node, code);
     if (pa && isPureInit(pa.rhs, code) && (!pa.lhs.computed || isPureInit(pa.lhs.property, code))) {
       s.kind = 'prop'; s.object = pa.object; s.prop = pa.prop;
-      collect(pa.rhs, s.ids, s.props);
-      if (pa.lhs.computed) collect(pa.lhs.property, s.ids, s.props);
-      s.ids.add(pa.object);
+      collect(pa.rhs, ids, props);
+      if (pa.lhs.computed) collect(pa.lhs.property, ids, props);
+      ids.add(pa.object);
     } else if (defonce) {
-      s.kind = 'decl'; s.names = [defonce.name]; declared.add(defonce.name);
-      collect(node, s.ids, s.props);
+      s.kind = 'decl'; s.names = [defonce.name];
+      collect(node, ids, props);
     } else if (node.type === 'VariableDeclaration' && node.declarations.every(d => d.id.type === 'Identifier' && isPureInit(d.init, code))) {
       s.kind = 'decl'; s.names = node.declarations.map(d => d.id.name);
-      s.names.forEach(n => declared.add(n));
-      collect(node, s.ids, s.props);
+      collect(node, ids, props);
     } else if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') {
-      s.kind = 'decl'; s.names = [node.id.name]; declared.add(node.id.name);
-      collect(node, s.ids, s.props);
+      s.kind = 'decl'; s.names = [node.id.name];
+      collect(node, ids, props);
     } else {
       s.kind = 'root';
-      collect(node, s.ids, s.props);
+      collect(node, ids, props);
     }
+    s.ids = [...ids]; s.props = [...props];
     return s;
   });
+}
+
+// A chunk's statements (summarize) indexed for propagate.
+function index(code, summary) {
+  const declared = new Set();
+  const stmts = summary.map(s => ({ ...s, live: false, ids: new Set(s.ids), props: new Set(s.props) }));
   const byName = new Map(), propsByObject = new Map();
   for (const s of stmts) {
-    if (s.kind === 'decl') for (const n of s.names) (byName.get(n) || byName.set(n, []).get(n)).push(s);
+    if (s.kind === 'decl') for (const n of s.names) {
+      declared.add(n);
+      (byName.get(n) || byName.set(n, []).get(n)).push(s);
+    }
     if (s.kind === 'prop') (propsByObject.get(s.object) || propsByObject.set(s.object, []).get(s.object)).push(s);
   }
   return { code, stmts, declared, byName, propsByObject, liveIds: new Set(), work: [] };
@@ -166,12 +179,19 @@ function propagate(chunk, liveProps) {
   }
 }
 
+// Blanks code between start and end, keeping line breaks: positions of the
+// rest, i.e. the bundler's source map of the chunk, stay valid.
+function blank(code, start, end) {
+  return code.slice(start, end).replace(/[^\n\r\u2028\u2029]/g, ' ');
+}
+
 /**
- * Prunes the chunks of a bundle, codes is an array of chunk sources, returns
- * {codes, removed}.
+ * Prunes the chunks of a bundle, codes is an array of chunk sources,
+ * summaries their statements (summarize), returns {codes, removed}. Removed
+ * statements are blanked out.
  */
-export function pruneChunks(codes, parse) {
-  const chunks = codes.map(code => analyze(code, parse));
+export function pruneChunks(codes, summaries) {
+  const chunks = codes.map((code, i) => index(code, summaries[i]));
   const liveProps = new Set();
   // properties read in one chunk keep implementations alive in others
   for (let changed = true; changed;) {
@@ -182,48 +202,26 @@ export function pruneChunks(codes, parse) {
   const out = chunks.map(({ code, stmts }) => {
     let result = '', pos = 0;
     for (const s of stmts) {
-      if (!s.live) { result += code.slice(pos, s.node.start); pos = s.node.end; removed++; }
+      if (!s.live) { result += code.slice(pos, s.start) + blank(code, s.start, s.end); pos = s.end; removed++; }
     }
     return result + code.slice(pos);
   });
   return { codes: out, removed };
 }
 
-function propertySites(code, parse, sites, counts, taken) {
-  const stack = [parse(code)];
-  while (stack.length) {
-    const n = stack.pop();
-    let name = null, start, end, quote = false;
-    if (n.type === 'MemberExpression' && !n.computed) { name = n.property.name; start = n.property.start; end = n.property.end; }
-    else if ((n.type === 'Property' || n.type === 'MethodDefinition' || n.type === 'PropertyDefinition') && !n.computed && n.key.type === 'Identifier') { name = n.key.name; start = n.key.start; end = n.key.end; }
-    else if (n.type === 'Literal' && typeof n.value === 'string') { name = n.value; start = n.start; end = n.end; quote = true; }
-    if (name !== null) {
-      if (CLJS_PROP.test(name) && /^[\w$]+$/.test(name)) {
-        sites.push({ name, start, end, quote });
-        counts.set(name, (counts.get(name) || 0) + 1);
-      } else if (!quote) taken.add(name);
-    }
-    for (const key in n) {
-      const v = n[key];
-      if (Array.isArray(v)) { for (const c of v) if (c && typeof c.type === 'string') stack.push(c); }
-      else if (v && typeof v.type === 'string' && key !== 'property' && key !== 'key') stack.push(v);
-      else if (v && typeof v.type === 'string' && (n.computed || (key === 'key' && n.key.type !== 'Identifier'))) stack.push(v);
-    }
-  }
-}
-
 /**
- * Renames cljs$ properties (protocol methods, arities, ...) of all chunks of a
- * bundle consistently to short names, they're only ever accessed as properties
- * or exactly matching strings. Returns {codes, renamed}.
+ * Short names for the cljs$ properties (protocol methods, arities, ...) of all
+ * chunks of a bundle, most used first: the cache of the minifier's property
+ * mangling, one mapping for all chunks minified in parallel. The names are
+ * found textually, a superset of the properties (bindings and strings named
+ * cljs$... too), names already used as $<letters> are skipped.
  */
-export function renameProps(codes, parse) {
+export function propertyRenames(codes) {
   const counts = new Map(), taken = new Set();
-  const sitesPerChunk = codes.map(code => {
-    const sites = [];
-    propertySites(code, parse, sites, counts, taken);
-    return sites;
-  });
+  for (const code of codes) {
+    for (const [name] of code.matchAll(/(?<![\w$])cljs\$[\w$]*/g)) counts.set(name, (counts.get(name) || 0) + 1);
+    for (const [name] of code.matchAll(/(?<![\w$])\$[A-Za-z]+(?![\w$])/g)) taken.add(name);
+  }
   const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
   let i = 0;
   const nextName = () => {
@@ -231,21 +229,10 @@ export function renameProps(codes, parse) {
       let n = i++, s = '';
       do { s = alphabet[n % alphabet.length] + s; n = Math.floor(n / alphabet.length); } while (n > 0);
       const name = '$' + s;
-      if (!taken.has(name) && !counts.has(name)) return name;
+      if (!taken.has(name)) return name;
     }
   };
-  const renames = new Map();
-  for (const [name] of [...counts].sort((a, b) => b[1] - a[1])) renames.set(name, nextName());
-  const out = codes.map((code, idx) => {
-    const sites = sitesPerChunk[idx].sort((a, b) => a.start - b.start);
-    let result = '', pos = 0;
-    for (const site of sites) {
-      result += code.slice(pos, site.start);
-      const r = renames.get(site.name);
-      result += site.quote ? JSON.stringify(r) : r;
-      pos = site.end;
-    }
-    return result + code.slice(pos);
-  });
-  return { codes: out, renamed: renames.size };
+  const renames = {};
+  for (const [name] of [...counts].sort((a, b) => b[1] - a[1])) renames[name] = nextName();
+  return renames;
 }
