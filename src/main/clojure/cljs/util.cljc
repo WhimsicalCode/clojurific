@@ -40,8 +40,12 @@
                            (if (== n Integer/MIN_VALUE)
                              0
                              (Math/abs n)))]
+           ;; the compiler's sources only, not i.e. src/main/js (Vite plugin)
            (str synthethetic-version-prefix
-                (qualifier (reduce unchecked-add-int (map file-hash (file-seq (main-src-directory)))))))))
+                (qualifier (reduce unchecked-add-int
+                             (map file-hash
+                               (mapcat #(file-seq (io/file (main-src-directory) %))
+                                 ["clojure" "cljs"]))))))))
 
 (defn ^String clojurescript-version
   "Returns clojurescript version as a printable string."

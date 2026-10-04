@@ -1844,7 +1844,20 @@
              {:ns ns-name :dep dep :clojure.error/phase :compilation}))))))
 
 #?(:clj
+   (defn- emit-esm-preloads
+     "Main namespaces import the :preloads first, ES modules evaluate their
+     imports in order."
+     [ns-name]
+     (let [{:keys [main preloads]} (:options @env/*compiler*)
+           mains (set (map symbol (if (coll? main) main [main])))]
+       (when (and (contains? mains ns-name)
+                  (not (some #{ns-name} (map symbol preloads))))
+         (doseq [preload preloads]
+           (emitln "import \"" (esm-ns-path ns-name preload) "\";"))))))
+
+#?(:clj
    (defn- emit-esm-imports [ns-name deps]
+     (emit-esm-preloads ns-name)
      (when-not (= 'cljs.core ns-name)
        (emit-esm-import ns-name 'cljs.core))
      (doseq [dep deps]

@@ -16,7 +16,7 @@
 (defprotocol ILoadable
   (ready? [x]))
 
-(deftype Loadable [import-fn deref-fn ^:mutable module ^:mutable promise]
+(deftype Loadable [modules import-fn deref-fn ^:mutable module ^:mutable promise]
   ILoadable
   (ready? [_]
     (some? module))

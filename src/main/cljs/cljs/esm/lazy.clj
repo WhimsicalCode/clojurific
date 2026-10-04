@@ -22,11 +22,13 @@
 
 (defmacro loadable
   "Returns a Loadable of a fully qualified var, or of a map or vector of
-  them, of namespaces loaded on demand by cljs.esm.lazy/load."
+  them, of namespaces loaded on demand by cljs.esm.lazy/load. The
+  Loadable's modules are the namespaces it loads."
   [thing]
   (cond
     (qualified-symbol? thing)
     `(cljs.esm.lazy/Loadable.
+       '[~(symbol (namespace thing))]
        ~(import-fn &env (symbol (namespace thing)))
        (fn [m#] (cljs.core/unchecked-get m# ~(export-name thing)))
        nil nil)
@@ -38,6 +40,7 @@
           m      (gensym "modules")
           lookup (fn [sym] `(cljs.core/unchecked-get (cljs.core/aget ~m ~(idx (symbol (namespace sym)))) ~(export-name sym)))]
       `(cljs.esm.lazy/Loadable.
+         '~(vec nses)
          (fn [] (js/Promise.all (cljs.core/array ~@(map (fn [ns] (list (import-fn &env ns))) nses))))
          (fn [~m] ~(if (map? thing)
                      (into {} (map (fn [[k sym]] [k (lookup sym)])) thing)

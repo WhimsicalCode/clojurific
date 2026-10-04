@@ -22,7 +22,7 @@
             [clojure.string :as string])
   (:import [java.io File]
            [java.net URL]
-           [java.util.concurrent Executors Future]))
+           [java.util.concurrent Executors Future LinkedBlockingQueue]))
 
 (def default-opts
   {:module-format  :esm
@@ -79,6 +79,9 @@
         (let [ns-info (ana/parse-ns file)]
           (swap! parse-ns-cache assoc k ns-info)
           ns-info))))
+
+(defn- mains [{:keys [main preloads]}]
+  (concat preloads (if (coll? main) main [main])))
 
 (defn find-sources
   "Returns the parsed ns info of namespaces and their transitive ClojureScript
@@ -207,6 +210,17 @@
       (util/mkdirs f)
       (spit f (json/write-str {:type "module"})))))
 
+(defn- write-build-info
+  "Writes cljs-esm.json to the output directory: the modules of the main
+  namespaces, the build's entry points for bundlers."
+  [{:keys [output-dir main] :as opts}]
+  (spit-if-changed (io/file output-dir "cljs-esm.json")
+    (json/write-str
+      {:main (into (sorted-map)
+               (map (fn [ns] [(str ns) (util/ns->relpath (symbol ns) :js)]))
+               (if (coll? main) main [main]))
+       :mode (some-> (:mode opts) name)})))
+
 (defn- normalize-closure-defines
   "Normalizes :closure-defines keys to the munged names goog-define vars are
   looked up by."
@@ -244,6 +258,45 @@
       (finally
         (.shutdown pool)))))
 
+(defn- ensure-analyzed!
+  "Namespaces up to date aren't recompiled, nor analyzed. Reads their
+  analysis (from the analysis cache) so that the compiler environment
+  describes the whole build, for build hooks and the watcher."
+  [compiler-env inputs opts]
+  (doseq [{:keys [ns source-file]} inputs]
+    (when-not (get-in @compiler-env [::ana/namespaces ns :name])
+      (ana/analyze-file source-file opts))))
+
+(defn- run-hooks!
+  "Calls the :build-hooks, [fn-sym & args], with the build and args. The
+  build is a map of :compiler-env (a value), :namespaces (in dependency
+  order), :mode and :options."
+  [compiler-env inputs opts]
+  (doseq [[f & args] (:build-hooks opts)]
+    (apply (requiring-resolve f)
+      {:compiler-env @compiler-env
+       :namespaces   (mapv :ns inputs)
+       :mode         (:mode opts)
+       :options      opts}
+      args)))
+
+(defn- cljs-warnings
+  "The analyzer's warnings with the :warnings option applied, like
+  cljs.closure: a map of warning types, or a boolean toggling the undeclared
+  var and namespace warnings. Closure namespace munging doesn't happen under
+  ES module output."
+  [{:keys [warnings] :or {warnings true}}]
+  (-> ana/*cljs-warnings*
+      (merge (if (map? warnings)
+               warnings
+               (zipmap [:unprovided :undeclared-var :undeclared-ns :undeclared-ns-form]
+                 (repeat (boolean warnings)))))
+      (assoc :munged-namespace false)))
+
+(defn- prepare-opts [opts]
+  (-> (merge default-opts opts)
+      (update :closure-defines normalize-closure-defines)))
+
 (defn build
   "Compiles the namespaces in :main (a symbol or a collection of symbols) and
   their dependencies to ES modules in :output-dir. Returns the compiled
@@ -251,33 +304,36 @@
   ([opts]
    (build opts (env/default-compiler-env (merge default-opts opts))))
   ([opts compiler-env]
-   (let [opts (-> (merge default-opts opts)
-                  (update :closure-defines normalize-closure-defines))
-         mains (let [m (:main opts)] (if (coll? m) m [m]))]
-     (env/with-compiler-env compiler-env
-       (swap! compiler-env assoc :options opts)
-       (let [start  (System/nanoTime)
-             inputs (find-sources mains opts)]
-         ;; lets the compiler know which namespaces are part of the build
-         ;; before they're analyzed
-         (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
-         (swap! compiler-env update ::ana/data-readers merge (ana/load-data-readers))
-         ;; cljs.core is analyzed first, the compiler expects its analysis
-         ;; to be available when compiling anything else
-         (compile-ns (first (filter #(= 'cljs.core (:ns %)) inputs)) opts)
-         (let [others (remove #(= 'cljs.core (:ns %)) inputs)]
-           (if (:parallel-build opts)
-             (compile-parallel others opts)
-             (doseq [input others]
-               (compile-ns input opts))))
-         (install-goog-shims opts)
-         (install-goog-libs compiler-env opts)
-         (write-package-json opts)
-         (when (:verbose opts)
-           (util/debug-prn
-             (format "Compiled %d namespaces in %.1fs" (count inputs)
-               (/ (- (System/nanoTime) start) 1e9))))
-         (map :ns inputs))))))
+   (let [opts (prepare-opts opts)]
+     (binding [ana/*cljs-warnings* (cljs-warnings opts)]
+       (env/with-compiler-env compiler-env
+         (swap! compiler-env assoc :options opts)
+         (let [start  (System/nanoTime)
+               inputs (find-sources (mains opts) opts)]
+           ;; lets the compiler know which namespaces are part of the build
+           ;; before they're analyzed
+           (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
+           (swap! compiler-env update ::ana/data-readers merge (ana/load-data-readers))
+           (write-build-info opts)
+           ;; cljs.core is analyzed first, the compiler expects its analysis
+           ;; to be available when compiling anything else
+           (compile-ns (first (filter #(= 'cljs.core (:ns %)) inputs)) opts)
+           (let [others (remove #(= 'cljs.core (:ns %)) inputs)]
+             (if (:parallel-build opts)
+               (compile-parallel others opts)
+               (doseq [input others]
+                 (compile-ns input opts))))
+           (install-goog-shims opts)
+           (install-goog-libs compiler-env opts)
+           (write-package-json opts)
+           (when (seq (:build-hooks opts))
+             (ensure-analyzed! compiler-env inputs opts)
+             (run-hooks! compiler-env inputs opts))
+           (when (:verbose opts)
+             (util/debug-prn
+               (format "Compiled %d namespaces in %.1fs" (count inputs)
+                 (/ (- (System/nanoTime) start) 1e9))))
+           (map :ns inputs)))))))
 
 (defn- event!
   "Prints a build event as a JSON line, consumed by the Vite plugin."
@@ -360,38 +416,143 @@
                 (conj done ns)))))
         done))))
 
+(defn- resource-refs
+  "Classpath resources namespaces depend on, {path #{ns}}. Macros record
+  them as {path last-modified} under :cljs.esm/resource-refs of the
+  namespace being compiled, see watch-resource!."
+  [compiler-env]
+  (reduce-kv
+    (fn [m ns {:keys [::resource-refs]}]
+      (reduce (fn [m path] (update m path (fnil conj #{}) ns)) m (keys resource-refs)))
+    {}
+    (::ana/namespaces @compiler-env)))
+
+(defn- resource-mtimes [refs]
+  (into {}
+    (keep (fn [path]
+            (when-let [res (io/resource path)]
+              [path (util/last-modified res)])))
+    (keys refs)))
+
+(defn watch-resource!
+  "For macros: records that the namespace being compiled depends on the
+  classpath resource at path, the watcher recompiles the namespace when the
+  resource changes."
+  [env path]
+  (when env/*compiler*
+    (let [res (or (io/resource path)
+                  (throw (ana/error env (str "Resource not found: " path))))]
+      (swap! env/*compiler* assoc-in
+        [::ana/namespaces (-> env :ns :name) ::resource-refs path]
+        (util/last-modified res)))))
+
+(defn- resource-root
+  "The classpath directory resource path is in, nil if it isn't in one."
+  [path]
+  (when-let [res (io/resource path)]
+    (when (= "file" (.getProtocol ^URL res))
+      (let [file (.getCanonicalPath (io/file res))]
+        (subs file 0 (- (count file) (count path) 1))))))
+
+(defn- watch-dirs
+  "Directories with sources to watch, :watch-dirs or the classpath
+  directories, without the output directory and the compiler's own sources:
+  a changed compiler needs a new watcher, reloading it in place doesn't
+  work."
+  [{:keys [output-dir] :as opts}]
+  (let [output   (.getCanonicalPath (io/file output-dir))
+        compiler (set (keep resource-root ["cljs/compiler.cljc" "cljs/core.cljs"]))]
+    (->> (or (:watch-dirs opts)
+             (string/split (System/getProperty "java.class.path") #":"))
+         (map io/file)
+         (filter #(.isDirectory ^File %))
+         (map #(.getCanonicalPath ^File %))
+         (remove #(or (= output %) (string/starts-with? output (str % File/separator))))
+         (remove compiler)
+         distinct)))
+
+(defn- start-stdin-reader!
+  "Under :exit-with-parent, reads the parent's messages from stdin, puts
+  the paths of `changed <path>` lines on queue, exits on EOF: the parent
+  closes stdin when it exits, the watcher has to stop too."
+  [^LinkedBlockingQueue queue]
+  (doto (Thread. (fn []
+                   (with-open [rdr (io/reader System/in)]
+                     (doseq [^String line (line-seq rdr)]
+                       (when (string/starts-with? line "changed ")
+                         (.put queue (subs line 8)))))
+                   (System/exit 0)))
+    (.setDaemon true)
+    (.start)))
+
+(defn- poll-changes
+  "Polls dirs for changed source files, returns [changed files']."
+  [dirs files]
+  (Thread/sleep 100)
+  (let [files' (source-files dirs)]
+    [(keep (fn [[path mtime]]
+             (when (not= mtime (get files path)) (io/file path)))
+       files')
+     files']))
+
+(defn- next-changes
+  "Blocks until the parent reports changed files (sources or resources),
+  returns them, batching the changes reported within a moment of each
+  other."
+  [^LinkedBlockingQueue queue]
+  (let [first-path (.take queue)]
+    (Thread/sleep 50)
+    (let [more (java.util.ArrayList.)]
+      (.drainTo queue more)
+      (map io/file (distinct (cons first-path more))))))
+
 (defn watch
-  "Builds like build, then watches :watch-dirs (defaults to the classpath
-  directories) and recompiles namespaces as they change. Enables :esm-hmr,
-  modules accept their own hot updates when served by Vite."
+  "Builds like build, then recompiles namespaces as their sources change.
+  With :watch-events :stdin, the parent process (the Vite plugin) watches
+  the directories of the watch-dirs event and writes `changed <path>` lines
+  to stdin, otherwise polls :watch-dirs (defaults to the classpath
+  directories). Enables :esm-hmr, modules accept their own hot updates when
+  served by Vite."
   [opts]
-  (let [opts         (merge default-opts {:esm-hmr true} opts)
+  (let [opts         (prepare-opts (merge {:esm-hmr true} opts))
         compiler-env (env/default-compiler-env opts)
-        dirs         (or (:watch-dirs opts)
-                         (->> (string/split (System/getProperty "java.class.path") #":")
-                              (filter #(.isDirectory (io/file %)))))
+        dirs         (watch-dirs opts)
+        queue        (LinkedBlockingQueue.)
+        stdin?       (= :stdin (:watch-events opts))
         build!       (fn []
                        (let [start (System/nanoTime)
                              nses  (build opts compiler-env)]
+                         ;; the watcher needs the analysis of the whole build
+                         (env/with-compiler-env compiler-env
+                           (ensure-analyzed! compiler-env (find-sources (mains opts) opts) opts))
                          (event! "compiled" {:namespaces (count nses)
                                              :ms (long (/ (- (System/nanoTime) start) 1e6))})))]
+    (when (:exit-with-parent opts)
+      (start-stdin-reader! queue))
+    (event! "watch-dirs" {:dirs dirs})
     (try
       (build!)
       (catch Throwable e
         (event! "error" (error-data e))))
-    (loop [files (source-files dirs)]
-      (Thread/sleep 100)
-      (let [files'  (source-files dirs)
-            changed (keep (fn [[path mtime]]
-                            (when (not= mtime (get files path)) (io/file path)))
-                      files')]
-        (when (seq changed)
+    (loop [files     (when-not stdin? (source-files dirs))
+           resources (resource-mtimes (resource-refs compiler-env))]
+      (let [[changed files'] (if stdin?
+                               [(next-changes queue) nil]
+                               (poll-changes dirs files))
+            changed    (filter #(re-find #"\.(cljs|cljc|clj)$" (.getName ^File %)) changed)
+            refs       (resource-refs compiler-env)
+            resources' (resource-mtimes refs)
+            ;; namespaces depending on changed resources
+            res-nses   (mapcat (fn [[path mtime]]
+                                 (when (and (contains? resources path) (not= mtime (get resources path)))
+                                   (get refs path)))
+                         resources')]
+        (when (or (seq changed) (seq res-nses))
+          (event! "compiling" {})
           (try
             (let [start  (System/nanoTime)
-                  mains  (let [m (:main opts)] (if (coll? m) m [m]))
-                  opts'  (-> (merge opts {:closure-defines (normalize-closure-defines (:closure-defines opts))}))
                   inputs (env/with-compiler-env compiler-env
-                           (find-sources mains opts'))
+                           (find-sources (mains opts) opts))
                   _      (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
                   macros (keep #(when (re-find #"\.clj[c]?$" (.getName ^File %)) (file-ns %)) changed)
                   _      (doseq [ns macros]
@@ -399,28 +560,57 @@
                              (require ns :reload)))
                   cljs   (keep #(when (re-find #"\.clj[sc]$" (.getName ^File %)) (file-ns %)) changed)
                   ;; namespaces newly required by a changed namespace
-                  fresh  (remove #(get-in @compiler-env [::ana/namespaces % :defs]) (map :ns inputs))
+                  fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
                   done   (env/with-compiler-env compiler-env
-                           (binding [ana/*cljs-warning-handlers* ana/*cljs-warning-handlers*]
+                           (binding [ana/*cljs-warning-handlers* ana/*cljs-warning-handlers*
+                                     ana/*cljs-warnings*         (cljs-warnings opts)]
                              (recompile! compiler-env inputs
-                               (distinct (concat fresh cljs (macro-dependents compiler-env macros)))
-                               opts')))]
-              (install-goog-libs compiler-env opts')
+                               (distinct (concat fresh cljs res-nses (macro-dependents compiler-env macros)))
+                               opts)))]
+              (install-goog-libs compiler-env opts)
+              (env/with-compiler-env compiler-env
+                (run-hooks! compiler-env inputs opts))
               (event! "compiled" {:namespaces (count done)
                                   :files (map #(.getPath (output-file % opts)) (sort done))
                                   :ms (long (/ (- (System/nanoTime) start) 1e6))}))
             (catch Throwable e
               (event! "error" (error-data e)))))
-        (recur files')))))
+        (recur files' resources')))))
+
+(defn- deep-merge [& ms]
+  (apply merge-with (fn [a b] (if (and (map? a) (map? b)) (deep-merge a b) b)) ms))
+
+(defn load-options
+  "Compiler options from command line arguments: EDN maps, @file.edn to read
+  one from a file, and :profile keywords. Profiles are maps under :profiles
+  (deep merged in order), the profile names the build's :mode. Without a
+  profile, default-profile."
+  [args default-profile]
+  (let [maps     (keep (fn [^String arg]
+                         (cond
+                           (string/starts-with? arg "@") (edn/read-string (slurp (subs arg 1)))
+                           (string/starts-with? arg "{") (edn/read-string arg)))
+                   args)
+        profiles (or (seq (keep #(when (string/starts-with? % ":") (keyword (subs % 1))) args))
+                     [default-profile])
+        opts     (apply deep-merge maps)]
+    (-> (apply deep-merge (dissoc opts :profiles) (map #(get-in opts [:profiles %]) profiles))
+        (assoc :mode (last profiles)))))
 
 (defn -main
-  "Usage:
+  "Usage: clojure -M -m cljs.esm [build|watch] options...
 
-    clojure -M -m cljs.esm '{:main my.app :output-dir \"out\"}'
-    clojure -M -m cljs.esm watch '{:main my.app :output-dir \"out\"}'"
+  Options are EDN maps, @file.edn and :profile keywords, see load-options.
+  Watch defaults to the :dev profile, build to :release.
+
+    clojure -M -m cljs.esm build '{:main my.app :output-dir \"out\"}'
+    clojure -M -m cljs.esm watch @cljs.edn"
   [& args]
-  (if (= "watch" (first args))
-    (watch (merge {:verbose false} (edn/read-string (string/join " " (rest args)))))
-    (let [opts (edn/read-string (string/join " " args))]
-      (build (merge {:verbose true} opts))
-      (shutdown-agents))))
+  (let [[command args] (if (#{"build" "watch"} (first args))
+                         [(first args) (rest args)]
+                         ["build" args])]
+    (if (= "watch" command)
+      (watch (merge {:verbose false} (load-options args :dev)))
+      (do
+        (build (merge {:verbose true} (load-options args :release)))
+        (shutdown-agents)))))

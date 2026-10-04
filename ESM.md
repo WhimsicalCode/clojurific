@@ -13,8 +13,21 @@ and development builds. See [Status](#status).
 ### Compiling
 
 ```sh
-clojure -M -m cljs.esm '{:main my.app :output-dir "out"}'        # build
-clojure -M -m cljs.esm watch '{:main my.app :output-dir "out"}'  # watch, hot reload
+clojure -M -m cljs.esm build '{:main my.app :output-dir "out"}'  # build
+clojure -M -m cljs.esm watch @cljs.edn                            # watch, hot reload
+```
+
+Options are EDN maps, `@file.edn` to read them from a file, and `:profile`
+keywords (`cljs.esm/load-options`). Profiles are maps under `:profiles`, deep
+merged over the rest; the profile names the build's `:mode`. `watch` defaults to
+the `:dev` profile, `build` to `:release`:
+
+```clojure
+;; cljs.edn
+{:main [my.app]
+ :build-hooks [[my.build/hook {:some :arg}]]
+ :profiles {:dev {:preloads [my.dev]}
+            :release {:closure-defines {goog.DEBUG false}}}}
 ```
 
 `cljs.esm/build` and `cljs.esm/watch` take the usual compiler options plus:
@@ -22,35 +35,50 @@ clojure -M -m cljs.esm watch '{:main my.app :output-dir "out"}'  # watch, hot re
 | option | |
 |---|---|
 | `:main` | a namespace or a collection of them, i.e. the app plus lazily loaded entries |
+| `:preloads` | namespaces the main namespaces import first |
 | `:parallel-build` | compiles namespaces in parallel once their dependencies are compiled |
 | `:npm-interop :shadow` | `["pkg" :as x]` binds CommonJS packages' `module.exports`, like shadow-cljs, needs the Vite plugin |
 | `:closure-defines {goog.DEBUG false}` | `goog.DEBUG` and `goog-define`s are compile time constants |
+| `:build-hooks` | `[[fn-sym & args]]`, called with the build (`:compiler-env`, `:namespaces` in dependency order, `:mode`, `:options`) after a build and every watch recompile |
+| `:warnings` | a map of warning types, or a boolean for the undeclared var warnings, like `cljs.closure` |
 | `:esm-hmr` | hot reloading code, enabled by `watch` |
 | `:esm-dts false` | don't write `.d.ts` files |
 | `:esm-after-load` / `:esm-before-load` | fns run around hot reloads, like `^:dev/after-load` |
-| `:watch-dirs` | directories `watch` polls, defaults to the classpath directories |
+| `:watch-dirs` | source directories, defaults to the classpath directories without the compiler's own |
 
 The output directory has one module per namespace (`out/my/app.js`), plus
-`goog.js` and `goog/*.js` shims, and `goog-lib/`, the parts of the Closure
-Library the build uses (see below).
+`goog.js` and `goog/*.js` shims, `goog-lib/`, the parts of the Closure Library
+the build uses (see below), and `cljs-esm.json`, the main namespaces' modules
+(the bundle's entry points).
+
+Macros reading classpath resources call `cljs.esm/watch-resource!`, the watcher
+then recompiles the namespace when the resource changes. `shadow.resource` is
+provided for code written for shadow-cljs.
 
 ### Vite
 
 `src/main/js/vite-plugin-cljs` runs the compiler: a one-shot build for
-`vite build`, watch mode for `vite`, compile errors go to Vite's error overlay.
+`vite build` (the main namespaces are the bundle's entry points), watch mode for
+`vite`, compile errors go to Vite's error overlay. In watch mode Vite's file
+watcher reports changed sources to the compiler, hot updates wait for the
+compile and its build hooks to finish.
 
 ```js
-// vite.config.js
+// vite.config.mjs
 import cljs from 'vite-plugin-cljs';
 
 export default {
-  plugins: [cljs({ main: 'my.app', outputDir: 'out', command: ['clojure', '-M'] })],
+  plugins: [cljs({ command: ['clojure', '-M:cljs'], config: 'cljs.edn', outputDir: 'out' })],
 };
 ```
 
 ```html
 <script type="module" src="/out/my/app.js"></script>
 ```
+
+For server rendered pages the plugin writes `manifest.json` to Vite's `outDir`,
+each main namespace's module scripts and the chunks they import (to preload):
+the Vite dev server's modules when serving, the hashed chunks of a build.
 
 ## Interop
 
