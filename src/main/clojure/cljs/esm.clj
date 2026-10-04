@@ -309,6 +309,14 @@
                  (repeat (boolean warnings)))))
       (assoc :munged-namespace false)))
 
+(defn- compiler-bindings
+  "The dynamic bindings compiling with opts, as cljs.closure binds them:
+  :warnings, :elide-asserts and :load-tests."
+  [opts]
+  {#'ana/*cljs-warnings* (cljs-warnings opts)
+   #'*assert*            (not= true (:elide-asserts opts))
+   #'ana/*load-tests*    (not= false (:load-tests opts))})
+
 (defn- prepare-opts [opts]
   (-> (merge default-opts opts)
       (update :closure-defines normalize-closure-defines)
@@ -361,10 +369,10 @@
    (build opts (env/default-compiler-env (merge default-opts opts))))
   ([opts compiler-env]
    (let [opts (prepare-opts opts)]
-     (binding [ana/*cljs-warnings* (cljs-warnings opts)
-               *generated-sources* (if (:test-runner opts)
-                                     (generate-test-runner opts)
-                                     *generated-sources*)]
+     (with-bindings (assoc (compiler-bindings opts)
+                      #'*generated-sources* (if (:test-runner opts)
+                                              (generate-test-runner opts)
+                                              *generated-sources*))
        (env/with-compiler-env compiler-env
          (swap! compiler-env assoc :options opts)
          (let [start  (System/nanoTime)
@@ -621,8 +629,8 @@
                   ;; namespaces newly required by a changed namespace
                   fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
                   done   (env/with-compiler-env compiler-env
-                           (binding [ana/*cljs-warning-handlers* ana/*cljs-warning-handlers*
-                                     ana/*cljs-warnings*         (cljs-warnings opts)]
+                           (with-bindings (assoc (compiler-bindings opts)
+                                            #'ana/*cljs-warning-handlers* ana/*cljs-warning-handlers*)
                              (recompile! compiler-env inputs
                                (distinct (concat fresh cljs res-nses (macro-dependents compiler-env macros)))
                                opts)))]

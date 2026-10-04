@@ -4937,7 +4937,7 @@ x                          (not (contains? ret :info)))
      (select-keys opts
        [:static-fns :fn-invoke-direct :optimize-constants :elide-asserts :target :nodejs-rt
         :cache-key :checked-arrays :language-out :optimizations :lite-mode :elide-to-string
-        :module-format :esm-hmr :npm-interop :closure-defines :preloads :mode])))
+        :module-format :esm-hmr :npm-interop :closure-defines :preloads :mode :load-tests])))
 
 #?(:clj
    (defn build-affecting-options-sha [path opts]
