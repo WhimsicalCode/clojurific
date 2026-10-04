@@ -360,7 +360,8 @@ export default function cljs(options) {
         const byFile = Object.fromEntries(chunks.map(c => [c.fileName, c]));
         const imports = (chunk, seen = new Set()) => {
           for (const file of chunk.imports) {
-            if (!seen.has(file)) {
+            // external modules aren't chunks
+            if (!seen.has(file) && byFile[file]) {
               seen.add(file);
               imports(byFile[file], seen);
             }
