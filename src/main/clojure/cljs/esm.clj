@@ -406,13 +406,22 @@
        distinct
        sort))
 
+(defn- test-runner-source
+  "The file the :test-runner namespace is generated into, nil without one."
+  ^File [{{:keys [ns]} :test-runner :keys [output-dir]}]
+  (when ns
+    (io/file output-dir "cljs-esm-gen" (util/ns->relpath ns :cljs))))
+
+(defn- slurp-if-exists [^File f]
+  (when (.exists f) (slurp f)))
+
 (defn- generate-test-runner
   "Writes the :test-runner namespace, requiring the test namespaces matching
   :ns-regexp (default -test$) and calling (runner run-tests) with a fn running
   them, given a cljs.test env. Returns {ns File}."
-  [{{:keys [ns ns-regexp runner] :or {ns-regexp "-test$"}} :test-runner :keys [output-dir] :as opts}]
+  [{{:keys [ns ns-regexp runner] :or {ns-regexp "-test$"}} :test-runner :as opts}]
   (let [nses (test-namespaces ns-regexp opts)
-        file (io/file output-dir "cljs-esm-gen" (util/ns->relpath ns :cljs))
+        file (test-runner-source opts)
         env  (gensym "env")]
     (util/mkdirs file)
     (spit-if-changed file
@@ -623,13 +632,18 @@
     (.start)))
 
 (defn- poll-changes
-  "Polls dirs for changed source files, returns [changed files']."
+  "Polls dirs for changed source files, returns [changed files']. Removed
+  files are changes too: a generated test runner requires what is left."
   [dirs files]
   (Thread/sleep 100)
   (let [files' (source-files dirs)]
-    [(keep (fn [[path mtime]]
-             (when (not= mtime (get files path)) (io/file path)))
-       files')
+    [(concat
+       (keep (fn [[path mtime]]
+               (when (not= mtime (get files path)) (io/file path)))
+         files')
+       (keep (fn [path]
+               (when-not (contains? files' path) (io/file path)))
+         (keys files)))
      files']))
 
 (defn- next-changes
@@ -688,8 +702,15 @@
           (event! "compiling" {})
           (try
             (let [start  (System/nanoTime)
-                  inputs (env/with-compiler-env compiler-env
-                           (find-sources (mains opts) opts))
+                  ;; the test runner requires the test namespaces there are now
+                  runner (test-runner-source opts)
+                  before (some-> runner slurp-if-exists)
+                  gen    (if (:test-runner opts) (generate-test-runner opts) {})
+                  runner-changed (when (and runner (not= before (slurp-if-exists runner)))
+                                   [(-> opts :test-runner :ns)])
+                  inputs (binding [*generated-sources* gen]
+                           (env/with-compiler-env compiler-env
+                             (find-sources (mains opts) opts)))
                   _      (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
                   macros (keep #(when (re-find #"\.clj[c]?$" (.getName ^File %)) (file-ns %)) changed)
                   _      (doseq [ns macros]
@@ -700,9 +721,11 @@
                   fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
                   done   (env/with-compiler-env compiler-env
                            (with-bindings (assoc (compiler-bindings opts)
-                                            #'ana/*cljs-warning-handlers* ana/*cljs-warning-handlers*)
+                                            #'ana/*cljs-warning-handlers* ana/*cljs-warning-handlers*
+                                            #'*generated-sources* gen)
                              (recompile! compiler-env inputs
-                               (distinct (concat fresh cljs res-nses (macro-dependents compiler-env macros)))
+                               (distinct (concat fresh cljs res-nses runner-changed
+                                           (macro-dependents compiler-env macros)))
                                opts)))]
               (check-js-entries compiler-env opts)
               (write-constants! compiler-env opts)

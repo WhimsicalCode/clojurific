@@ -129,6 +129,21 @@ the namespace with a dynamic `import()`, bundlers split it and what only it
 requires into a separate chunk. Lazily loaded namespaces are additional `:main`
 entries.
 
+### Tests
+
+`:test-runner {:ns my.test-runner :ns-regexp "-test$" :runner my.test/start}`
+generates namespace `my.test-runner`, requiring the test namespaces of the
+source directories matching `:ns-regexp`, and compiles it as a main
+namespace. It calls `(my.test/start run-tests)`, run-tests running the tests
+given a `cljs.test` env. `watch` regenerates it as test namespaces are added
+and removed. Two runners come with the compiler:
+
+- `cljs.esm.node-test/run`: runs the tests under Node.js, the process exits
+  with 1 when any failed.
+- `cljs.esm.karma/start`: reports to Karma, one result per test var. Karma
+  loads the bundle through `src/main/js/karma-esm/adapter.js`, which imports
+  the entry module named by Karma's `client.args`.
+
 ## Design
 
 ### Namespaces as modules
@@ -235,6 +250,8 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
   stable ids from a `WeakMap` rather than failing.
 
 - REPL: not supported under `:module-format :esm` yet.
+- FlowStorm: ClojureStorm instruments through its own build of the compiler,
+  which doesn't have `cljs.esm`.
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`,
   which keeps them in every bundle.
 - Closure's `:modules` aren't supported, lazy loading uses `import()`.

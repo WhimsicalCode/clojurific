@@ -454,7 +454,8 @@ export default function cljs(options) {
           const dirs = event.dirs.map(dir => dir + path.sep);
           server.watcher.add(event.dirs);
           server.watcher.on('all', (type, file) => {
-            if ((type === 'change' || type === 'add') && dirs.some(dir => file.startsWith(dir))) {
+            // removed files too: a generated test runner requires what is left
+            if ((type === 'change' || type === 'add' || type === 'unlink') && dirs.some(dir => file.startsWith(dir))) {
               proc.stdin.write(`changed ${file}\n`);
             }
           });
