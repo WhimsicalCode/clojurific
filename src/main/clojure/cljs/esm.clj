@@ -86,8 +86,18 @@
           (swap! parse-ns-cache assoc k ns-info)
           ns-info))))
 
-(defn- mains [{:keys [main preloads]}]
-  (concat preloads (if (coll? main) main [main])))
+(defn- main-namespaces
+  "The :main namespaces, a symbol or a collection of them."
+  [{:keys [main]}]
+  (cond (coll? main) main main [main]))
+
+(defn- js-entry-namespaces
+  "The namespaces of the vars :js-entries export."
+  [{:keys [js-entries]}]
+  (->> (vals js-entries) (mapcat (comp vals :exports)) (map (comp symbol namespace)) distinct))
+
+(defn- mains [{:keys [preloads] :as opts}]
+  (concat preloads (main-namespaces opts) (js-entry-namespaces opts)))
 
 (defn find-sources
   "Returns the parsed ns info of namespaces and their transitive ClojureScript
@@ -224,15 +234,48 @@
       (util/mkdirs f)
       (spit f (json/write-str {:type "module"})))))
 
+(defn- js-entry-path [entry]
+  (str "cljs-esm-entries/" (name entry) ".js"))
+
+(defn- write-js-entries
+  "Writes the :js-entries modules, {name {:exports {js-name ns/var}}}: each
+  exports vars of the build under JavaScript names, like shadow-cljs'
+  :exports. The namespaces are compiled, the entries are bundle entry points,
+  importing the :preloads first."
+  [{:keys [output-dir js-entries preloads]}]
+  (doseq [[entry {:keys [exports]}] js-entries
+          :let [path (js-entry-path entry)]]
+    (spit-if-changed (io/file output-dir path)
+      (apply str
+        (concat
+          (for [preload preloads]
+            (str "import \"" (relative-import path (util/ns->relpath (symbol preload) :js)) "\";\n"))
+          (for [[js-name sym] (sort-by (comp name key) exports)]
+          (str "export { " (comp/esm-var-name (name sym)) " as " (name js-name) " } from \""
+               (relative-import path (util/ns->relpath (symbol (namespace sym)) :js)) "\";\n")))))))
+
+(defn- check-js-entries
+  "Throws when a :js-entries export names a var the build doesn't define."
+  [compiler-env {:keys [js-entries]}]
+  (doseq [[entry {:keys [exports]}] js-entries
+          [js-name sym] exports
+          :when (not (get-in @compiler-env [::ana/namespaces (symbol (namespace sym)) :defs (symbol (name sym))]))]
+    (throw (ex-info (str "js-entries " (name entry) " exports " (name js-name) ", undefined var " sym)
+             {:entry entry :export js-name :var sym}))))
+
 (defn- write-build-info
-  "Writes cljs-esm.json to the output directory: the modules of the main
-  namespaces, the build's entry points for bundlers."
-  [{:keys [output-dir main] :as opts}]
+  "Writes cljs-esm.json to the output directory, the build's entry points for
+  bundlers: the modules of the main namespaces and the :js-entries."
+  [{:keys [output-dir js-entries] :as opts}]
+  (write-js-entries opts)
   (spit-if-changed (io/file output-dir "cljs-esm.json")
     (json/write-str
       {:main (into (sorted-map)
                (map (fn [ns] [(str ns) (util/ns->relpath (symbol ns) :js)]))
-               (if (coll? main) main [main]))
+               (main-namespaces opts))
+       :entries (into (sorted-map)
+                  (map (fn [entry] [(name entry) (js-entry-path entry)]))
+                  (keys js-entries))
        :mode (some-> (:mode opts) name)})))
 
 (defn- normalize-closure-defines
@@ -411,6 +454,7 @@
                (compile-parallel others opts)
                (doseq [input others]
                  (compile-ns input opts))))
+           (check-js-entries compiler-env opts)
            (write-constants! compiler-env opts)
            (install-goog-shims opts)
            (install-goog-libs compiler-env opts)
@@ -656,6 +700,7 @@
                              (recompile! compiler-env inputs
                                (distinct (concat fresh cljs res-nses (macro-dependents compiler-env macros)))
                                opts)))]
+              (check-js-entries compiler-env opts)
               (write-constants! compiler-env opts)
               (install-goog-libs compiler-env opts)
               (env/with-compiler-env compiler-env

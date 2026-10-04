@@ -1889,7 +1889,7 @@
      imports in order."
      [ns-name]
      (let [{:keys [main preloads]} (:options @env/*compiler*)
-           mains (set (map symbol (if (coll? main) main [main])))]
+           mains (set (map symbol (cond (coll? main) main main [main])))]
        (when (and (contains? mains ns-name)
                   (not (some #{ns-name} (map symbol preloads))))
          (doseq [preload preloads]

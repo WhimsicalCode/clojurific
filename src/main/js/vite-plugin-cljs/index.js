@@ -181,6 +181,20 @@ export default function cljs(options) {
     return child;
   }
 
+  // The compiler's watch for vite build --watch, compiling tracks the
+  // compile in progress.
+  function watchCompiler() {
+    let compiled = () => {};
+    proc = run(compilerArgs('watch', { ':exit-with-parent': true }), event => {
+      if (event.type === 'compiling') {
+        compiling = new Promise(resolve => (compiled = resolve));
+      } else if (event.type === 'compiled' || event.type === 'error') {
+        compiled();
+        if (event.type === 'error') (config?.logger ?? console).error(`[cljs] ${event.message}`);
+      }
+    });
+  }
+
   async function buildInfo() {
     try {
       return JSON.parse(await fs.readFile(path.join(outputDir, 'cljs-esm.json'), 'utf8'));
@@ -227,11 +241,17 @@ export default function cljs(options) {
           child.on('exit', code => code === 0 ? resolve() : reject(new Error(`ClojureScript build failed (${code})`)));
         });
         console.log(`ClojureScript compiled in ${Date.now() - start}ms`);
+        // vite build --watch: the compiler watches the sources, the bundler
+        // rebuilds when the compiler's output changes
+        if (userConfig.build?.watch) watchCompiler();
         const info = await buildInfo();
+        const entries = { ...info.main, ...info.entries };
         result.build = {
           rollupOptions: {
-            input: Object.fromEntries(Object.entries(info.main).map(([ns, file]) => [ns, path.join(outputDir, file)])),
-            preserveEntrySignatures: false,
+            input: Object.fromEntries(Object.entries(entries).map(([name, file]) => [name, path.join(outputDir, file)])),
+            // :js-entries' exports are the bundle's interface, namespaces'
+            // exports are only for each other
+            preserveEntrySignatures: Object.keys(info.entries ?? {}).length ? 'exports-only' : false,
             output: {
               sourcemapPathTransform: (source, sourcemapPath) => sourcePath(path.dirname(sourcemapPath), source),
             },
@@ -256,6 +276,12 @@ export default function cljs(options) {
 
     configResolved(resolved) {
       config = resolved;
+    },
+
+    // a watch rebuild, started by the compiler writing its output, bundles
+    // the finished compile
+    async buildStart() {
+      if (config.command === 'build') await compiling;
     },
 
     // :npm-interop :shadow, ["pkg" :as x] binds module.exports of CommonJS
