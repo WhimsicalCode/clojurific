@@ -34,13 +34,15 @@ the `:dev` profile, `build` to `:release`:
 
 | option | |
 |---|---|
-| `:main` | a namespace or a collection of them, i.e. the app plus lazily loaded entries |
+| `:main` | a namespace or a collection of them, i.e. the app plus lazily loaded entries, optional with `:js-entries` |
+| `:js-entries` | `{name {:exports {jsName my.ns/var}}}`, generated entry modules (`cljs-esm-entries/<name>.js`) exporting vars under JavaScript names, for libraries and workers; an undefined var fails the build |
 | `:preloads` | namespaces the main namespaces import first |
 | `:parallel-build` | compiles namespaces in parallel once their dependencies are compiled |
 | `:npm-interop :shadow` | `["pkg" :as x]` binds CommonJS packages' `module.exports`, like shadow-cljs, needs the Vite plugin |
 | `:closure-defines {goog.DEBUG false}` | `goog.DEBUG` and `goog-define`s are compile time constants |
 | `:build-hooks` | `[[fn-sym & args]]`, called with the build (`:compiler-env`, `:namespaces` in dependency order, `:mode`, `:options`) after a build and every watch recompile |
-| `:warnings` | a map of warning types, or a boolean for the undeclared var warnings, like `cljs.closure` |
+| `:warnings` | a map of warning types (`true`, `false`, `:warning`, `:error`, `:off`), or one of them for the undeclared var warnings, like `cljs.closure` |
+| `:warnings-as-errors true` | every enabled warning fails the compile, like shadow-cljs |
 | `:optimize-constants true` | keyword and symbol constants are exports of one module, `cljs/core/constants.js`, instead of allocated at each use (`cljs.core` keeps its own) |
 | `:checked-set-literals false` | set literals of runtime values collapse duplicates instead of throwing (before CLJS-3415) |
 | `:esm-hmr` | hot reloading code, enabled by `watch` |
@@ -77,6 +79,12 @@ export default {
 ```html
 <script type="module" src="/out/my/app.js"></script>
 ```
+
+`:js-entries` are bundle inputs too, their exports kept: a build of a library or
+a Node service's worker (`build.ssr`) is one module exporting what the entry
+names. The plugin's `entries` option picks the ones a build bundles.
+`vite build --watch` runs the compiler's watch, and rebundles when it
+recompiles.
 
 For server rendered pages the plugin writes `manifest.json` to Vite's `outDir`,
 each main namespace's module scripts and the chunks they import (to preload):

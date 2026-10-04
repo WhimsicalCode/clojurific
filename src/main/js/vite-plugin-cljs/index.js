@@ -40,12 +40,19 @@ function ednValue(v) {
 
 // oxc's minifier shipped with Rolldown, as used by Vite
 function resolveFromProject(root, specifier, purpose) {
-  for (const base of [root, process.cwd()]) {
+  const tryResolve = (base, spec) => {
     try {
-      return createRequire(path.join(base, 'noop.js')).resolve(specifier);
+      return createRequire(path.join(base, 'noop.js')).resolve(spec);
     } catch (e) {
-      // try the next location
+      return null;
     }
+  };
+  // Vite's own dependencies (rolldown) from Vite's install: isolated installs
+  // link only the project's direct dependencies
+  const vite = tryResolve(root, 'vite') ?? tryResolve(process.cwd(), 'vite');
+  for (const base of [root, process.cwd(), ...(vite ? [path.dirname(vite)] : [])]) {
+    const resolved = tryResolve(base, specifier);
+    if (resolved) return resolved;
   }
   throw new Error(`${specifier} not found, can not ${purpose}`);
 }
@@ -134,6 +141,8 @@ export default module.exports;
  * @param {boolean} [options.prune] remove unused protocol implementations and
  *   shorten ClojureScript property names in production bundles, defaults to
  *   true
+ * @param {string[]} [options.entries] the :js-entries this build bundles,
+ *   defaults to all; each is self-contained when it's the only one
  */
 export default function cljs(options) {
   const manifestName = options.manifest ?? 'manifest.json';
@@ -185,12 +194,15 @@ export default function cljs(options) {
   // compile in progress.
   function watchCompiler() {
     let compiled = () => {};
-    proc = run(compilerArgs('watch', { ':exit-with-parent': true }), event => {
+    // the build's options: bundles don't hot reload, the dev server's watch does
+    proc = run(compilerArgs('watch', { ':exit-with-parent': true, ':esm-hmr': false }), event => {
       if (event.type === 'compiling') {
         compiling = new Promise(resolve => (compiled = resolve));
       } else if (event.type === 'compiled' || event.type === 'error') {
         compiled();
-        if (event.type === 'error') (config?.logger ?? console).error(`[cljs] ${event.message}`);
+        const logger = config?.logger ?? console;
+        if (event.type === 'error') logger.error(`[cljs] ${event.message}`);
+        else logger.info(`[cljs] compiled ${event.namespaces} namespace(s) in ${event.ms}ms`);
       }
     });
   }
@@ -245,13 +257,15 @@ export default function cljs(options) {
         // rebuilds when the compiler's output changes
         if (userConfig.build?.watch) watchCompiler();
         const info = await buildInfo();
-        const entries = { ...info.main, ...info.entries };
+        const jsEntries = Object.fromEntries(Object.entries(info.entries ?? {})
+          .filter(([name]) => !options.entries || options.entries.includes(name)));
+        const entries = { ...info.main, ...jsEntries };
         result.build = {
           rollupOptions: {
             input: Object.fromEntries(Object.entries(entries).map(([name, file]) => [name, path.join(outputDir, file)])),
             // :js-entries' exports are the bundle's interface, namespaces'
             // exports are only for each other
-            preserveEntrySignatures: Object.keys(info.entries ?? {}).length ? 'exports-only' : false,
+            preserveEntrySignatures: Object.keys(jsEntries).length ? 'exports-only' : false,
             output: {
               sourcemapPathTransform: (source, sourcemapPath) => sourcePath(path.dirname(sourcemapPath), source),
             },
@@ -306,6 +320,8 @@ export default function cljs(options) {
       if (config.command === 'build' && config.build.sourcemap && id.startsWith(outputDir + path.sep) && id.endsWith('.js')) {
         try {
           const [code, map] = await Promise.all([fs.readFile(id, 'utf8'), fs.readFile(id + '.map', 'utf8')]);
+          // read here, not by the bundler: vite build --watch rebuilds when it changes
+          this.addWatchFile(id);
           return { code, map: JSON.parse(map) };
         } catch (e) {
           return null;

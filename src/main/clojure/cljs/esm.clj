@@ -349,16 +349,20 @@
 
 (defn- cljs-warnings
   "The analyzer's warnings with the :warnings option applied, like
-  cljs.closure: a map of warning types, or a boolean toggling the undeclared
-  var and namespace warnings. Closure namespace munging doesn't happen under
-  ES module output."
-  [{:keys [warnings] :or {warnings true}}]
+  cljs.closure: a map of warning types to true, false, :warning, :error or
+  :off, or one of them for the undeclared var and namespace warnings.
+  :warnings-as-errors true makes every enabled warning an error, like
+  shadow-cljs. Closure namespace munging doesn't happen under ES module
+  output."
+  [{:keys [warnings warnings-as-errors] :or {warnings true}}]
   (-> ana/*cljs-warnings*
       (merge (if (map? warnings)
                warnings
                (zipmap [:unprovided :undeclared-var :undeclared-ns :undeclared-ns-form]
-                 (repeat (boolean warnings)))))
-      (assoc :munged-namespace false)))
+                 (repeat (if (keyword? warnings) warnings (boolean warnings))))))
+      (assoc :munged-namespace false)
+      (cond-> warnings-as-errors
+        (as-> ws (reduce-kv (fn [m k v] (assoc m k (if (#{true :warning} v) :error v))) ws ws)))))
 
 (defn- compiler-bindings
   "The dynamic bindings compiling with opts, as cljs.closure binds them:
