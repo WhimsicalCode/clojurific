@@ -804,6 +804,12 @@
     (and (every? #(= (:op %) :const) items)
          (= (count (into #{} items)) (count items)))))
 
+(defn- checked-set-literals?
+  "Whether set literals of non-constant items throw on duplicates (CLJS-3415),
+  :checked-set-literals false keeps the earlier behavior: duplicates collapse."
+  []
+  (not (false? (get-in @env/*compiler* [:options :checked-set-literals]))))
+
 (defn emit-set [items comma-sep distinct-constants?]
   (cond
     (empty? items)
@@ -813,7 +819,10 @@
     (emits (cc "new cljs.core.PersistentHashSet(null, new cljs.core.PersistentArrayMap(null, ") (count items) ", ["
       (comma-sep (interleave items (repeat "null"))) "], null), null)")
 
-    :else (emits (cc "cljs.core.PersistentHashSet.createWithCheck([") (comma-sep items) "])")))
+    (checked-set-literals?)
+    (emits (cc "cljs.core.PersistentHashSet.createWithCheck([") (comma-sep items) "])")
+
+    :else (emits (cc "cljs.core.PersistentHashSet.createAsIfByAssoc([") (comma-sep items) "])")))
 
 (defn emit-lite-set [items comma-sep distinct-constants?]
   (cond
@@ -823,7 +832,10 @@
     (distinct-constants? items)
     (emits (cc "cljs.core.set_lite([") (comma-sep items) "])")
 
-    :else (emits (cc "cljs.core.set_lite_check([") (comma-sep items) "])")))
+    (checked-set-literals?)
+    (emits (cc "cljs.core.set_lite_check([") (comma-sep items) "])")
+
+    :else (emits (cc "cljs.core.set_lite([") (comma-sep items) "])")))
 
 (defmethod emit* :set
   [{:keys [items env]}]
