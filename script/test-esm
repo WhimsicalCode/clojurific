@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# Runs the runtime test suite compiled to ES modules (:module-format :esm,
+# see cljs.esm) with Node.js, unbundled.
+
+rm -rf builds/out-esm
+mkdir -p builds/out-esm
+
+if ! clojure -Sdeps '{:aliases {:esm-test {:extra-paths ["src/test/cljs" "src/test/esm"]}}}' \
+       -M:esm-test -m cljs.esm \
+       '{:main esm-test-runner :output-dir "builds/out-esm" :parallel-build true :verbose true}'; then
+  >&2 echo ClojureScript compilation failed
+  exit 1
+fi
+
+node builds/out-esm/esm_test_runner.js | tee builds/out-esm/test.log
+grep -q "^0 failures, 0 errors." builds/out-esm/test.log

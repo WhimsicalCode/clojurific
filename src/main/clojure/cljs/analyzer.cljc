@@ -135,6 +135,7 @@
    :private-var-access true
    :undeclared-ns true
    :undeclared-ns-form true
+   :esm-unsupported-goog-ns true
    :redef true
    :redef-in-file true
    :dynamic true
@@ -281,6 +282,10 @@
 (defmethod error-message :private-var-access
   [warning-type info]
   (str "var: " (:sym info) " is not public"))
+
+(defmethod error-message :esm-unsupported-goog-ns
+  [warning-type {:keys [ns] :as info}]
+  (str "Closure Library namespace " ns " is not available under :module-format :esm"))
 
 (defmethod error-message :undeclared-ns
   [warning-type {:keys [ns-sym js-provide] :as info}]
@@ -903,7 +908,8 @@
     (if (and (:global-goog-object&array options)
              (#{"goog.object" "goog.array"} module-str))
       false
-      (= :goog (get-in @env/*compiler* [:js-dependency-index module-str :module])))))
+      (and (not= :esm (:module-format options))
+           (= :goog (get-in @env/*compiler* [:js-dependency-index module-str :module]))))))
 
 (defn confirm-var-exists
   ([env prefix suffix]
@@ -2861,7 +2867,10 @@ x                          (not (contains? ret :info)))
                  dep (-> dep lib&sublib first)]
              (if (contains? idx (name dep))
                (let [dep-name (name dep)]
-                 (when (string/starts-with? dep-name "goog.")
+                 ;; under ES module output Closure Library namespaces are
+                 ;; treated as untyped JavaScript, see cljs.esm
+                 (when (and (string/starts-with? dep-name "goog.")
+                            (not= :esm (:module-format opts)))
                    #?(:clj (let [js-lib (get idx dep-name)
                                  ns (externs/analyze-goog-file (:file js-lib) (symbol dep-name))]
                              (swap! env/*compiler* update-in [::namespaces dep] merge ns)))))
@@ -3185,6 +3194,20 @@ x                          (not (contains? ret :info)))
              :global-exports {lib lib}})
           ret)))))
 
+(defn- esm-npm-symbol?
+  "Under ES module output, symbol requires which are neither ClojureScript
+  nor Closure Library namespaces are npm packages, i.e. [react :as r]."
+  [lib]
+  (and (symbol? lib)
+       (let [[lib' _] (lib&sublib lib)
+             lib'     (str lib')]
+         (and (not (string/starts-with? lib' "goog"))
+              (not (contains? (:js-dependency-index @env/*compiler*) lib'))
+              #?(:clj (nil? (deps/closure-lib nil lib')))
+              (nil? (get-in @env/*compiler* [::namespaces (symbol lib') :defs]))
+              #?(:clj (nil? (util/ns->source (symbol lib')))
+                 :cljs true)))))
+
 (defn parse-require-spec [env macros? deps aliases spec]
   (if (or (symbol? spec) (string? spec))
     (recur env macros? deps aliases [spec])
@@ -3229,6 +3252,12 @@ x                          (not (contains? ret :info)))
               (parse-ns-error-msg spec
                 ":refer must be followed by a sequence of symbols in :require / :require-macros"))))
         (when-not macros?
+          ;; under ES module output string requires are imports resolved by
+          ;; the bundler, i.e. npm packages or relative paths
+          (when (and (= :esm (:module-format (compiler-options)))
+                     (or (string? lib) (esm-npm-symbol? lib)))
+            (swap! env/*compiler* update :node-module-index
+              (fnil conj #{}) (str (first (lib&sublib lib)))))
           (swap! deps conj lib))
         (merge
           (when (some? alias)
@@ -3337,13 +3366,31 @@ x                          (not (contains? ret :info)))
               (second quoted-spec-or-kw)))]
     (map canonicalize specs)))
 
+(defn- desugar-default
+  "Desugars [\"lib\" :default x ...] into [\"lib$default\" :as x] and
+  [\"lib\" ...], binding x to the default export of a JavaScript module."
+  [spec]
+  (if-not (and (sequential? spec) (some #{:default} spec))
+    [spec]
+    (let [[lib & opts] spec
+          opts    (apply hash-map opts)
+          default (:default opts)
+          opts    (dissoc opts :default)]
+      (cond-> [[(if (symbol? lib) (symbol (str lib "$default")) (str lib "$default")) :as default]]
+        (seq opts) (conj (into [lib] (mapcat identity) opts))))))
+
 (defn desugar-ns-specs
   "Given an original set of ns specs desugar :include-macros and :refer-macros
    usage into only primitive spec forms - :use, :require, :use-macros,
    :require-macros. If a library includes a macro file of with the same name
    as the namespace will also be desugared."
   [args]
-  (let [{:keys [require] :as indexed}
+  (let [args (map (fn [[k & specs :as libspec]]
+                    (if (= :require k)
+                      (cons k (mapcat desugar-default specs))
+                      libspec))
+               args)
+        {:keys [require] :as indexed}
         (->> args
           (map (fn [[k & specs]] [k (into [] specs)]))
           (into {}))
@@ -3539,7 +3586,10 @@ x                          (not (contains? ret :info)))
              :uses           (merge uses global-uses)
              :requires       requires
              :renames        (merge renames core-renames global-renames)
-             :imports        imports}]
+             :imports        imports
+             ;; like shadow-cljs, macros may rely on (-> &env :ns :meta :file)
+             :meta           (cond-> (meta name)
+                               (some? *cljs-file*) (assoc :file (str *cljs-file*)))}]
         (swap! env/*compiler* update-in [::namespaces name] merge ns-info)
         (merge {:op      :ns
                 :env     env
@@ -4884,7 +4934,8 @@ x                          (not (contains? ret :info)))
    (defn build-affecting-options [opts]
      (select-keys opts
        [:static-fns :fn-invoke-direct :optimize-constants :elide-asserts :target :nodejs-rt
-        :cache-key :checked-arrays :language-out :optimizations :lite-mode :elide-to-string])))
+        :cache-key :checked-arrays :language-out :optimizations :lite-mode :elide-to-string
+        :module-format :esm-hmr :npm-interop])))
 
 #?(:clj
    (defn build-affecting-options-sha [path opts]

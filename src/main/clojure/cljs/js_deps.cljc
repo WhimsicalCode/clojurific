@@ -392,6 +392,18 @@ JavaScript library containing provide/require 'declarations'."
                    "but does not contain a corresponding `goog.provide` declaration: %s")
               lib lib-resource)))))))
 
+(def ^:private find-classpath-lib* (memoize find-classpath-lib))
+
+(defn closure-lib
+  "Returns the {:file :provides :requires :module} info of a Closure style
+  (goog.provide / goog.module) JavaScript namespace ns, of the Closure Library
+  or found on the classpath, :file being the classpath relative path."
+  [js-dependency-index ns]
+  (let [ns (str ns)]
+    (or (get js-dependency-index ns)
+        (when-let [lib (find-classpath-lib* ns)]
+          (assoc lib :file (-> ns (.replace \. \/) (.replace \- \_) (str ".js")))))))
+
 (def native-node-modules
   #{"assert" "buffer_ieee754" "buffer" "child_process" "cluster" "console"
     "constants" "crypto" "_debugger" "dgram" "dns" "domain" "events" "freelist"

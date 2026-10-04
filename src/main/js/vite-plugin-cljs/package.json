@@ -1,0 +1,8 @@
+{
+  "name": "vite-plugin-cljs",
+  "version": "0.0.1",
+  "description": "Vite plugin for ClojureScript compiled to ES modules",
+  "type": "module",
+  "exports": "./index.js",
+  "peerDependencies": { "vite": ">=6" }
+}

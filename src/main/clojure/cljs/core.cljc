@@ -1129,7 +1129,26 @@
   "Return true if argument exists, analogous to usage of typeof operator
    in JavaScript."
   [x]
-  (if (core/symbol? x)
+  (core/cond
+    ;; under ES module output namespaces aren't reachable through a global
+    ;; path, namespaces of the build exist
+    (core/and (core/symbol? x)
+              (core/nil? (namespace x))
+              (= :esm (:module-format (cljs.analyzer/compiler-options)))
+              (core/not (contains? (:locals &env) x))
+              (comp/esm-module-ns? (core/str x)))
+    true
+
+    ;; nor are vars, check the var's binding itself
+    (core/and (core/symbol? x)
+              (core/not= "js" (namespace x))
+              (= :esm (:module-format (cljs.analyzer/compiler-options)))
+              (core/let [{:keys [op ns]} (cljs.analyzer/resolve-var &env x)]
+                (core/and (= :var op) (core/some? ns) (comp/esm-module-ns? (core/str ns)))))
+    (bool-expr (core/list 'js* "(typeof ~{} !== 'undefined')"
+                 (vary-meta x assoc :cljs.analyzer/no-resolve true)))
+
+    (core/symbol? x)
     (core/let [x     (core/cond-> (:name (cljs.analyzer/resolve-var &env x))
                        (= "js" (namespace x)) name)
                segs  (string/split (core/str (string/replace-first (core/str x) "/" ".")) #"\.")
@@ -1140,6 +1159,8 @@
                        (reverse (take n (iterate butlast segs))))
                js    (string/join " && " (repeat n "(typeof ~{} !== 'undefined')"))]
       (bool-expr (concat (core/list 'js* js) syms)))
+
+    :else
     `(some? ~x)))
 
 (core/defmacro undefined?
