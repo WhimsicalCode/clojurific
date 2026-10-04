@@ -19,3 +19,18 @@
       (is (= (hash sealed) (hash sealed)))
       (is (not= (hash frozen) (hash (js/Object.freeze #js {:a 1}))))
       (is (= :v (get {[frozen] :v} [frozen]))))))
+
+(defn variadic-fn [x & _] [:original x])
+
+(def variadic-fn-alias variadic-fn)
+
+(defn recursive-fn [n] (if (pos? n) (recursive-fn (dec n)) :original))
+
+(deftest test-redefined-fn-dispatch
+  (testing "a variadic fn's dispatcher calls the var's current value, like goog.provide'd output"
+    (with-redefs [variadic-fn (fn [x & _] [:redefined x])]
+      (is (= [:redefined 1] (variadic-fn-alias 1 2)))))
+  (testing "a fn calling itself calls the var's current value"
+    (let [original recursive-fn]
+      (with-redefs [recursive-fn (fn [_] :redefined)]
+        (is (= :redefined (original 1)))))))

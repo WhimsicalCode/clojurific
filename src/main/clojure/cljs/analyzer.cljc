@@ -2394,6 +2394,8 @@ x                          (not (contains? ret :info)))
                       :env env
                       :form form
                       :name name-var
+                      ;; named by the form, not by def
+                      :named? named-fn?
                       :methods methods
                       :variadic? variadic
                       :tag 'function

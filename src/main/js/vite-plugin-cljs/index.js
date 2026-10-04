@@ -233,9 +233,13 @@ export default function cljs(options) {
       } catch (e) {
         // virtual or unreadable modules are treated as ES modules
       }
+      // An ES module only exporting default binds the default export: dual
+      // packages' module.exports, which shadow-cljs resolved them to.
       return commonjs
         ? `import m from ${JSON.stringify(target)};\nexport default m;\n`
-        : `import * as m from ${JSON.stringify(target)};\nexport default m;\n`;
+        : `import * as m from ${JSON.stringify(target)};\n` +
+          `const keys = Object.keys(m);\n` +
+          `export default keys.length === 1 && keys[0] === 'default' ? m[keys[0]] : m;\n`;
     },
 
     async generateBundle(outputOptions, bundle) {

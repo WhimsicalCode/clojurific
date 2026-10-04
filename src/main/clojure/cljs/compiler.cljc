@@ -1249,10 +1249,16 @@
       (emitln "})()"))))
 
 (defmethod emit* :fn
-  [{variadic :variadic? :keys [name env methods max-fixed-arity recur-frames in-loop loop-lets]}]
+  [{variadic :variadic? :keys [name named? env methods max-fixed-arity recur-frames in-loop loop-lets]}]
   ;;fn statements get erased, serve no purpose and can pollute scope if named
   (when-not (= :statement (:context env))
-    (let [recur-params (mapcat :params (filter #(and % @(:flag %)) recur-frames))
+    (let [;; Under ESM the name def gives a fn is the module binding of its var:
+          ;; the function expression's name would shadow it in the fn's body,
+          ;; where calls (as the dispatcher of a variadic defn) must see the
+          ;; value set! (and with-redefs) assign. The engine names the fn
+          ;; after the binding it's assigned to.
+          name (when-not (and *esm-emitting* (not named?)) name)
+          recur-params (mapcat :params (filter #(and % @(:flag %)) recur-frames))
           loop-locals
           (->> (concat recur-params
                  ;; need to capture locals only if in recur fn or loop
@@ -1550,7 +1556,8 @@
 
 (defn- esm-foreign-var
   "If ast references a var of another namespace compiled to an ES module,
-  returns [ns name]."
+  returns [ns name]. Closure Library namespaces run by the compatibility
+  layer are objects, set! assigns their properties; shims are modules."
   [{:keys [op info]}]
   (when (and *esm-emitting* (= :var op))
     (let [sym (:name info)
@@ -1558,6 +1565,9 @@
       (when (and ns
                  (not= ns (str ana/*cljs-ns*))
                  (not (string/includes? (name sym) "."))
+                 (or (not (or (= "goog" ns) (string/starts-with? ns "goog.")))
+                     #?(:clj (contains? (esm-goog-shim-exports ns ana/*cljs-ns*) (esm-var-name (name sym)))
+                        :cljs false))
                  (esm-module-ns? ns))
         [ns (name sym)]))))
 
