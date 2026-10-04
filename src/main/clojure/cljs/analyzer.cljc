@@ -548,7 +548,8 @@
                      (string/replace "$" "$$")
                      (string/replace "-" "_DASH_")
                      (munge)
-                     (string/replace "." "$")
+                     ;; not "$": $ is escaped as $$, ".." and "$" were both $$
+                     (string/replace "." "$_")
                      (string/replace #"(?i)[^a-z0-9$_]" #(hex-format % 4))))]
     (symbol (str prefix name))))
 

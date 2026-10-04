@@ -137,6 +137,13 @@
 
 (def ^:private goog-base "goog-lib/goog/base.js")
 
+(defn- indirect-eval
+  "Makes Closure Library's direct eval calls (goog.json.parse, base.js'
+  module loader) indirect: a direct eval keeps minifiers from renaming any
+  binding it can see, i.e. the top level of the chunk it's bundled into."
+  [src]
+  (string/replace src #"(?<![\w$.])eval\(" "(0, eval)("))
+
 (defn- goog-base-module
   "Closure Library's base.js as an ES module exporting goog, also installed as
   the global goog Closure Library code expects. The debug loader is disabled,
@@ -147,6 +154,7 @@
          "globalThis.CLOSURE_NO_DEPS = true;\n"
          "globalThis.CLOSURE_DEFINES = Object.assign({'goog.ENABLE_DEBUG_LOADER': false}, globalThis.CLOSURE_DEFINES);\n"
          (-> src
+             indirect-eval
              (string/replace #"(?m)^var COMPILED = false;" "var COMPILED = false; // eslint-disable-line")
              (string/replace #"(?m)^var goog = goog \|\| \{\};" "var goog = {};")
              (string/replace #"(?m)^goog\.global =\s*[^;]*;" "goog.global = globalThis;"))
@@ -167,7 +175,7 @@
   "A Closure Library file as an ES module importing the files providing its
   requires, goog.module files are run by goog.loadModule."
   [lib {:keys [file requires module]}]
-  (let [src     (slurp (io/resource file))
+  (let [src     (indirect-eval (slurp (io/resource file)))
         out     (str "goog-lib/" file)
         imports (->> requires
                      (keep #(:file (lib %)))
@@ -320,11 +328,24 @@
 (defn- prepare-opts [opts]
   (-> (merge default-opts opts)
       (update :closure-defines normalize-closure-defines)
+      ;; as cljs.closure: keyword and symbol constants are hoisted into a
+      ;; constants module (see write-constants!)
+      (cond-> (true? (:optimize-constants opts)) (assoc :emit-constants true))
       ;; the generated test runner is a main namespace
       (cond-> (:test-runner opts)
         (update :main #(vec (distinct (conj (if (coll? %) (vec %) (if % [%] [])) (-> opts :test-runner :ns))))))))
 
 (declare watch-dirs source-files)
+
+(defn- write-constants!
+  "With :emit-constants (:optimize-constants), writes the constants module the
+  compiled namespaces import their keyword and symbol constants from:
+  cljs/core/constants.js, an export per constant."
+  [compiler-env opts]
+  (when (:emit-constants opts)
+    (spit-if-changed (io/file (:output-dir opts) (util/ns->relpath ana/constants-ns-sym :js))
+      (with-out-str
+        (comp/emit-esm-constants-table (::ana/constant-table @compiler-env))))))
 
 (defn- test-namespaces
   "The ClojureScript namespaces in the source directories matching regexp,
@@ -390,6 +411,7 @@
                (compile-parallel others opts)
                (doseq [input others]
                  (compile-ns input opts))))
+           (write-constants! compiler-env opts)
            (install-goog-shims opts)
            (install-goog-libs compiler-env opts)
            (write-package-json opts)
@@ -634,6 +656,7 @@
                              (recompile! compiler-env inputs
                                (distinct (concat fresh cljs res-nses (macro-dependents compiler-env macros)))
                                opts)))]
+              (write-constants! compiler-env opts)
               (install-goog-libs compiler-env opts)
               (env/with-compiler-env compiler-env
                 (run-hooks! compiler-env inputs opts))

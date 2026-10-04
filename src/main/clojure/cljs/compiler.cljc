@@ -572,16 +572,34 @@
     (emit-constant nil)
     (emits ")")))
 
+(defn- esm-constants?
+  "Whether the module being emitted references keyword and symbol constants
+  of the constants module (:emit-constants). cljs.core, which the constants
+  module imports, keeps its own."
+  []
+  (and *esm-emitting*
+       (-> @env/*compiler* :options :emit-constants)
+       (not= 'cljs.core ana/*cljs-ns*)))
+
+(defn- emit-constant-ref
+  "Emits the reference to constant x of the constants table, true if it has
+  one."
+  [x]
+  (when-let [value (and (-> @env/*compiler* :options :emit-constants)
+                        (-> @env/*compiler* ::ana/constant-table x))]
+    (if *esm-emitting*
+      (when (esm-constants?)
+        (emits (esm-ns-alias ana/constants-ns-sym) "." value)
+        true)
+      (do (emits "cljs.core." value)
+          true))))
+
 (defmethod emit-constant* #?(:clj clojure.lang.Keyword :cljs Keyword) [x]
-  (if-let [value (and (-> @env/*compiler* :options :emit-constants)
-                      (-> @env/*compiler* ::ana/constant-table x))]
-    (emits "cljs.core." value)
+  (when-not (emit-constant-ref x)
     (emits-keyword x)))
 
 (defmethod emit-constant* #?(:clj clojure.lang.Symbol :cljs Symbol) [x]
-  (if-let [value (and (-> @env/*compiler* :options :emit-constants)
-                      (-> @env/*compiler* ::ana/constant-table x))]
-    (emits "cljs.core." value)
+  (when-not (emit-constant-ref x)
     (emits-symbol x)))
 
 (defn emit-constants-comma-sep [cs]
@@ -1877,11 +1895,15 @@
          (doseq [preload preloads]
            (emitln "import \"" (esm-ns-path ns-name preload) "\";"))))))
 
+#?(:clj (declare emit-esm-ns-import))
+
 #?(:clj
    (defn- emit-esm-imports [ns-name deps]
      (emit-esm-preloads ns-name)
      (when-not (= 'cljs.core ns-name)
-       (emit-esm-import ns-name 'cljs.core))
+       (emit-esm-import ns-name 'cljs.core)
+       (when (-> @env/*compiler* :options :emit-constants)
+         (emit-esm-ns-import ns-name ana/constants-ns-sym)))
      (doseq [dep deps]
        (emit-esm-import ns-name dep))))
 
@@ -2559,6 +2581,22 @@
                   {:error :invalid-constant-type
                    :clojure.error/phase :compilation})))
       (emits ";\n"))))
+
+#?(:clj
+   (defn emit-esm-constants-table
+     "The constants module of ES module output (:emit-constants): an export
+     of each keyword and symbol constant in table."
+     [table]
+     (binding [*esm-emitting* true
+               ana/*cljs-ns*  ana/constants-ns-sym
+               ;; the namespaces cc references, cljs.core is imported below
+               *esm*          {:refs (atom #{}) :self-import (atom false)}]
+       (emitln "import * as " (esm-ns-alias 'cljs.core) " from \""
+         (esm-ns-path ana/constants-ns-sym 'cljs.core) "\";")
+       (doseq [[x value] (sort-by (comp str val) table)]
+         (emits "export const " value " = /*@__PURE__*/ ")
+         (if (keyword? x) (emits-keyword x) (emits-symbol x))
+         (emitln ";")))))
 
 #?(:clj
    (defn emit-constants-table-to-file [table dest]

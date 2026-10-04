@@ -285,7 +285,9 @@
   (is (not= (ana/gen-constant-id :$)
             (ana/gen-constant-id :.)))
   (is (not= (ana/gen-constant-id '$)
-            (ana/gen-constant-id '.))))
+            (ana/gen-constant-id '.)))
+  (is (not= (ana/gen-constant-id '$)
+            (ana/gen-constant-id '..))))
 
 (deftest test-unicode-munging-cljs-1457
   (is (= (ana/gen-constant-id :C♯) 'cst$kw$C_u266f_)

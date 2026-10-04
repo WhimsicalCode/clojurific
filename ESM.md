@@ -41,6 +41,8 @@ the `:dev` profile, `build` to `:release`:
 | `:closure-defines {goog.DEBUG false}` | `goog.DEBUG` and `goog-define`s are compile time constants |
 | `:build-hooks` | `[[fn-sym & args]]`, called with the build (`:compiler-env`, `:namespaces` in dependency order, `:mode`, `:options`) after a build and every watch recompile |
 | `:warnings` | a map of warning types, or a boolean for the undeclared var warnings, like `cljs.closure` |
+| `:optimize-constants true` | keyword and symbol constants are exports of one module, `cljs/core/constants.js`, instead of allocated at each use (`cljs.core` keeps its own) |
+| `:checked-set-literals false` | set literals of runtime values collapse duplicates instead of throwing (before CLJS-3415) |
 | `:esm-hmr` | hot reloading code, enabled by `watch` |
 | `:esm-dts false` | don't write `.d.ts` files |
 | `:esm-after-load` / `:esm-before-load` | fns run around hot reloads, like `^:dev/after-load` |
@@ -161,7 +163,9 @@ Other code using the Closure Library (cljs-time's `goog.date`, re-frame's
 (transit-js) gets the real thing: Closure Library files are wrapped as ES
 modules (`goog-lib/`) run by Closure Library's `base.js`, with the debug loader
 disabled, dependencies are imports. Members are resolved per reference, a shim
-is used if it exports the member, otherwise the Closure Library.
+is used if it exports the member, otherwise the Closure Library. Its direct
+`eval` calls (`goog.json.parse`, base.js' module loader) are made indirect: a
+direct eval keeps minifiers from renaming the top level of the chunk it's in.
 
 ### Hot reloading
 
@@ -199,11 +203,12 @@ Verified with:
 
 Measured on the Whimsical app (Apple Silicon laptop):
 
-| | shadow-cljs release (Closure advanced) | `:module-format :esm` + Vite 8 |
+| | shadow-cljs release (Closure advanced) | `:module-format :esm` + Vite 8, `:optimize-constants` |
 |---|---|---|
-| production build | 110s | 46s (31s compile, 15s bundle, 3.4s of it Rolldown) |
-| total JS, minified | 26.0 MB | 39.3 MB |
-| total JS, gzipped | 5.9 MB | 6.7 MB |
+| production build | 125s | 55s (compile and bundle) |
+| total JS, minified | 25.8 MB | 27.0 MB |
+| total JS, gzip / brotli | 5.93 / 4.72 MB | 6.04 / 4.82 MB |
+| initial page load, gzip / brotli | 4.17 / 3.32 MB | 4.55 / 3.65 MB |
 | incremental compile | | 150-230ms per changed namespace |
 
 Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
@@ -218,12 +223,9 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
 
 - REPL: not supported under `:module-format :esm` yet.
 - Size: protocol pruning and property renaming are a bundle post pass in
-  JavaScript (11s on the Whimsical app). Keyword and symbol constants aren't
-  hoisted (`:optimize-constants`), each use allocates.
+  JavaScript (11s on the Whimsical app).
 - Production source maps are dropped by the prune pass.
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`,
   which keeps them in every bundle.
-- Build hooks (shadow-cljs `:build-hooks`), i.e. CSS extraction, have no
-  equivalent yet.
 - Closure's `:modules` aren't supported, lazy loading uses `import()`.
 - Self-hosted ClojureScript (`cljs.js`) doesn't emit ES modules.
