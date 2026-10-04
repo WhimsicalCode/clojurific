@@ -191,19 +191,29 @@ export default function cljs(options) {
   }
 
   // The compiler's watch for vite build --watch, compiling tracks the
-  // compile in progress.
+  // compile in progress. Resolves once its initial build is done, rejects
+  // when that fails: the bundle's inputs are its output.
   function watchCompiler() {
     let compiled = () => {};
-    // the build's options: bundles don't hot reload, the dev server's watch does
-    proc = run(compilerArgs('watch', { ':exit-with-parent': true, ':esm-hmr': false }), event => {
-      if (event.type === 'compiling') {
-        compiling = new Promise(resolve => (compiled = resolve));
-      } else if (event.type === 'compiled' || event.type === 'error') {
-        compiled();
-        const logger = config?.logger ?? console;
-        if (event.type === 'error') logger.error(`[cljs] ${event.message}`);
-        else logger.info(`[cljs] compiled ${event.namespaces} namespace(s) in ${event.ms}ms`);
-      }
+    return new Promise((resolve, reject) => {
+      let first = true;
+      // the build's options: bundles don't hot reload, the dev server's watch does
+      proc = run(compilerArgs('watch', { ':exit-with-parent': true, ':esm-hmr': false }), event => {
+        if (event.type === 'compiling') {
+          compiling = new Promise(resolve => (compiled = resolve));
+        } else if (event.type === 'compiled' || event.type === 'error') {
+          compiled();
+          const logger = config?.logger ?? console;
+          if (event.type === 'error') logger.error(`[cljs] ${event.message}`);
+          else logger.info(`[cljs] compiled ${event.namespaces} namespace(s) in ${event.ms}ms`);
+          if (first) {
+            first = false;
+            if (event.type === 'error') reject(new Error(`ClojureScript build failed: ${event.message}`));
+            else resolve();
+          }
+        }
+      });
+      proc.on('exit', code => first && reject(new Error(`ClojureScript watch exited (${code})`)));
     });
   }
 
@@ -247,15 +257,18 @@ export default function cljs(options) {
       const result = { root: outputDir };
       if (env.command === 'build' && !env.isPreview) {
         const start = Date.now();
-        await new Promise((resolve, reject) => {
-          const child = run(compilerArgs('build', { ':verbose': false }), () => {});
-          child.stdin.end();
-          child.on('exit', code => code === 0 ? resolve() : reject(new Error(`ClojureScript build failed (${code})`)));
-        });
+        if (userConfig.build?.watch) {
+          // vite build --watch: the compiler's watch builds, then watches the
+          // sources; the bundler rebuilds when the compiler's output changes
+          await watchCompiler();
+        } else {
+          await new Promise((resolve, reject) => {
+            const child = run(compilerArgs('build', { ':verbose': false }), () => {});
+            child.stdin.end();
+            child.on('exit', code => code === 0 ? resolve() : reject(new Error(`ClojureScript build failed (${code})`)));
+          });
+        }
         console.log(`ClojureScript compiled in ${Date.now() - start}ms`);
-        // vite build --watch: the compiler watches the sources, the bundler
-        // rebuilds when the compiler's output changes
-        if (userConfig.build?.watch) watchCompiler();
         const info = await buildInfo();
         const jsEntries = Object.fromEntries(Object.entries(info.entries ?? {})
           .filter(([name]) => !options.entries || options.entries.includes(name)));
