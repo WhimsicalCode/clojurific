@@ -1999,6 +1999,71 @@
        ~(build-positional-factory t r fields)
        ~t)))
 
+(core/defn- super-calls
+  "Form with its (super ...) calls as super*, sets found when it has any."
+  [form found]
+  (core/let [walk #(super-calls % found)]
+    (core/cond
+      (core/and (core/seq? form) (= 'super (first form)))
+      (do (core/reset! found true)
+          (core/with-meta (core/list* 'super* (core/map walk (rest form))) (meta form)))
+
+      (core/seq? form) (core/with-meta (core/apply core/list (core/map walk form)) (meta form))
+      (core/vector? form) (core/with-meta (core/mapv walk form) (meta form))
+      (core/map? form) (core/with-meta (core/into {} (core/map (core/fn [[k v]] [(walk k) (walk v)])) form) (meta form))
+      (core/set? form) (core/with-meta (core/into #{} (core/map walk) form) (meta form))
+      :else form)))
+
+(core/defmacro defclass
+  "(defclass Name
+     (extends Base)
+     (constructor [this & params]
+       (super & args)
+       ...)
+     Object
+     (method [this & args] ...)
+     Protocol
+     (protocol-fn [this & args] ...))
+
+  Defines Name as a JavaScript class, for APIs needing one: one they construct
+  with new, or a subclass. Like shadow-cljs' shadow.cljs.modern/defclass.
+
+  (extends Base) and (constructor ...) are optional. this is bound once
+  (super & args) called the base class' constructor, which a constructor
+  without a (super ...) call does first with its params. Without a
+  constructor, the class has JavaScript's default one. The methods and
+  protocol implementations are extend-type's, on the class' prototype."
+  [name & body]
+  (core/loop [[x & more :as forms] body base nil ctor nil]
+    (core/cond
+      (core/and (core/seq? x) (= 'extends (first x)) (core/nil? base))
+      (recur more (second x) ctor)
+
+      (core/and (core/seq? x) (= 'constructor (first x)) (core/nil? ctor))
+      (recur more base x)
+
+      (core/and (core/some? x) (core/not (core/symbol? x)))
+      (throw (ex-info (core/str "defclass " name ": expected (extends Base), (constructor [this & params] ...)"
+                                " or a protocol, got " (pr-str x))
+                      {:form x}))
+
+      :else
+      (core/let [[_ [_ & params :as ctor-params] & ctor-body] ctor
+                 found     (core/atom false)
+                 ctor-body (super-calls ctor-body found)
+                 _         (core/when-not (core/or @found (core/nil? base) (core/every? core/symbol? params))
+                             (throw (ex-info (core/str "defclass " name ": a constructor with destructured params"
+                                                       " calls (super ...) itself")
+                                             {:form ctor})))
+                 ctor-body (if (core/or @found (core/nil? base))
+                             ctor-body
+                             (core/cons (core/list* 'super* params) ctor-body))]
+        `(do
+           (def ~name
+             (~'class* ~name ~base ~@(if ctor (core/cons ctor-params ctor-body) [nil])))
+           ~@(core/when (core/seq forms)
+               [`(extend-type ~name ~@forms)]))))))
+
 (core/defn- emit-defrecord
   "Do not use this directly - use defrecord"
   [env tagname rname fields impls]

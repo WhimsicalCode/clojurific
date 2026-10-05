@@ -11897,7 +11897,8 @@ reduces them without incurring seq initialization"
   [x]
   (contains?
     '#{if def fn* do let* loop* letfn* throw try catch finally
-       recur new set! ns deftype* defrecord* . js* & quote case* var ns*}
+       recur new set! ns deftype* defrecord* . js* & quote case* var ns*
+       class* super*}
     x))
 
 (defn test

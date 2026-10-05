@@ -123,6 +123,27 @@ import { describe } from '../out/app/state.js';
 describe(1, 2); // error TS2554: Expected 1 arguments, but got 2.
 ```
 
+### Classes
+
+`defclass` (in `cljs.core`, like shadow-cljs' `shadow.cljs.modern/defclass`)
+defines a JavaScript class, for APIs constructing one with `new` or needing a
+subclass, i.e. a Cloudflare Durable Object:
+
+```clojure
+(defclass Room
+  (extends DurableObject)
+  (constructor [this ctx env]
+    (super ctx env)
+    (set! (.-sessions this) #js []))
+  Object
+  (fetch [this request] ...))
+```
+
+`this` is bound once `(super ...)` called the base class' constructor, which a
+constructor without a `(super ...)` call does first with its params. The
+methods and protocol implementations are `extend-type`'s. It isn't specific to
+`:module-format :esm`.
+
 ### `^:export`
 
 Exported vars are also installed as globals (`my.app.init`), for scripts calling

@@ -11,6 +11,7 @@
 
 (ns esm-test-runner
   (:require [cljs.esm-test]
+            [cljs.defclass-test]
             [cljs.async-await-test]
             [cljs.qualified-method-test]
             [cljs.proxy-test]
@@ -78,6 +79,7 @@
 
 (run-tests
   'cljs.esm-test
+  'cljs.defclass-test
   'cljs.async-await-test
   'cljs.qualified-method-test
   'cljs.proxy-test

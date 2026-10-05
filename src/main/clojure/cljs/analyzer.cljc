@@ -1513,7 +1513,7 @@ x                          (not (contains? ret :info)))
 ;; Note: This is the set of parse multimethod dispatch values,
 ;; along with '&, and differs from cljs.core/special-symbol?
 (def specials '#{if def fn* do let* loop* letfn* throw try recur new set!
-                 ns deftype* defrecord* . js* & quote case* var ns*})
+                 ns deftype* defrecord* . js* & quote case* var ns* class* super*})
 
 (def ^:dynamic *recur-frames* nil)
 (def ^:dynamic *loop-lets* ())
@@ -3735,6 +3735,57 @@ x                          (not (contains? ret :info)))
 (defmethod parse 'defrecord*
   [_ env form _ _]
   (parse-type :defrecord env form) )
+
+;; (class* Name Base [this & params] & body), see cljs.core/defclass: a
+;; JavaScript class expression extending Base (nil for none), its constructor
+;; evaluating body with this bound once (super* & args) returned. Without the
+;; params vector (nil), the class has the default constructor.
+(defmethod parse 'class*
+  [_ env [_ name base [this-sym & params :as ctor-params] & body :as form] _ _]
+  (when-not (and (symbol? name)
+                 (or (nil? ctor-params) (and (vector? ctor-params) (symbol? this-sym))))
+    (throw (error env "Invalid class* form, expected (class* Name Base [this & params] & body)")))
+  (when (some '#{&} params)
+    (throw (error env (str "Variadic class constructor " name))))
+  (let [;; destructured params are bound by a let over gensyms
+        args     (mapv #(if (symbol? %) % (gensym "p")) params)
+        binds    (mapcat (fn [p a] (when-not (identical? p a) [p a])) params args)
+        [locals args] (reduce (analyze-fn-method-param env)
+                        [(:locals env) []]
+                        (map-indexed vector args))
+        ;; self__, assigned by (super* ...), or at the start without a base
+        locals   (assoc locals this-sym
+                   {:op :binding :name 'self__ :form this-sym :local :arg
+                    :env (select-keys env [:context]) :info {:name 'self__}
+                    :binding-form? true})
+        ctor-env (assoc env :context :statement :locals locals
+                   ::class {:name name :extends? (some? base)})
+        base-ast (when (some? base)
+                   (analyze (assoc env :context :expr) base))
+        body-ast (when ctor-params
+                   (binding [*recur-frames* nil]
+                     (analyze ctor-env (if (seq binds)
+                                         (list* 'cljs.core/let (vec binds) body)
+                                         (cons 'do body)))))]
+    (cond-> {:op :class :env env :form form :name name :tag 'function
+             :children []}
+      base-ast    (-> (assoc :base base-ast) (update :children conj :base))
+      ctor-params (-> (assoc :params args :body body-ast)
+                      (update :children into [:params :body])))))
+
+(defmethod parse 'super*
+  [_ env [_ & args :as form] _ _]
+  (let [{:keys [name extends?] :as class} (::class env)]
+    (cond
+      (nil? class)
+      (throw (error env "super* outside of a class* constructor"))
+
+      (not extends?)
+      (throw (error env (str "super* in the constructor of " name ", which has no base class"))))
+    {:op :super :env env :form form
+     :args (mapv #(analyze (assoc env :context :expr) %) args)
+     :tag 'object
+     :children [:args]}))
 
 ;; dot accessor code
 

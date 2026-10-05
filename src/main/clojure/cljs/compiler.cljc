@@ -2090,6 +2090,27 @@
     (emitln "});")
     (emit body)))
 
+(defmethod emit* :class
+  [{:keys [env name base params body]}]
+  (emit-wrap env
+    (emits "(class " (munge name))
+    (when base
+      (emits " extends " base))
+    (emitln " {")
+    (when body
+      (emitln "constructor(" (comma-sep (map munge params)) ") {")
+      ;; this is accessible once the base class' constructor returned
+      (emitln (if base "var self__;" "var self__ = this;"))
+      (emit body)
+      (emitln "}"))
+    (emits "})")))
+
+(defmethod emit* :super
+  [{:keys [env args]}]
+  ;; super() evaluates to this
+  (emit-wrap env
+    (emits "(self__ = super(" (comma-sep args) "))")))
+
 (defmethod emit* :defrecord
   [{:keys [t fields pmasks body protocols]}]
   (let [fields (concat (map munge fields) '[__meta __extmap __hash])]
