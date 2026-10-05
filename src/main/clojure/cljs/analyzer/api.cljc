@@ -224,8 +224,12 @@
    (resolve-extern env/*compiler* sym))
   ([state sym]
    (let [pre (ana/->pre sym)]
-     (env/with-compiler-env state
-       (:info (ana/resolve-extern pre))))))
+     ;; env/with-compiler-env resolves to the JVM's macro (cljs.env) when the
+     ;; JVM compiles this namespace to JavaScript, not to cljs.env.macros
+     #?(:clj  (env/with-compiler-env state
+                (:info (ana/resolve-extern pre)))
+        :cljs (binding [env/*compiler* state]
+                (:info (ana/resolve-extern pre)))))))
 
 (defn find-ns
   "Given a namespace return the corresponding namespace analysis map. Analagous
