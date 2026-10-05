@@ -7,8 +7,14 @@
 ;; You must not remove this notice, or any other, from this software.
 
 (ns cljs.analyzer-api-tests
-  (:require [cljs.analyzer.api :as ana-api])
+  (:require [cljs.analyzer :as ana]
+            [cljs.analyzer.api :as ana-api]
+            [cljs.env :as env])
   (:use clojure.test))
+
+;; The forms analyzed here use cljs.core macros, which the analyzer loads with
+;; an ns form: run alone, no other test has loaded them.
+(use-fixtures :once (fn [f] (env/ensure (ana/load-core)) (f)))
 
 (deftest cljs-warning-test
   (is (ana-api/warning-enabled? :undeclared-var)
