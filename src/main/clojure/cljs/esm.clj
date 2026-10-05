@@ -199,13 +199,13 @@
 
 (defn install-goog-libs
   "Writes the Closure Library namespaces used without an ES module shim
-  (recorded by the compiler as :cljs.esm/goog-libs) and the files they depend
-  on as ES modules run by Closure Library's base.js. goog-lib/ns/<ns>.js
-  default exports namespace ns."
+  (recorded by the compiler as :cljs.esm/goog-libs of the namespaces using
+  them) and the files they depend on as ES modules run by Closure Library's
+  base.js. goog-lib/ns/<ns>.js default exports namespace ns."
   [compiler-env {:keys [output-dir]}]
   (let [idx  (:js-dependency-index @compiler-env)
         lib  #(deps/closure-lib idx %)
-        nses (::goog-libs @compiler-env)]
+        nses (into (sorted-set) (mapcat ::goog-libs) (vals (::ana/namespaces @compiler-env)))]
     (when (seq nses)
       (let [files (loop [queue (vec (keep lib nses)) seen {}]
                     (if-let [{:keys [file requires] :as info} (first queue)]
@@ -290,17 +290,62 @@
             v]))
     defines))
 
+(defn- ns-api
+  "The parts of a namespace's analysis its dependents' compiled output
+  depends on: its vars (cljs.test's run-tests lists a namespace's tests) and
+  arities of fns invoked directly under :static-fns."
+  [ns-analysis]
+  (into {}
+    (map (fn [[sym v]]
+           [sym (-> (select-keys v [:fn-var :variadic? :max-fixed-arity :dynamic
+                                    :protocol-symbol :protocol])
+                    ;; arities, param names differ between compiles (gensyms)
+                    (assoc :arities (map count (:method-params v))))]))
+    (:defs ns-analysis)))
+
+(defn- api [compiler-env ns]
+  (ns-api (get-in @compiler-env [::ana/namespaces ns])))
+
+(defn- cached-analysis
+  "A namespace's analysis from the analysis cache of its last compile, nil
+  without one."
+  [source-file {:keys [output-dir]}]
+  (let [f (ana/cache-file source-file (ana/parse-ns source-file) output-dir)]
+    ;; cljs.core's can be a resource of the compiler's
+    (when (and (instance? File f) (.exists ^File f))
+      (case (util/ext f)
+        "edn"  (edn/read-string (slurp f))
+        "json" (let [{:keys [reader read]} @ana/transit]
+                 (with-open [in (io/input-stream f)]
+                   (read (reader in :json ana/transit-read-opts))))))))
+
+(def ^:private ^:dynamic *api-changed*
+  "Namespaces of a build recompiled with a different api, an atom: the
+  namespaces requiring them are recompiled too, their output may depend on
+  it. Like cljs.closure's :recompile-dependents, without recompiling the
+  dependents of every namespace recompiled."
+  nil)
+
 (defn- compile-ns
-  "Compiles a namespace if its output isn't up to date. Up to date namespaces
+  "Compiles a namespace if its output isn't up to date, or when a namespace
+  it requires was recompiled with a different api. Up to date namespaces
   aren't analyzed by compile-file: reads their analysis (from the analysis
   cache), or each of their dependents, compiled in parallel, would analyze
   them concurrently."
-  [{:keys [ns source-file]} opts]
-  (let [ret (comp/compile-file source-file (output-file ns opts) opts)]
+  [{:keys [ns source-file requires]} opts]
+  (let [dest   (output-file ns opts)
+        force? (and *api-changed* (some @*api-changed* (map symbol (remove string? requires))))
+        opts   (cond-> opts force? (assoc :force true))
+        stale? (and *api-changed*
+                    (or (:force opts) (comp/requires-compilation? source-file dest opts)))
+        before (when stale? (ns-api (cached-analysis source-file opts)))
+        ret    (comp/compile-file source-file dest opts)]
     (when-not (get-in @env/*compiler* [::ana/namespaces ns :defs])
       (if (= 'cljs.core ns)
         (comp/with-core-cljs opts (fn []))
         (ana/analyze-file source-file opts)))
+    (when (and stale? (not= before (api env/*compiler* ns)))
+      (swap! *api-changed* conj ns))
     ret))
 
 (defn- compile-parallel
@@ -449,7 +494,8 @@
      (with-bindings (assoc (compiler-bindings opts)
                       #'*generated-sources* (if (:test-runner opts)
                                               (generate-test-runner opts)
-                                              *generated-sources*))
+                                              *generated-sources*)
+                      #'*api-changed* (atom #{}))
        (env/with-compiler-env compiler-env
          (swap! compiler-env assoc :options opts)
          (let [start  (System/nanoTime)
@@ -507,18 +553,6 @@
       (filter #(re-find #"\.(cljs|cljc|clj)$" (.getName ^File %)))
       (map (fn [^File f] [(.getCanonicalPath f) (.lastModified f)])))
     dirs))
-
-(defn- api
-  "The parts of a namespace's analysis its dependents' compiled output
-  depends on, i.e. arities of fns invoked directly under :static-fns."
-  [compiler-env ns]
-  (into {}
-    (map (fn [[sym v]]
-           [sym (-> (select-keys v [:fn-var :variadic? :max-fixed-arity :dynamic
-                                    :protocol-symbol :protocol])
-                    ;; arities, param names differ between compiles (gensyms)
-                    (assoc :arities (map count (:method-params v))))]))
-    (get-in @compiler-env [::ana/namespaces ns :defs])))
 
 (defn- dependents
   "Namespaces of the build directly requiring any of nses."

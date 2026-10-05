@@ -1777,11 +1777,14 @@
 #?(:clj
    (defn- esm-goog-lib!
      "Records a Closure Library namespace used without a shim, returns the
-     import path of its module."
+     import path of its module. Recorded in the analysis of namespace ns-name,
+     which the analysis cache keeps: a build compiling none of its users still
+     writes its module."
      [ns-name ns]
      (when-not (deps/closure-lib (:js-dependency-index @env/*compiler*) ns)
        (ana/warning :esm-unsupported-goog-ns (ana/empty-env) {:ns ns}))
-     (swap! env/*compiler* update :cljs.esm/goog-libs (fnil conj #{}) (str ns))
+     (swap! env/*compiler* update-in [::ana/namespaces ns-name :cljs.esm/goog-libs]
+       (fnil conj #{}) (str ns))
      (esm-path ns-name (esm-goog-lib-path ns))))
 
 #?(:clj

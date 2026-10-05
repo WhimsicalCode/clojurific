@@ -55,6 +55,12 @@ The output directory has one module per namespace (`out/my/app.js`), plus
 the build uses (see below), and `cljs-esm.json`, the main namespaces' modules
 (the bundle's entry points).
 
+A build reuses the output of the previous one: a namespace is recompiled when
+its source changed, and so are the namespaces requiring it when its API (its
+vars, their arities) changed, which their output may depend on (`:static-fns`
+arity calls, `cljs.test`'s lists of tests). Changed macros aren't detected,
+remove the output directory after changing a macro library.
+
 Macros reading classpath resources call `cljs.esm/watch-resource!`, the watcher
 then recompiles the namespace when the resource changes. `shadow.resource` is
 provided for code written for shadow-cljs.
@@ -254,5 +260,8 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
   which doesn't have `cljs.esm`.
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`,
   which keeps them in every bundle.
+- Closure Library files run whole: `goog.i18n`'s locale data (from
+  `goog.date`, i.e. cljs-time) has every locale, which Closure's advanced
+  compilation reduces to `goog.LOCALE`'s, about 340 KB of a bundle.
 - Closure's `:modules` aren't supported, lazy loading uses `import()`.
 - Self-hosted ClojureScript (`cljs.js`) doesn't emit ES modules.
