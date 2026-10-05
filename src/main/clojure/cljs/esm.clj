@@ -534,6 +534,21 @@
     (println (str "[cljs.esm] " (json/write-str (assoc m :type type))))
     (flush)))
 
+(defn- collecting-warnings
+  "The warning handlers, collecting the warnings printed into the atom
+  warnings as {:message :file :line :column :output}, :output is the
+  namespace's output file, for the watcher's compiled events."
+  [warnings opts]
+  (conj ana/*cljs-warning-handlers*
+    (fn [warning-type env extra]
+      (when (#{true :warning} (warning-type ana/*cljs-warnings*))
+        (when-let [s (ana/error-message warning-type extra)]
+          (swap! warnings conj {:message s
+                                :file    (some-> ana/*cljs-file* str)
+                                :line    (:line env)
+                                :column  (:column env)
+                                :output  (when-let [ns ana/*cljs-ns*] (.getPath (output-file ns opts)))}))))))
+
 (defn- error-data [^Throwable e]
   (let [data  (ex-data (or (ex-cause e) e))
         cause (loop [e e] (if-let [c (ex-cause e)] (recur c) e))]
@@ -705,12 +720,15 @@
         queue        (LinkedBlockingQueue.)
         stdin?       (= :stdin (:watch-events opts))
         build!       (fn []
-                       (let [start (System/nanoTime)
-                             nses  (build opts compiler-env)]
+                       (let [start    (System/nanoTime)
+                             warnings (atom [])
+                             nses     (binding [ana/*cljs-warning-handlers* (collecting-warnings warnings opts)]
+                                        (build opts compiler-env))]
                          ;; the watcher needs the analysis of the whole build
                          (env/with-compiler-env compiler-env
                            (ensure-analyzed! compiler-env (find-sources (mains opts) opts) opts))
                          (event! "compiled" {:namespaces (count nses)
+                                             :warnings @warnings
                                              :ms (long (/ (- (System/nanoTime) start) 1e6))})))]
     (when (:exit-with-parent opts)
       (start-stdin-reader! queue))
@@ -736,6 +754,7 @@
           (event! "compiling" {})
           (try
             (let [start  (System/nanoTime)
+                  warnings (atom [])
                   ;; the test runner requires the test namespaces there are now
                   runner (test-runner-source opts)
                   before (some-> runner slurp-if-exists)
@@ -755,7 +774,7 @@
                   fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
                   done   (env/with-compiler-env compiler-env
                            (with-bindings (assoc (compiler-bindings opts)
-                                            #'ana/*cljs-warning-handlers* ana/*cljs-warning-handlers*
+                                            #'ana/*cljs-warning-handlers* (collecting-warnings warnings opts)
                                             #'*generated-sources* gen)
                              (recompile! compiler-env inputs
                                (distinct (concat fresh cljs res-nses runner-changed
@@ -768,6 +787,7 @@
                 (run-hooks! compiler-env inputs opts))
               (event! "compiled" {:namespaces (count done)
                                   :files (map #(.getPath (output-file % opts)) (sort done))
+                                  :warnings @warnings
                                   :ms (long (/ (- (System/nanoTime) start) 1e6))}))
             (catch Throwable e
               (event! "error" (error-data e)))))

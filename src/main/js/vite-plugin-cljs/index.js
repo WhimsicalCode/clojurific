@@ -149,6 +149,11 @@ export default function cljs(options) {
   let config, proc, server, minify, cwd, outputDir;
   let compiling = Promise.resolve();
   const localModules = new Set();
+  // Like shadow-cljs, the output isn't hot reloaded while namespaces have
+  // warnings, it would fail at runtime (undeclared vars): the warnings by
+  // output file, and the output held back until they're fixed.
+  const warnings = new Map();
+  const held = new Set();
 
   function compilerArgs(command, extra) {
     const profile = options.profile ?? (command === 'watch' ? 'dev' : 'release');
@@ -439,14 +444,23 @@ export default function cljs(options) {
 
     // Hot updates of compiled modules wait for the compile (and its build
     // hooks, i.e. generated CSS) to finish.
-    async handleHotUpdate() {
+    async handleHotUpdate({ file }) {
       await compiling;
+      if (held.has(file)) return [];
     },
 
     configureServer(devServer) {
       server = devServer;
       let ready, compiled = () => {};
       const initialBuild = new Promise(resolve => (ready = resolve));
+      // the overlay of the last compile's error or warnings, for pages loaded
+      // since: a reloaded page runs the output with warnings
+      let problem = null;
+      const showProblem = err => {
+        problem = { type: 'error', err: { stack: '', plugin: 'cljs', ...err } };
+        server.ws.send(problem);
+      };
+      server.ws.on('connection', socket => problem && socket.send(JSON.stringify(problem)));
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
         if (event.type === 'watch-dirs') {
           // Vite's watcher (native file events) reports changes in the
@@ -465,6 +479,18 @@ export default function cljs(options) {
           compiling = new Promise(resolve => (compiled = resolve));
           return;
         }
+        // before the hot updates waiting for the compile
+        let released = [];
+        if (event.type === 'compiled') {
+          for (const file of event.files ?? []) warnings.delete(file);
+          for (const w of event.warnings ?? []) warnings.set(w.output, [...(warnings.get(w.output) ?? []), w]);
+          if (warnings.size) {
+            for (const file of event.files ?? []) held.add(file);
+          } else {
+            released = [...held].filter(file => !event.files?.includes(file));
+            held.clear();
+          }
+        }
         compiled();
         // The dev manifest, the pages' scripts, is written after the first
         // compile even if it failed: pages then show the error overlay.
@@ -473,20 +499,34 @@ export default function cljs(options) {
           await writeManifest(Object.fromEntries(Object.entries(info.main).map(([ns, file]) =>
             [ns, { scripts: [`${config.base}@vite/client`, config.base + file], preload: [] }])));
         }
-        if (event.type === 'compiled') {
+        const outstanding = [...warnings.values()].flat();
+        if (event.type === 'compiled' && outstanding.length) {
+          const [first] = outstanding;
+          config.logger.warn(`[cljs] compiled ${event.namespaces} namespace(s) in ${event.ms}ms, ` +
+            `hot reload paused by ${outstanding.length} warning(s)`, { timestamp: true });
+          showProblem({
+            message: outstanding
+              .map(w => `WARNING: ${w.message}${w.file ? ` at ${path.relative(cwd, w.file)}:${w.line}` : ''}`)
+              .join('\n') + '\n\nHot reload is paused until the warnings are fixed.',
+            id: first.file,
+            loc: first.file ? { file: first.file, line: first.line, column: first.column } : undefined,
+          });
+          ready();
+        } else if (event.type === 'compiled') {
           config.logger.info(`[cljs] compiled ${event.namespaces} namespace(s) in ${event.ms}ms`, { timestamp: true });
+          problem = null;
+          // the namespaces held back that this compile didn't update
+          const client = server.environments.client;
+          for (const file of released) {
+            for (const mod of client.moduleGraph.getModulesByFile(file) ?? []) client.reloadModule(mod);
+          }
           ready();
         } else if (event.type === 'error') {
           config.logger.error(`[cljs] ${event.message}`, { timestamp: true });
-          server.ws.send({
-            type: 'error',
-            err: {
-              message: event.message,
-              stack: '',
-              id: event.file,
-              loc: event.file ? { file: event.file, line: event.line, column: event.column } : undefined,
-              plugin: 'cljs',
-            },
+          showProblem({
+            message: event.message,
+            id: event.file,
+            loc: event.file ? { file: event.file, line: event.line, column: event.column } : undefined,
           });
           ready();
         }

@@ -71,7 +71,10 @@ provided for code written for shadow-cljs.
 `vite build` (the main namespaces are the bundle's entry points), watch mode for
 `vite`, compile errors go to Vite's error overlay. In watch mode Vite's file
 watcher reports changed sources to the compiler, hot updates wait for the
-compile and its build hooks to finish.
+compile and its build hooks to finish. Like shadow-cljs, compiler warnings
+are shown in the overlay too, and hot reloading pauses while any namespace
+has warnings: the output held back is reloaded once they're fixed. Pages
+loaded meanwhile show the overlay of the current error or warnings.
 
 ```js
 // vite.config.mjs
