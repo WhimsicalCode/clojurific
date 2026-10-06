@@ -712,13 +712,15 @@
   the directories of the watch-dirs event and writes `changed <path>` lines
   to stdin, otherwise polls :watch-dirs (defaults to the classpath
   directories). Enables :esm-hmr, modules accept their own hot updates when
-  served by Vite."
+  served by Vite. Until a build succeeds, each change builds again: a failed
+  build's output misses the namespaces it didn't get to."
   [opts]
   (let [opts         (prepare-opts (merge {:esm-hmr true} opts))
         compiler-env (env/default-compiler-env opts)
         dirs         (watch-dirs opts)
         queue        (LinkedBlockingQueue.)
         stdin?       (= :stdin (:watch-events opts))
+        built?       (atom false)
         build!       (fn []
                        (let [start    (System/nanoTime)
                              warnings (atom [])
@@ -727,6 +729,7 @@
                          ;; the watcher needs the analysis of the whole build
                          (env/with-compiler-env compiler-env
                            (ensure-analyzed! compiler-env (find-sources (mains opts) opts) opts))
+                         (reset! built? true)
                          (event! "compiled" {:namespaces (count nses)
                                              :warnings @warnings
                                              :ms (long (/ (- (System/nanoTime) start) 1e6))})))]
@@ -753,42 +756,44 @@
         (when (or (seq changed) (seq res-nses))
           (event! "compiling" {})
           (try
-            (let [start  (System/nanoTime)
-                  warnings (atom [])
-                  ;; the test runner requires the test namespaces there are now
-                  runner (test-runner-source opts)
-                  before (some-> runner slurp-if-exists)
-                  gen    (if (:test-runner opts) (generate-test-runner opts) {})
-                  runner-changed (when (and runner (not= before (slurp-if-exists runner)))
-                                   [(-> opts :test-runner :ns)])
-                  inputs (binding [*generated-sources* gen]
-                           (env/with-compiler-env compiler-env
-                             (find-sources (mains opts) opts)))
-                  _      (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
-                  macros (keep #(when (re-find #"\.clj[c]?$" (.getName ^File %)) (file-ns %)) changed)
-                  _      (doseq [ns macros]
-                           (when (find-ns ns)
-                             (require ns :reload)))
-                  cljs   (keep #(when (re-find #"\.clj[sc]$" (.getName ^File %)) (file-ns %)) changed)
-                  ;; namespaces newly required by a changed namespace
-                  fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
-                  done   (env/with-compiler-env compiler-env
-                           (with-bindings (assoc (compiler-bindings opts)
-                                            #'ana/*cljs-warning-handlers* (collecting-warnings warnings opts)
-                                            #'*generated-sources* gen)
-                             (recompile! compiler-env inputs
-                               (distinct (concat fresh cljs res-nses runner-changed
-                                           (macro-dependents compiler-env macros)))
-                               opts)))]
-              (check-js-entries compiler-env opts)
-              (write-constants! compiler-env opts)
-              (install-goog-libs compiler-env opts)
-              (env/with-compiler-env compiler-env
-                (run-hooks! compiler-env inputs opts))
-              (event! "compiled" {:namespaces (count done)
-                                  :files (map #(.getPath (output-file % opts)) (sort done))
-                                  :warnings @warnings
-                                  :ms (long (/ (- (System/nanoTime) start) 1e6))}))
+            (if-not @built?
+              (build!)
+              (let [start  (System/nanoTime)
+                    warnings (atom [])
+                    ;; the test runner requires the test namespaces there are now
+                    runner (test-runner-source opts)
+                    before (some-> runner slurp-if-exists)
+                    gen    (if (:test-runner opts) (generate-test-runner opts) {})
+                    runner-changed (when (and runner (not= before (slurp-if-exists runner)))
+                                     [(-> opts :test-runner :ns)])
+                    inputs (binding [*generated-sources* gen]
+                             (env/with-compiler-env compiler-env
+                               (find-sources (mains opts) opts)))
+                    _      (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
+                    macros (keep #(when (re-find #"\.clj[c]?$" (.getName ^File %)) (file-ns %)) changed)
+                    _      (doseq [ns macros]
+                             (when (find-ns ns)
+                               (require ns :reload)))
+                    cljs   (keep #(when (re-find #"\.clj[sc]$" (.getName ^File %)) (file-ns %)) changed)
+                    ;; namespaces newly required by a changed namespace
+                    fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
+                    done   (env/with-compiler-env compiler-env
+                             (with-bindings (assoc (compiler-bindings opts)
+                                              #'ana/*cljs-warning-handlers* (collecting-warnings warnings opts)
+                                              #'*generated-sources* gen)
+                               (recompile! compiler-env inputs
+                                 (distinct (concat fresh cljs res-nses runner-changed
+                                             (macro-dependents compiler-env macros)))
+                                 opts)))]
+                (check-js-entries compiler-env opts)
+                (write-constants! compiler-env opts)
+                (install-goog-libs compiler-env opts)
+                (env/with-compiler-env compiler-env
+                  (run-hooks! compiler-env inputs opts))
+                (event! "compiled" {:namespaces (count done)
+                                    :files (map #(.getPath (output-file % opts)) (sort done))
+                                    :warnings @warnings
+                                    :ms (long (/ (- (System/nanoTime) start) 1e6))})))
             (catch Throwable e
               (event! "error" (error-data e)))))
         (recur files' resources')))))

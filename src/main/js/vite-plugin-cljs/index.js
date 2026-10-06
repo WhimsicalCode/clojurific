@@ -196,8 +196,9 @@ export default function cljs(options) {
   }
 
   // The compiler's watch for vite build --watch, compiling tracks the
-  // compile in progress. Resolves once its initial build is done, rejects
-  // when that fails: the bundle's inputs are its output.
+  // compile in progress. Resolves once a build succeeded, the bundle's inputs
+  // are its output: a failed initial build is logged and the watch waits for
+  // the fix, like the dev server. Rejects when the compiler exits first.
   function watchCompiler() {
     let compiled = () => {};
     return new Promise((resolve, reject) => {
@@ -211,10 +212,9 @@ export default function cljs(options) {
           const logger = config?.logger ?? console;
           if (event.type === 'error') logger.error(`[cljs] ${event.message}`);
           else logger.info(`[cljs] compiled ${event.namespaces} namespace(s) in ${event.ms}ms`);
-          if (first) {
+          if (first && event.type === 'compiled') {
             first = false;
-            if (event.type === 'error') reject(new Error(`ClojureScript build failed: ${event.message}`));
-            else resolve();
+            resolve();
           }
         }
       });
