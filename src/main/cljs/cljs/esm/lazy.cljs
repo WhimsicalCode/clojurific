@@ -28,14 +28,18 @@
     (deref-fn module)))
 
 (defn load
-  "Loads the-loadable, returns a promise of its value."
+  "Loads the-loadable, returns a promise of its value. A failed load is
+  tried again on the next call, as shadow.lazy does."
   ([^Loadable the-loadable]
    (when (nil? (.-promise the-loadable))
      (set! (.-promise the-loadable)
        (-> ((.-import-fn the-loadable))
            (.then (fn [m]
                     (set! (.-module the-loadable) m)
-                    ((.-deref-fn the-loadable) m))))))
+                    ((.-deref-fn the-loadable) m)))
+           (.catch (fn [e]
+                     (set! (.-promise the-loadable) nil)
+                     (throw e))))))
    (.-promise the-loadable))
   ([the-loadable call-fn]
    (-> (load the-loadable)

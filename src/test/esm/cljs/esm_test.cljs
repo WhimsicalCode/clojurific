@@ -8,7 +8,8 @@
 
 (ns cljs.esm-test
   "Tests of behavior specific to :module-format :esm."
-  (:require [cljs.test :refer-macros [deftest is testing]]))
+  (:require [cljs.esm.lazy :as lazy]
+            [cljs.test :refer-macros [async deftest is testing]]))
 
 (deftest test-hash-non-extensible-objects
   (testing "ES modules are strict mode, hashing can't add uid properties to frozen objects"
@@ -34,3 +35,25 @@
     (let [original recursive-fn]
       (with-redefs [recursive-fn (fn [_] :redefined)]
         (is (= :redefined (original 1)))))))
+
+(deftest test-lazy-load-retries-after-a-failure
+  (testing "a failed import isn't kept: the next load imports again"
+    (async done
+      (let [imports  (atom 0)
+            loadable (lazy/Loadable. '[some.ns]
+                                     (fn []
+                                       (if (= 1 (swap! imports inc))
+                                         (js/Promise.reject (js/Error. "offline"))
+                                         (js/Promise.resolve #js {:v 42})))
+                                     (fn [m] (.-v m))
+                                     nil nil)]
+        (-> (lazy/load loadable)
+            (.then (fn [_] (is false "the first load fails"))
+                   (fn [e] (is (= "offline" (.-message e)))))
+            (.then (fn [] (lazy/load loadable)))
+            (.then (fn [v]
+                     (is (= 42 v))
+                     (is (= 2 @imports))
+                     (is (lazy/ready? loadable))))
+            (.catch (fn [e] (is false (str e))))
+            (.finally done))))))
