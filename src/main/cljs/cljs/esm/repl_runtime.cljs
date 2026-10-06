@@ -193,42 +193,37 @@
                 (fail! e))))))
       (.catch (fn [e] (reply! (error-reply e))))))
 
-(defn- gens
-  "The instance counters of namespaces nses, 0 for namespaces not loaded."
-  [nses]
-  (let [m #js {}]
-    (doseq [ns nses]
-      (aset m ns (if-let [entry (.get (.-nses registry) ns)] (.-gen entry) 0)))
-    m))
+(def ^:private stamp-waiters (atom []))
 
-(def ^:private gen-waiters (atom []))
-
-(defn- gens-reached? [want]
-  (every? (fn [[ns gen]]
+(defn- stamps-reached?
+  "Whether the namespaces of want, {ns stamp}, run the module of that
+  compile (see cljs.compiler/emit-esm-repl-footer), or aren't loaded:
+  nothing to reload."
+  [want]
+  (every? (fn [[ns stamp]]
             (let [entry (.get (.-nses registry) ns)]
-              ;; not loaded: nothing to reload
-              (or (nil? entry) (> (.-gen entry) gen))))
+              (or (nil? entry) (= stamp (.-stamp entry)))))
     want))
 
-(defn- check-gen-waiters! []
-  (let [[ready waiting] ((juxt filter remove) #(gens-reached? (:want %)) @gen-waiters)]
-    (reset! gen-waiters (vec waiting))
+(defn- check-stamp-waiters! []
+  (let [[ready waiting] ((juxt filter remove) #(stamps-reached? (:want %)) @stamp-waiters)]
+    (reset! stamp-waiters (vec waiting))
     (doseq [{:keys [reply!]} ready]
       (reply! #js {:value "true"}))))
 
-(defn- await-gens
-  "Replies once the modules of the namespaces of want, {ns gen}, ran again
-  since they were at gen, i.e. a hot reload applied, false after timeout
-  ms."
+(defn- await-stamps
+  "Replies once the namespaces of want, {ns stamp}, run the module of that
+  compile, i.e. its hot reload applied (and the after-load hooks ran),
+  false after timeout ms."
   [want timeout reply!]
-  (if (gens-reached? want)
+  (if (stamps-reached? want)
     (reply! #js {:value "true"})
     (let [waiter {:want want :reply! reply!}]
-      (swap! gen-waiters conj waiter)
+      (swap! stamp-waiters conj waiter)
       (js/setTimeout
         (fn []
-          (when (some #(identical? waiter %) @gen-waiters)
-            (swap! gen-waiters (fn [ws] (vec (remove #(identical? waiter %) ws))))
+          (when (some #(identical? waiter %) @stamp-waiters)
+            (swap! stamp-waiters (fn [ws] (vec (remove #(identical? waiter %) ws))))
             (reply! #js {:value "false"})))
         timeout))))
 
@@ -299,8 +294,7 @@
       "load"      (-> (js/Promise.all (into-array (map load-ref (get msg "refs"))))
                       (.then (fn [_] (reply! #js {:value "nil"}))
                              (fn [e] (reply! (error-reply e)))))
-      "gens"      (reply! #js {:value (gens (get msg "nses"))})
-      "await-gens" (await-gens (get msg "gens") (get msg "timeout" 10000) reply!)
+      "await-stamps" (await-stamps (get msg "stamps") (get msg "timeout" 10000) reply!)
       "tag"       (let [tag (get msg "tag")]
                     (when-let [storage (session-storage)]
                       (if tag
@@ -347,8 +341,8 @@
     (.on hot "cljs:repl" #(handle! % send!))
     (.on hot "vite:ws:connect" #(send! (hello)))
     ;; hot reloads re-register modules, after-load hooks have run
-    (.on hot "vite:afterUpdate" #(check-gen-waiters!))
-    (set! (.-registered registry) (fn [_] (js/setTimeout check-gen-waiters! 0)))
+    (.on hot "vite:afterUpdate" #(check-stamp-waiters!))
+    (set! (.-registered registry) (fn [_] (js/setTimeout check-stamp-waiters! 0)))
     (when (document)
       (.addEventListener js/globalThis "focus" #(send! (state true)))
       (.addEventListener (document) "visibilitychange" #(send! (state (.hasFocus (document))))))

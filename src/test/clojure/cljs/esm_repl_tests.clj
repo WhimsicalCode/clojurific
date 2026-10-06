@@ -78,7 +78,9 @@
       (let [out (slurp (io/file dir "out" "esm_repl" "app.js"))]
         (is (string/includes? out "import * as esm_repl$app from \"./app.js\";"))
         (is (string/includes? out "$$r.nses.set(\"esm-repl.app\", { mod: esm_repl$app,"))
-        (is (string/includes? out "import \"../cljs/esm/repl_runtime.js\";"))))))
+        (is (string/includes? out "import \"../cljs/esm/repl_runtime.js\";"))
+        (testing "with the stamp of the compile, also in the analysis"
+          (is (string/includes? out (str "stamp: \"" (get-in @cenv [::ana/namespaces 'esm-repl.app :cljs.esm/repl-stamp]) "\""))))))))
 
 ;; The REPL runtime under Node.js, messages are JSON lines on its stdin and
 ;; stdout.

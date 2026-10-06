@@ -332,22 +332,30 @@
         (when file (str " at " file (when line (str ":" line (when column (str ":" column))))))
         "\n"))))
 
-(defn- gens
-  "The instance counters of namespaces nses in runtime runtime-id, {ns gen}."
-  [runtime-id nses]
-  (:value (request! runtime-id {:op "gens" :nses (map str nses)} 10000)))
+(defn- stamps
+  "The stamps of the last compiles of namespaces nses, {ns stamp}, see
+  cljs.compiler/emit-esm-repl-footer."
+  [nses]
+  (with-build
+    (fn []
+      (into {}
+        (keep (fn [ns]
+                (when-let [stamp (:cljs.esm/repl-stamp (ana/get-namespace ns))]
+                  [(str ns) stamp])))
+        nses))))
 
 (defn- await-hot-reload
-  "Waits for the namespaces of gens ({ns gen}, before a compile) to run again
-  in runtime runtime-id, i.e. hot reloaded. Returns an error message if they
-  didn't."
-  [runtime-id gens timeout]
-  (when (seq gens)
-    (let [{:keys [value error]} (request! runtime-id {:op "await-gens" :gens gens :timeout timeout}
-                                  (+ timeout 5000))]
-      (cond
-        error             error
-        (= "false" value) (str "The hot reload didn't apply in runtime " runtime-id " within " timeout "ms")))))
+  "Waits for runtime runtime-id to run the modules of the last compiles of
+  namespaces nses, the ones it has loaded, i.e. their hot reload applied.
+  Returns an error message if it didn't."
+  [runtime-id nses timeout]
+  (let [want (stamps nses)]
+    (when (seq want)
+      (let [{:keys [value error]} (request! runtime-id {:op "await-stamps" :stamps want :timeout timeout}
+                                    (+ timeout 5000))]
+        (cond
+          error             error
+          (= "false" value) (str "The hot reload didn't apply in runtime " runtime-id " within " timeout "ms"))))))
 
 (defn- outstanding-warnings []
   (some->> (:warnings @build) deref vals (apply concat)))
@@ -358,8 +366,7 @@
   waits for their hot reload. Returns {:warnings :compile-error
   :hot-reload-error :note}."
   [nses runtime opts]
-  (let [{:keys [compile! options]} (the-build)
-        before (when (and runtime (seq nses)) (gens (:runtime-id runtime) nses))]
+  (let [{:keys [compile! options]} (the-build)]
     (swap! (:cljs.esm/repl-mains options) into nses)
     (let [{:keys [type warnings message] :as event} (compile! {:nses nses :force true})]
       (cond
@@ -372,10 +379,8 @@
 
         :else
         {:warnings warnings
-         :hot-reload-error (when before
-                             (await-hot-reload (:runtime-id runtime)
-                               (into {} (filter (fn [[_ gen]] (pos? gen))) before)
-                               (:hot-reload-timeout opts 10000)))}))))
+         :hot-reload-error (when runtime
+                             (await-hot-reload (:runtime-id runtime) nses (:hot-reload-timeout opts 10000)))}))))
 
 (defn- source-ns?
   "Whether namespace ns has a ClojureScript source the build can compile."
@@ -722,16 +727,13 @@
                   :err   (str err "; evaluated the forms, not hot reloaded: reload hooks not run\n")}
             (select-keys failed [:error :stack :ex-data]))))
       (let [{:keys [compile! options]} (the-build)
-            runtime (try (target opts) (catch Exception _ nil))
-            before  (when runtime (gens (:runtime-id runtime) [ns]))]
+            runtime (try (target opts) (catch Exception _ nil))]
         (when-not (with-build #(build-ns? ns))
           (swap! (:cljs.esm/repl-mains options) conj ns))
+        ;; nil when the watcher compiled the file already (saved), the page may
+        ;; not have applied the hot reload yet either way
         (let [{:keys [type warnings message] :as event} (compile! {:files [f]})]
           (cond
-            ;; compiled already (saved)
-            (nil? event)
-            {:value "nil"}
-
             (= "error" type)
             {:error message :ex-data (pr-str (dissoc event :type :message))}
 
@@ -742,9 +744,9 @@
                          "; hot reload is paused until the warnings are fixed\n")}
 
             :else
-            (let [error (when (and before (pos? (get before (keyword (str ns)) 0)))
-                          (await-hot-reload (:runtime-id runtime) before (:hot-reload-timeout opts 10000)))]
-              (cond-> {:value "nil" :warnings warnings}
+            (let [error (when runtime
+                          (await-hot-reload (:runtime-id runtime) [ns] (:hot-reload-timeout opts 10000)))]
+              (cond-> {:value "nil" :warnings (vec warnings)}
                 error (assoc :error error)))))))))
 
 ;; API

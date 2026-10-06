@@ -1984,20 +1984,27 @@
          (emitln "import.meta.hot.accept();"))
        (emitln "}"))))
 
+#?(:clj (def ^:private esm-repl-stamps (java.util.concurrent.atomic.AtomicLong.)))
+
 #?(:clj
    (defn- emit-esm-repl-footer
      "Under :esm-repl modules register their namespace object, the setters
      of all their instances (see emit-esm-hmr-footer) and the npm modules
      they import, for the forms evaluated at the REPL, see
      cljs.esm.repl-runtime. gen counts the instances, it changes once a
-     hot reload ran the module again."
+     hot reload ran the module again. stamp identifies the compile, also
+     recorded as :cljs.esm/repl-stamp of the namespace's analysis (which the
+     analysis cache keeps): the REPL waits for a page to run the module of a
+     compile."
      [ns-name libs]
-     (let [ns (pr-str (str ns-name))]
+     (let [ns    (pr-str (str ns-name))
+           stamp (str (System/currentTimeMillis) "-" (.incrementAndGet ^java.util.concurrent.atomic.AtomicLong esm-repl-stamps))]
+       (swap! env/*compiler* assoc-in [::ana/namespaces ns-name :cljs.esm/repl-stamp] stamp)
        (emitln "{ const $$r = globalThis.$CLJS_ESM || (globalThis.$CLJS_ESM = { nses: new Map() }), $$e = $$r.nses.get(" ns ");")
        (emitln "$$r.nses.set(" ns ", { mod: " (esm-ns-alias ns-name) ", "
          "sets: import.meta.hot ? import.meta.hot.data.$$sets : [$$set], "
          "libs: {" (string/join ", " (map (fn [[k v]] (str "\"" k "\": " v)) (sort libs))) "}, "
-         "gen: $$e ? $$e.gen + 1 : 1 });")
+         "gen: $$e ? $$e.gen + 1 : 1, stamp: \"" stamp "\" });")
        (emitln "if ($$r.registered) $$r.registered(" ns "); }"))))
 
 #?(:clj
