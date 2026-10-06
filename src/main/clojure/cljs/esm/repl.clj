@@ -674,7 +674,8 @@
                           nil))
                 form  (first forms)
                 more  (rest forms)]
-            (if (and form (not= :cljs/quit form))
+            ;; nil and false are forms too
+            (if (and forms (not= :cljs/quit form))
               (let [result (try
                              (eval-form form ana/*cljs-ns* file opts)
                              (catch Exception e

@@ -165,6 +165,8 @@
     (is (= ["nil" "0"] (:results (repl/cljs-eval "(defonce state (atom 1)) @state" {:ns 'esm-repl.app})))))
   (testing "binding a dynamic var"
     (is (= ["2" "1"] (:results (repl/cljs-eval "(binding [esm-repl.app/*dyn* 2] esm-repl.app/*dyn*) esm-repl.app/*dyn*")))))
+  (testing "nil and false are forms"
+    (is (= ["nil" "false" "1"] (:results (repl/cljs-eval "nil false 1")))))
   (testing "promises with :await"
     (is (= ["42"] (:results (repl/cljs-eval "(js/Promise.resolve 42)" {:await true}))))))
 
