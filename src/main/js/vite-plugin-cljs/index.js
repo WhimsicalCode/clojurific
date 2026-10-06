@@ -392,6 +392,8 @@ export default function cljs(options) {
               // the renames apply across chunks, cljs$ properties are the
               // compiler's, only accessed as properties (or quoted)
               mangleProps: { include: /^cljs\$/, quoted: true, cache: renames },
+              // licence notices (/*! ... */, @license, @preserve), as other minifiers keep them
+              codegen: { legalComments: 'inline' },
               sourcemap: Boolean(chunk.map),
             });
             if (result.errors?.length) this.warn(`minifying ${chunk.fileName}: ${result.errors[0].message}`);
