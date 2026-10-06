@@ -11,3 +11,6 @@
 (defonce state (atom 0))
 
 (defn trim [s] (gstr/trim s))
+
+(defn fail []
+  (throw (js/Error. "failed")))

@@ -321,7 +321,10 @@
          :userAgent (some-> (.-navigator js/globalThis) .-userAgent)
          :visible   (if doc (= "visible" (.-visibilityState doc)) true)
          :focused   (boolean (and doc (.hasFocus doc)))
-         :tag       (tag)}))
+         :tag       (tag)
+         ;; the output directory's URL, the REPL maps stack traces to the
+         ;; ClojureScript sources with the source maps there
+         :root      (.-href (root))}))
 
 (defn connect-vite!
   "Connects to the REPL through Vite's hot module reloading websocket, hot

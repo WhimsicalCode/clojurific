@@ -145,7 +145,9 @@ optional nREPL server (`:repl`), which runs in the watcher's JVM:
 - `*1`, `*2`, `*3` and `*e` in the interactive REPL, `doc`, `source`, `dir`
   and `apropos` are answered from the compiler environment. Output printed
   during a form is its `:out` / `:err`, and still goes to the console.
-  `:await true` waits for a promise's value.
+  `:await true` waits for a promise's value. Errors' `:stack` is mapped to
+  the ClojureScript sources (`my/app.cljs:12:3`, `<cljs repl>:1:2` for the
+  forms evaluated) with the output's source maps.
 
 ## Interop
 
@@ -339,9 +341,8 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
   `goog.getUid` (used by `hash` for JavaScript objects) gives frozen objects
   stable ids from a `WeakMap` rather than failing.
 
-- REPL: no Node.js runtime transport yet (the runtime's tests use one),
-  errors' stacks aren't mapped to the ClojureScript sources, npm modules
-  can't be required at the REPL.
+- REPL: no Node.js runtime transport yet (the runtime's tests use one), npm
+  modules can't be required at the REPL.
 - FlowStorm: ClojureStorm instruments through its own build of the compiler,
   which doesn't have `cljs.esm`.
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`,

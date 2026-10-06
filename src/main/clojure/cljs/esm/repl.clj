@@ -107,6 +107,7 @@
                                        :user-agent   (:userAgent msg)
                                        :visible      (boolean (:visible msg))
                                        :tag          (when-not taken? tag)
+                                       :root         (:root msg)
                                        :connected-at (or (:connected-at r) now)})
                        (:focused msg) (assoc :focused-at now))))
                  (when taken?
@@ -496,32 +497,111 @@
 
 (declare load-file*)
 
-(defn- inline-source-map
-  "The source map comment of a compiled form, to its source (the text it was
-  read from) named file. The runtime compiles the form's code with new
-  Function, which puts two lines before it."
-  [{:keys [source-map]} file source js-file]
+(defonce ^:private snippet-maps
+  ;; the source maps of the forms evaluated last and the name of their
+  ;; source in stack traces, {js-file [json name]}, see map-stack
+  (atom {}))
+
+(defn- snippet-source-map
+  "The source map of a compiled form, to its source (the text it was read
+  from) named file. The runtime compiles the form's code with new Function,
+  which puts two lines before it. Kept for map-stack."
+  [{:keys [source-map]} file source js-file shown-file]
   (when (and source (seq (:source-map source-map)))
+    (let [json (sm/encode {file (:source-map source-map)}
+                 {:lines               (+ (:gen-line source-map) 3)
+                  :file                js-file
+                  :preamble-line-count 2
+                  :sources-content     [source]})]
+      (swap! snippet-maps #(-> (if (< 200 (count %)) {} %) (assoc js-file [json shown-file])))
+      json)))
+
+(defn- inline-source-map [json]
+  (when json
     (str "\n//# sourceMappingURL=data:application/json;base64,"
-      (.encodeToString (Base64/getEncoder)
-        (.getBytes ^String (sm/encode {file (:source-map source-map)}
-                             {:lines               (+ (:gen-line source-map) 3)
-                              :file                js-file
-                              :preamble-line-count 2
-                              :sources-content     [source]})
-          "UTF-8")))))
+      (.encodeToString (Base64/getEncoder) (.getBytes ^String json "UTF-8")))))
+
+(def ^:private decoded-maps
+  ;; output source maps decoded, {path [last-modified decoded]}
+  (atom {}))
+
+(defn- decode-map [json]
+  (sm/decode (json/read-str json :key-fn keyword)))
+
+(defn- module-source-map
+  "The decoded source map of the output file at path (relative to the output
+  directory) and the directory its sources are relative to, nil if it has
+  none."
+  [path]
+  (let [f (io/file (util/output-directory (:options (the-build))) (str path ".map"))]
+    (when (.exists f)
+      (let [mtime (.lastModified f)
+            [cached decoded] (get @decoded-maps path)]
+        [(if (= cached mtime)
+           decoded
+           (let [decoded (decode-map (slurp f))]
+             (swap! decoded-maps assoc path [mtime decoded])
+             decoded))
+         (some-> (.getParent (io/file path)) (str "/"))]))))
+
+(defn- original-position
+  "The original position of 1-based line and column in decoded source map
+  m, [source line column], 1-based."
+  [m line column]
+  (when-let [cols (get m (dec line))]
+    (when-let [[_ [{:keys [source line col]}]] (or (first (rsubseq cols <= (dec column)))
+                                                   (first cols))]
+      [source (inc line) (inc col)])))
+
+(defn- map-location
+  "The ClojureScript location of url:line:column of a stack trace in runtime
+  runtime-id, nil if it has no source map."
+  [runtime-id url line column]
+  (let [root (get-in @runtimes- [runtime-id :root])]
+    (when-let [[m dir shown] (cond
+                               (string/starts-with? url "cljs-repl/")
+                               (when-let [[json shown] (get @snippet-maps url)]
+                                 [(decode-map json) nil shown])
+
+                               (and root (string/starts-with? url root))
+                               (module-source-map (first (string/split (subs url (count root)) #"[?#]"))))]
+      (when-let [[source line column] (original-position m line column)]
+        (str (cond
+               shown                                         shown
+               (and dir (not (string/starts-with? source "/"))) (str dir source)
+               :else                                         source)
+          ":" line ":" column)))))
+
+(defn- map-stack
+  "Stack trace stack of runtime runtime-id with its locations mapped to the
+  ClojureScript sources, without the frames of the REPL's evaluation after
+  the form's."
+  [runtime-id stack]
+  (when stack
+    (let [lines (string/split-lines stack)
+          lines (take-while #(not (re-find #"/cljs/esm/repl_runtime\.js" %)) lines)]
+      (->> lines
+           (map #(string/replace % #"((?:https?://|file://|cljs-repl/)[^\s()]+):(\d+):(\d+)"
+                   (fn [[match url line column]]
+                     (or (try
+                           (map-location runtime-id url (Long/parseLong line) (Long/parseLong column))
+                           (catch Exception _ nil))
+                         match))))
+           (string/join "\n")))))
 
 (defn- eval-js
   "Evaluates a compiled form in the runtime."
   [{:keys [js refs] :as compiled} ns runtime {:keys [timeout print-length print-level repl source file] :as opts}]
   (let [n       (swap! snippets inc)
         js-file (str "cljs-repl/" ns "-" n ".js")
+        shown   (or file "<cljs repl>")
         file    (if (or (nil? file) (= "<cljs repl>" file))
                   (str "cljs-repl/" ns "-" n ".cljs")
                   file)]
     (request! (:runtime-id runtime)
       {:op          "eval"
-       :code        (str js "\n//# sourceURL=" js-file (inline-source-map compiled file source js-file))
+       :code        (str js "\n//# sourceURL=" js-file
+                      (inline-source-map (snippet-source-map compiled file source js-file shown)))
        :refs        refs
        :repl        (boolean repl)
        :await       (boolean (:await opts))
@@ -565,7 +645,9 @@
             (when changed?
               ((:run-hooks! (the-build)) [ns]))
             (merge {:ns ns :warnings warnings :runtime-id (:runtime-id runtime)}
-              (select-keys reply [:value :out :err :error :stack])
+              (select-keys reply [:value :out :err :error])
+              (when-let [stack (:stack reply)]
+                {:stack (map-stack (:runtime-id runtime) stack)})
               (when-let [d (:exData reply)] {:ex-data d}))))))))
 
 (defn- forms

@@ -93,7 +93,7 @@
    globalThis.cljs_eval = (code, opts) => runtime.console_eval(send, code, opts ?? null);
    readline.createInterface({ input: process.stdin })
      .on('line', line => runtime.handle_BANG_(JSON.parse(line), send));
-   send({ op: 'hello', url: 'node', visible: true });")
+   send({ op: 'hello', url: 'node', visible: true, root: new URL('./out/', import.meta.url).href });")
 
 (defn- start-node!
   "Runs the runtime in Node.js, connected to the REPL."
@@ -148,7 +148,7 @@
 
 (deftest evaluates-forms-in-the-runtime
   (is (= [{:runtime-id 1 :url "node" :title nil :tag nil :visible true :user-agent nil}]
-         (repl/runtimes)))
+         (map #(dissoc % :focused-at) (repl/runtimes))))
   (is (= ["3"] (:results (repl/cljs-eval "(+ 1 2)"))))
   (testing "output"
     (is (= "hi\n" (:out (repl/cljs-eval "(println \"hi\")")))))
@@ -177,6 +177,14 @@
     (repl/handle-message! (json/write-str {:op "bye" :runtime 2})))
   (repl/tag! 1 nil)
   (is (nil? (:tag (first (repl/runtimes))))))
+
+(deftest maps-stack-traces-to-the-sources
+  (let [{:keys [error stack]} (repl/cljs-eval "(+ 1 2)\n(esm-repl.app/fail)")]
+    (is (= "failed" error))
+    (is (string/includes? stack "(esm_repl/app.cljs:16:10)") stack)
+    (is (string/includes? stack "(<cljs repl>:2:2)") stack)
+    (testing "without the frames of the REPL's evaluation"
+      (is (not (string/includes? stack "repl_runtime"))))))
 
 (deftest evaluates-the-consoles-forms
   (let [console #(:results (repl/cljs-eval (str "(js/cljs_eval " (pr-str %) %2 ")") {:await true}))]

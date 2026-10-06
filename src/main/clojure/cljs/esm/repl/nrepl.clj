@@ -119,7 +119,9 @@
   (let [written (doall
                   (for [path files
                         :let [f (io/file path)
-                              other (when (.exists f) (parse-long (string/trim (slurp f))))]
+                              other (when (.exists f)
+                                      (try (Long/parseLong (string/trim (slurp f)))
+                                        (catch NumberFormatException _ nil)))]
                         :when (not (and other (not= other port) (live-port? other)))]
                     (do (spit f (str port))
                         f)))]
