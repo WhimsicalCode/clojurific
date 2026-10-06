@@ -21,7 +21,8 @@
 
   Messages are JSON-compatible objects, handle! takes the REPL's and replies
   with send!; connect-vite! carries them over Vite's hot module reloading
-  websocket.")
+  websocket, and defines cljs_eval for the browser's console (see
+  console-eval).")
 
 (def ^:private registry
   (or (.-$CLJS_ESM js/globalThis)
@@ -150,9 +151,16 @@
                                 (when (and print-err-fn (not= "\n" s)) (print-err-fn s)))]
       (f))))
 
+(def ^:private console-evals
+  "The console's evaluations waiting for the REPL, {id {:resolve :reject
+  :opts}}, and the value of their last form evaluated, :value."
+  (atom {}))
+
+(def ^:private console-ids (atom 0))
+
 (defn- eval-js
   "Evaluates a compiled REPL form, replies with its printed value, or its
-  error."
+  error. Keeps the value of a console evaluation (see console-eval)."
   [{:strs [code refs repl] :as msg} reply!]
   (-> (js/Promise.all (into-array (map load-ref refs)))
       (.then
@@ -171,6 +179,9 @@
                           (set! *3 *2)
                           (set! *2 *1)
                           (set! *1 v))
+                        (when-let [k (get msg "keep")]
+                          (when (contains? @console-evals k)
+                            (swap! console-evals assoc-in [k :value] v)))
                         (done! #js {:value (print-value v msg)}))]
             (try
               (let [f (js/Reflect.construct js/Function (into-array (concat (map first refs) [code])))
@@ -231,6 +242,49 @@
 (defn- tag []
   (some-> (session-storage) (.getItem tag-key)))
 
+(defn- format-warning [{:strs [message file line column]}]
+  (str "WARNING: " message (when file (str " at " file ":" line ":" column))))
+
+(defn- console-result
+  "Settles the console evaluation id with the REPL's result (see
+  cljs.esm.repl/cljs-eval)."
+  [id {:strs [results warnings error stack] :as result}]
+  (when-let [{:keys [resolve reject value opts]} (get @console-evals id)]
+    (swap! console-evals dissoc id)
+    (doseq [w warnings]
+      (js/console.warn (format-warning w)))
+    (if error
+      (reject (doto (js/Error. error)
+                (aset "stack" (or stack error))
+                (aset "result" (clj->js result))))
+      (resolve (if (:print opts) (last results) value)))))
+
+(defn console-eval
+  "Evaluates the ClojureScript of string code, compiled by the REPL, in this
+  runtime: returns a promise of the value of its last form, rejected with
+  an Error if a form failed or has compiler warnings (which aren't
+  evaluated). Forms are evaluated in the namespace of the console's last
+  in-ns, default cljs.user.
+
+  opts:
+  - :ns - evaluate in this namespace
+  - :await - the value of a promise
+  - :print - the printed value instead
+  - :timeout - give up waiting after these ms, default 60000"
+  [send! code opts]
+  (let [{:keys [ns timeout] :as opts} (cond-> opts (object? opts) (js->clj :keywordize-keys true))]
+    (js/Promise.
+      (fn [resolve reject]
+        (let [id (swap! console-ids inc)]
+          (swap! console-evals assoc id {:resolve resolve :reject reject :opts opts})
+          (send! #js {:op "console-eval" :rid id :code code :ns ns :await (boolean (:await opts))})
+          (js/setTimeout
+            (fn []
+              (when (contains? @console-evals id)
+                (swap! console-evals dissoc id)
+                (reject (js/Error. "No reply from the REPL, is the dev server running?"))))
+            (or timeout 60000)))))))
+
 (defn handle!
   "Handles message msg of the REPL, replies with send!."
   [msg send!]
@@ -253,6 +307,7 @@
                         (.setItem storage tag-key tag)
                         (.removeItem storage tag-key)))
                     (reply! #js {:value (pr-str tag)}))
+      "console-result" (console-result (get msg "rid") (get msg "result"))
       "welcome"   nil
       nil)))
 
@@ -272,7 +327,9 @@
   "Connects to the REPL through Vite's hot module reloading websocket, hot
   is import.meta.hot. Says hello again when the websocket reconnects,
   reports focus and visibility changes, which pick the runtime evaluating
-  forms by default."
+  forms by default. Defines cljs_eval(code, opts), console-eval for the
+  browser's console: cljs_eval(\"(+ 1 2)\"), cljs_eval(\"(foo)\", {ns:
+  \"my.app\", await: true})."
   [^js hot]
   (let [send! (fn [m] (.send hot "cljs:repl" m))
         state (fn [focused]
@@ -281,6 +338,9 @@
                      :focused focused
                      :title   (.-title (document))})]
     (set! (.-connected registry) true)
+    (set! (.-cljs_eval js/globalThis)
+      (fn [code opts]
+        (console-eval send! code opts)))
     (.on hot "cljs:repl" #(handle! % send!))
     (.on hot "vite:ws:connect" #(send! (hello)))
     ;; hot reloads re-register modules, after-load hooks have run

@@ -137,6 +137,11 @@ optional nREPL server (`:repl`), which runs in the watcher's JVM:
   result has `:error` and `:warnings`, `:results` ends with
   `:cljs.esm.repl/failed`, and the forms after it aren't evaluated. The
   nREPL middleware replies with an `eval-error`.
+- In the browser's console `cljs_eval("(+ 1 2)")`, `cljs_eval("(foo)", {ns:
+  "my.app", await: true, print: true})` evaluates in its page, compiled by the
+  REPL: a promise of the last form's value (printed with `print`), rejected
+  for an error or warnings. The console keeps the namespace of its last
+  `in-ns`.
 - `*1`, `*2`, `*3` and `*e` in the interactive REPL, `doc`, `source`, `dir`
   and `apropos` are answered from the compiler environment. Output printed
   during a form is its `:out` / `:err`, and still goes to the console.

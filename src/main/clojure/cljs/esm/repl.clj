@@ -86,7 +86,7 @@
           :when (= runtime runtime-id)]
     (deliver promise {:error message})))
 
-(declare untag-others!)
+(declare untag-others! console-eval!)
 
 (defn handle-message!
   "Handles a message of a runtime, a JSON string."
@@ -121,6 +121,7 @@
       "bye"    (do (swap! runtimes- dissoc runtime)
                    (fail-pending! runtime (str "Runtime " runtime " disconnected")))
       "result" (some-> (get @pending (:id msg)) :promise (deliver msg))
+      "console-eval" (future (console-eval! runtime msg))
       nil)))
 
 (defn runtimes
@@ -524,6 +525,7 @@
        :refs        refs
        :repl        (boolean repl)
        :await       (boolean (:await opts))
+       :keep        (:keep opts)
        :printLength (if (contains? opts :print-length) print-length *print-length*)
        :printLevel  (if (contains? opts :print-level) print-level *print-level*)}
       (or timeout 30000))))
@@ -582,11 +584,14 @@
     (binding [ana/*cljs-ns* ns]
       (env/with-compiler-env compiler-env
         (loop [forms (forms source file)]
-          (let [[form & more] (try
-                                (seq forms)
-                                (catch Exception e
-                                  (on-result {:ns ana/*cljs-ns* :error (str "Could not read: " (.getMessage e))})
-                                  nil))]
+          ;; not [form & more], next would read the form after it now
+          (let [forms (try
+                        (seq forms)
+                        (catch Exception e
+                          (on-result {:ns ana/*cljs-ns* :error (str "Could not read: " (.getMessage e))})
+                          nil))
+                form  (first forms)
+                more  (rest forms)]
             (if (and form (not= :cljs/quit form))
               (let [result (try
                              (eval-form form ana/*cljs-ns* file opts)
@@ -702,6 +707,25 @@
         :ns         ns'
         :runtime-id (some :runtime-id rs)}
        (select-keys failed [:error :stack :ex-data])))))
+
+(defn- console-eval!
+  "Evaluates the forms of a page's cljs_eval (see
+  cljs.esm.repl-runtime/console-eval) in its runtime, in the namespace of
+  its last in-ns unless given one, replies with the result."
+  [runtime-id {:keys [rid code ns] :as msg}]
+  (let [ns     (or (some-> ns symbol) (get-in @runtimes- [runtime-id :console-ns]) 'cljs.user)
+        result (try
+                 (cljs-eval code {:ns ns :runtime-id runtime-id :await (:await msg) :keep rid})
+                 (catch Exception e
+                   {:error (.getMessage e)}))]
+    (when-let [ns' (:ns result)]
+      (swap! runtimes- #(cond-> % (contains? % runtime-id) (assoc-in [runtime-id :console-ns] ns'))))
+    ((or (:send! @build) default-send!) runtime-id
+     {:op     "console-result"
+      :rid    rid
+      :result (-> (select-keys result [:results :out :err :warnings :error :stack])
+                  (update :results #(mapv (fn [r] (when-not (= ::failed r) r)) %))
+                  (assoc :ns (some-> (:ns result) str)))})))
 
 (defn eval-string
   "Evaluates the forms of code from namespace ns for an interactive REPL,

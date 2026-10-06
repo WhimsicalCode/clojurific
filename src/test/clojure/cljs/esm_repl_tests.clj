@@ -90,6 +90,7 @@
    // stdout is the REPL's
    console.log = console.error;
    const send = msg => process.stdout.write(JSON.stringify({ ...msg, runtime: 1 }) + '\\n');
+   globalThis.cljs_eval = (code, opts) => runtime.console_eval(send, code, opts ?? null);
    readline.createInterface({ input: process.stdin })
      .on('line', line => runtime.handle_BANG_(JSON.parse(line), send));
    send({ op: 'hello', url: 'node', visible: true });")
@@ -176,6 +177,19 @@
     (repl/handle-message! (json/write-str {:op "bye" :runtime 2})))
   (repl/tag! 1 nil)
   (is (nil? (:tag (first (repl/runtimes))))))
+
+(deftest evaluates-the-consoles-forms
+  (let [console #(:results (repl/cljs-eval (str "(js/cljs_eval " (pr-str %) %2 ")") {:await true}))]
+    (testing "values of the last form"
+      (is (= ["3"] (console "(inc 1) (+ 1 2)" ""))))
+    (testing "printed"
+      (is (= ["\"[1 2]\""] (console "[1 2]" " #js {:print true}"))))
+    (testing "the namespace of the last in-ns"
+      (is (= [":esm-repl.app/x"] (console "(in-ns 'esm-repl.app) ::x" "")))
+      (is (= [":esm-repl.app/y"] (console "::y" ""))))
+    (testing "rejected for warnings"
+      (is (= ["\"Form not evaluated: 1 warning(s)\""]
+             (:results (repl/cljs-eval "(.catch (js/cljs_eval \"(nope)\") #(.-message %))" {:await true})))))))
 
 (deftest requires-namespaces-at-the-repl
   (testing "a namespace not in the build is compiled and loaded"
