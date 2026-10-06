@@ -32,6 +32,7 @@
             [cljs.source-map :as sm]
             [cljs.util :as util]
             [cljs.vendor.clojure.data.json :as json]
+            [cljs.vendor.clojure.tools.reader :as reader]
             [clojure.java.io :as io]
             [clojure.string :as string])
   (:import [java.io File StringReader]
@@ -121,7 +122,10 @@
                      rs)))
       "bye"    (do (swap! runtimes- dissoc runtime)
                    (fail-pending! runtime (str "Runtime " runtime " disconnected")))
-      "result" (some-> (get @pending (:id msg)) :promise (deliver msg))
+      ;; a runtime only answers its own requests
+      "result" (when-let [{:keys [promise] :as req} (get @pending (:id msg))]
+                 (when (= runtime (:runtime req))
+                   (deliver promise msg)))
       "console-eval" (future (console-eval! runtime msg))
       nil)))
 
@@ -668,7 +672,9 @@
   [source ns file opts on-result]
   (let [{:keys [compiler-env]} (the-build)
         opts (cond-> opts (string? source) (assoc :source source))]
-    (binding [ana/*cljs-ns* ns]
+    ;; #= would evaluate Clojure while reading
+    (binding [ana/*cljs-ns*      ns
+              reader/*read-eval* false]
       (env/with-compiler-env compiler-env
         (loop [forms (forms source file)]
           ;; not [form & more], next would read the form after it now

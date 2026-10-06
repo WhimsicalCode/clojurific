@@ -228,5 +228,7 @@
       (is (= ["1" ::repl/failed] results))
       (is (= "boom" error))
       (is (= "{:a 1}" ex-data))))
+  (testing "#= isn't evaluated while reading"
+    (is (string/starts-with? (:error (repl/cljs-eval "#=(+ 1 2)")) "Could not read")))
   (testing "no such runtime"
     (is (= "No runtime 5, see (cljs.esm.repl/runtimes)" (:error (repl/cljs-eval "1" {:runtime-id 5}))))))

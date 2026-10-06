@@ -18,6 +18,18 @@ import { pruneChunks, propertyRenames } from './prune.js';
 const EVENT_PREFIX = '[cljs.esm] ';
 const NPM_AS = 'cljs-npm-as:';
 
+// Whether address is this machine's
+function isLoopback(address) {
+  return /^(127\.|::1$|::ffff:127\.)/.test(address ?? '');
+}
+
+// Whether a websocket connection comes from this machine: its peer, and the
+// client a proxy on this machine (nginx) names in X-Real-IP
+function isLocalConnection(req) {
+  const realIp = req.headers['x-real-ip'];
+  return isLoopback(req.socket.remoteAddress) && (realIp === undefined || isLoopback(realIp));
+}
+
 // A module without ES module syntax is CommonJS, i.e. its module.exports is
 // what shadow-cljs binds with :as.
 function isCommonJS(code) {
@@ -143,6 +155,10 @@ export default module.exports;
  *   true
  * @param {string[]} [options.entries] the :js-entries this build bundles,
  *   defaults to all; each is self-contained when it's the only one
+ * @param {boolean} [options.replRemoteConsole] accept cljs_eval (forms the
+ *   compiler compiles, running its macros) from pages on other hosts too,
+ *   defaults to false: only from this machine. A proxy in front of the dev
+ *   server must set X-Real-IP to the client's address.
  */
 export default function cljs(options) {
   const manifestName = options.manifest ?? 'manifest.json';
@@ -464,33 +480,51 @@ export default function cljs(options) {
       };
       server.ws.on('connection', socket => problem && socket.send(JSON.stringify(problem)));
       // The REPL (cljs.esm.repl): pages running the build (cljs.esm.repl-runtime)
-      // say hello over Vite's websocket, each gets a runtime id. Their messages
-      // go to the compiler as `repl <json>` lines, the compiler's repl-send
-      // events to the page of their runtime id.
+      // say hello over Vite's websocket, each connection gets a runtime id. Their
+      // cljs:repl messages go to the compiler as `repl <json>` lines, the
+      // compiler's repl-send events to the page of their runtime id.
       const runtimes = new Map();
-      const runtimeIds = new WeakMap();
       let lastRuntimeId = 0;
       const toRepl = msg => proc.stdin.writable && proc.stdin.write(`repl ${JSON.stringify(msg)}\n`);
-      server.ws.on('cljs:repl', (data, client) => {
-        let id = runtimeIds.get(client);
-        if (data?.op === 'hello' && id === undefined) {
-          id = ++lastRuntimeId;
-          runtimeIds.set(client, id);
-          runtimes.set(id, client);
-        }
-        if (id === undefined) return;
-        if (data.op === 'hello') client.send('cljs:repl', { op: 'welcome', runtime: id });
-        toRepl({ ...data, runtime: id });
-      });
-      server.ws.on('vite:client:disconnect', (data, client) => {
-        const id = runtimeIds.get(client);
-        if (id === undefined || !runtimes.delete(id)) return;
-        toRepl({ op: 'bye', runtime: id });
+      const send = (socket, data) => socket.send(JSON.stringify({ type: 'custom', event: 'cljs:repl', data }));
+      server.ws.on('connection', (socket, req) => {
+        // cljs_eval compiles forms in the compiler's JVM, which runs their macros:
+        // only for pages on this machine, unless replRemoteConsole
+        const consoleAllowed = options.replRemoteConsole || isLocalConnection(req);
+        let id;
+        socket.on('message', raw => {
+          let msg;
+          try {
+            msg = JSON.parse(String(raw));
+          } catch {
+            return;
+          }
+          if (msg?.type !== 'custom' || msg.event !== 'cljs:repl' || !msg.data) return;
+          const data = msg.data;
+          if (data.op === 'hello' && id === undefined) {
+            id = ++lastRuntimeId;
+            runtimes.set(id, socket);
+          }
+          if (id === undefined) return;
+          if (data.op === 'hello') send(socket, { op: 'welcome', runtime: id });
+          if (data.op === 'console-eval' && !consoleAllowed) {
+            send(socket, {
+              op: 'console-result',
+              rid: data.rid,
+              result: { error: 'cljs_eval only runs in pages on the dev server\'s machine, see the cljs plugin\'s replRemoteConsole' },
+            });
+            return;
+          }
+          toRepl({ ...data, runtime: id });
+        });
+        socket.on('close', () => {
+          if (id !== undefined && runtimes.delete(id)) toRepl({ op: 'bye', runtime: id });
+        });
       });
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
         if (event.type === 'repl-send') {
-          const client = runtimes.get(event.runtime);
-          if (client) client.send('cljs:repl', event.msg);
+          const socket = runtimes.get(event.runtime);
+          if (socket) send(socket, event.msg);
           else toRepl({ op: 'bye', runtime: event.runtime });
           return;
         }

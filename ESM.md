@@ -141,7 +141,10 @@ optional nREPL server (`:repl`), which runs in the watcher's JVM:
   "my.app", await: true, print: true})` evaluates in its page, compiled by the
   REPL: a promise of the last form's value (printed with `print`), rejected
   for an error or warnings. The console keeps the namespace of its last
-  `in-ns`.
+  `in-ns`. Compiling forms runs their macros in the compiler's JVM, so the
+  Vite plugin accepts `cljs_eval` only from pages on the dev server's machine,
+  unless its `replRemoteConsole` option is set. A proxy in front of the dev
+  server has to set `X-Real-IP` to the client's address.
 - `*1`, `*2`, `*3` and `*e` in the interactive REPL, `doc`, `source`, `dir`
   and `apropos` are answered from the compiler environment. Output printed
   during a form is its `:out` / `:err`, and still goes to the console.
