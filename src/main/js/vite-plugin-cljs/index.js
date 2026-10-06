@@ -463,7 +463,37 @@ export default function cljs(options) {
         server.ws.send(problem);
       };
       server.ws.on('connection', socket => problem && socket.send(JSON.stringify(problem)));
+      // The REPL (cljs.esm.repl): pages running the build (cljs.esm.repl-runtime)
+      // say hello over Vite's websocket, each gets a runtime id. Their messages
+      // go to the compiler as `repl <json>` lines, the compiler's repl-send
+      // events to the page of their runtime id.
+      const runtimes = new Map();
+      const runtimeIds = new WeakMap();
+      let lastRuntimeId = 0;
+      const toRepl = msg => proc.stdin.writable && proc.stdin.write(`repl ${JSON.stringify(msg)}\n`);
+      server.ws.on('cljs:repl', (data, client) => {
+        let id = runtimeIds.get(client);
+        if (data?.op === 'hello' && id === undefined) {
+          id = ++lastRuntimeId;
+          runtimeIds.set(client, id);
+          runtimes.set(id, client);
+        }
+        if (id === undefined) return;
+        if (data.op === 'hello') client.send('cljs:repl', { op: 'welcome', runtime: id });
+        toRepl({ ...data, runtime: id });
+      });
+      server.ws.on('vite:client:disconnect', (data, client) => {
+        const id = runtimeIds.get(client);
+        if (id === undefined || !runtimes.delete(id)) return;
+        toRepl({ op: 'bye', runtime: id });
+      });
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
+        if (event.type === 'repl-send') {
+          const client = runtimes.get(event.runtime);
+          if (client) client.send('cljs:repl', event.msg);
+          else toRepl({ op: 'bye', runtime: event.runtime });
+          return;
+        }
         if (event.type === 'watch-dirs') {
           // Vite's watcher (native file events) reports changes in the
           // compiler's source directories, polling them is expensive

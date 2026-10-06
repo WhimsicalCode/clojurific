@@ -80,6 +80,19 @@
   declaration can't be emitted."
   false)
 
+(def ^:dynamic *esm-repl*
+  "True while emitting a form evaluated at the REPL (cljs.esm.repl), the body
+  of a function the REPL runtime calls with the namespaces it references.
+  The namespace being compiled is one of them: its vars are module bindings
+  of a module already running, reached through the runtime's view of the
+  namespace, my$ns.var, and def assigns the view."
+  false)
+
+(def esm-repl-runtime
+  "The namespace evaluating REPL forms in a running build, imported first by
+  the main namespaces under :esm-repl."
+  'cljs.esm.repl-runtime)
+
 (defn esm-mode?
   "Whether compiling to ES modules, :module-format :esm."
   ([] (esm-mode? (when env/*compiler* (:options @env/*compiler*))))
@@ -156,7 +169,7 @@
 (defn- munge-esm-var
   ([ns nm] (munge-esm-var ns nm js-reserved))
   ([ns nm reserved]
-   (let [local? (= ns (str ana/*cljs-ns*))
+   (let [local? (and (not *esm-repl*) (= ns (str ana/*cljs-ns*)))
          idx    (.indexOf ^String nm ".")
          member (esm-var-name (if (neg? idx) nm (subs nm 0 idx)))
          ;; nm may be a property path, i.e. Foo.prototype.bar, reserved
@@ -282,7 +295,7 @@
         (when (pos? n)
           (let [ns (string/join "." (take n segs))]
             (if (esm-module-ns? ns)
-              (do (if (= ns (str ana/*cljs-ns*))
+              (do (if (and (= ns (str ana/*cljs-ns*)) (not *esm-repl*))
                     ;; the module's own namespace object
                     (reset! (:self-import *esm*) true)
                     (swap! (:refs *esm*) conj ns))
@@ -305,7 +318,7 @@
 (defn- emit-esm-type-binding
   "Emits the binding a deftype / defrecord constructor is assigned to."
   [t]
-  (if *esm-emitting*
+  (if (and *esm-emitting* (not *esm-repl*))
     (let [local (esm-def! t)]
       (if *esm-in-fn*
         (do (swap! (:hoist *esm*) conj local)
@@ -579,7 +592,9 @@
   []
   (and *esm-emitting*
        (-> @env/*compiler* :options :emit-constants)
-       (not= 'cljs.core ana/*cljs-ns*)))
+       (not= 'cljs.core ana/*cljs-ns*)
+       ;; the constants module has the constants of the compiled namespaces
+       (not *esm-repl*)))
 
 (defn- emit-constant-ref
   "Emits the reference to constant x of the constants table, true if it has
@@ -1098,13 +1113,14 @@
   [{:keys [name var init env doc goog-define jsdoc export test var-ast]}]
   ;; Under ESM a var without init, i.e. (declare ^:dynamic *x*), still needs
   ;; a binding other namespaces can import and set! with binding
-  (when (and *esm-emitting* (nil? init) (not (:def-emits-var env)))
+  (when (and *esm-emitting* (not *esm-repl*) (nil? init) (not (:def-emits-var env)))
     (swap! (:hoist *esm*) conj (esm-def! name)))
   ;; We only want to emit if an init is supplied, this is to avoid dead code
   ;; elimination issues. The REPL is the exception to this rule.
   (when (or init (:def-emits-var env))
     (let [mname (binding [*esm-emitting* false] (munge name))
-          esm-local (when *esm-emitting* (esm-def! name))
+          ;; at the REPL var is the namespace view's property, see *esm-repl*
+          esm-local (when (and *esm-emitting* (not *esm-repl*)) (esm-def! name))
           esm-var-decl? (and esm-local
                              (not *esm-in-fn*)
                              (= :statement (:context env))
@@ -1593,7 +1609,7 @@
     (let [sym (:name info)
           ns  (namespace sym)]
       (when (and ns
-                 (not= ns (str ana/*cljs-ns*))
+                 (or *esm-repl* (not= ns (str ana/*cljs-ns*)))
                  (not (string/includes? (name sym) "."))
                  (or (not (or (= "goog" ns) (string/starts-with? ns "goog.")))
                      #?(:clj (contains? (esm-goog-shim-exports ns ana/*cljs-ns*) (esm-var-name (name sym)))
@@ -1847,6 +1863,9 @@
          (let [[lib sublib] (ana/lib&sublib dep)
                alias (str (munge (symbol (str ns-name) (ana/munge-node-lib dep))))
                spec  (esm-import-specifier lib)]
+           ;; REPL forms reach the binding through the namespace's
+           ;; registration, see emit-esm-repl-footer
+           (some-> (:libs *esm*) (swap! assoc (esm-var-name (ana/munge-node-lib dep)) alias))
            (cond
              ;; like shadow-cljs, :as binds CommonJS modules' module.exports and
              ;; ES modules' namespace, decided by the bundler plugin
@@ -1891,11 +1910,11 @@
      "Main namespaces import the :preloads first, ES modules evaluate their
      imports in order."
      [ns-name]
-     (let [{:keys [main preloads]} (:options @env/*compiler*)
+     (let [{:keys [main preloads esm-repl]} (:options @env/*compiler*)
            mains (set (map symbol (cond (coll? main) main main [main])))]
        (when (and (contains? mains ns-name)
                   (not (some #{ns-name} (map symbol preloads))))
-         (doseq [preload preloads]
+         (doseq [preload (cond->> preloads esm-repl (cons esm-repl-runtime))]
            (emitln "import \"" (esm-ns-path ns-name preload) "\";"))))))
 
 #?(:clj (declare emit-esm-ns-import))
@@ -1966,6 +1985,22 @@
        (emitln "}"))))
 
 #?(:clj
+   (defn- emit-esm-repl-footer
+     "Under :esm-repl modules register their namespace object, the setters
+     of all their instances (see emit-esm-hmr-footer) and the npm modules
+     they import, for the forms evaluated at the REPL, see
+     cljs.esm.repl-runtime. gen counts the instances, it changes once a
+     hot reload ran the module again."
+     [ns-name libs]
+     (let [ns (pr-str (str ns-name))]
+       (emitln "{ const $$r = globalThis.$CLJS_ESM || (globalThis.$CLJS_ESM = { nses: new Map() }), $$e = $$r.nses.get(" ns ");")
+       (emitln "$$r.nses.set(" ns ", { mod: " (esm-ns-alias ns-name) ", "
+         "sets: import.meta.hot ? import.meta.hot.data.$$sets : [$$set], "
+         "libs: {" (string/join ", " (map (fn [[k v]] (str "\"" k "\": " v)) (sort libs))) "}, "
+         "gen: $$e ? $$e.gen + 1 : 1 });")
+       (emitln "if ($$r.registered) $$r.registered(" ns "); }"))))
+
+#?(:clj
    (defn- dts-param
      "A TypeScript parameter name for a ClojureScript param, destructuring
      forms and gensyms become argN."
@@ -2015,8 +2050,11 @@
      names, the declarations of vars only defined in functions, setters and
      exports."
      [ns-name]
-     (let [{:keys [refs imported hoist exports dynamic self-import goog-lib-refs]} *esm*
-           exports (sort @exports)]
+     (let [{:keys [refs imported hoist exports dynamic self-import goog-lib-refs libs]} *esm*
+           exports (sort @exports)
+           repl?   (:esm-repl (:options @env/*compiler*))]
+       (when repl?
+         (reset! self-import true))
        (emitln)
        ;; Closure Library namespaces run by the compatibility layer, default
        ;; exports are the namespace objects
@@ -2045,13 +2083,47 @@
          (string/join ", " (map (fn [[export local]] (str local " as " export)) exports))
          " };")
        (when (:esm-hmr (:options @env/*compiler*))
-         (emit-esm-hmr-footer ns-name exports)))))
+         (emit-esm-hmr-footer ns-name exports))
+       (when repl?
+         (emit-esm-repl-footer ns-name (some-> libs deref))))))
+
+#?(:clj
+   (defn emit-esm-repl
+     "Emits ast, a form analyzed for the REPL in :return context, as the body
+     of a function, see *esm-repl*. Returns {:js :refs :goog-lib-refs}, refs
+     the namespaces it references as esm-ns-alias, goog-lib-refs the Closure
+     Library namespaces run by the compatibility layer as esm-ns-alias plus
+     $: the function's parameters."
+     [ast]
+     (let [state {:refs          (atom #{})
+                  :imported      (atom #{})
+                  :hoist         (atom #{})
+                  :exports       (atom {})
+                  :dynamic       (atom #{})
+                  :self-import   (atom false)
+                  :goog-lib-refs (atom #{})
+                  :libs          (atom {})
+                  :export-syms   (atom {})}
+           js    (binding [*esm*          state
+                           *esm-emitting* true
+                           *esm-repl*     true]
+                   (emit-str ast))]
+       {:js            js
+        :refs          @(:refs state)
+        :goog-lib-refs @(:goog-lib-refs state)})))
 
 (defmethod emit* :ns*
   [{:keys [name requires uses require-macros reloads env deps]}]
-  (if *esm-emitting*
+  (cond
+    ;; cljs.esm.repl loads the namespaces
+    *esm-repl*
+    (emit-wrap env (emits "null"))
+
+    *esm-emitting*
     #?(:clj (emit-esm-imports ana/*cljs-ns* deps)
        :cljs nil)
+
+    :else
     (do
       (load-libs requires nil (:require reloads) deps name)
       (load-libs uses requires (:use reloads) deps name)))
@@ -2060,9 +2132,15 @@
 
 (defmethod emit* :ns
   [{:keys [name requires uses require-macros reloads env deps]}]
-  (if *esm-emitting*
+  (cond
+    *esm-repl*
+    (emit-wrap env (emits "null"))
+
+    *esm-emitting*
     #?(:clj (emit-esm-imports name deps)
        :cljs nil)
+
+    :else
     (do
       (emitln "goog.provide('" (munge name) "');")
       (when-not (= name 'cljs.core)
@@ -2292,6 +2370,7 @@
                                           :dynamic  (atom #{})
                                           :self-import (atom false)
                                           :goog-lib-refs (atom #{})
+                                          :libs     (atom {})
                                           :export-syms (atom {})})]
          (emitln (compiled-by-string opts))
          (when (and *esm* (:esm-hmr opts))

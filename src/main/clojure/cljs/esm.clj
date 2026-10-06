@@ -22,7 +22,8 @@
             [clojure.string :as string])
   (:import [java.io File]
            [java.net URL]
-           [java.util.concurrent Executors Future LinkedBlockingQueue]))
+           [java.util.concurrent Executors Future LinkedBlockingQueue]
+           [java.util.concurrent.locks ReentrantLock]))
 
 (def default-opts
   {:module-format  :esm
@@ -96,8 +97,15 @@
   [{:keys [js-entries]}]
   (->> (vals js-entries) (mapcat (comp vals :exports)) (map (comp symbol namespace)) distinct))
 
-(defn- mains [{:keys [preloads] :as opts}]
-  (concat preloads (main-namespaces opts) (js-entry-namespaces opts)))
+(defn- mains
+  "The namespaces a build compiles with their dependencies: the :preloads,
+  the main namespaces, those :js-entries export from, and under :esm-repl
+  the REPL runtime and the namespaces required at the REPL (::repl-mains, an
+  atom)."
+  [{:keys [preloads esm-repl ::repl-mains] :as opts}]
+  (concat (when esm-repl [comp/esm-repl-runtime])
+          preloads (main-namespaces opts) (js-entry-namespaces opts)
+          (some-> repl-mains deref sort)))
 
 (defn find-sources
   "Returns the parsed ns info of namespaces and their transitive ClojureScript
@@ -382,15 +390,21 @@
 (defn- run-hooks!
   "Calls the :build-hooks, [fn-sym & args], with the build and args. The
   build is a map of :compiler-env (a value), :namespaces (in dependency
-  order), :mode and :options."
-  [compiler-env inputs opts]
-  (doseq [[f & args] (:build-hooks opts)]
-    (apply (requiring-resolve f)
-      {:compiler-env @compiler-env
-       :namespaces   (mapv :ns inputs)
-       :mode         (:mode opts)
-       :options      opts}
-      args)))
+  order), :mode, :options, :trigger and :changed-namespaces. trigger is
+  :build, :watch (a recompile) or :repl-eval (a form evaluated at the REPL
+  changed the analysis of the changed namespaces)."
+  ([compiler-env inputs opts]
+   (run-hooks! compiler-env inputs opts :build (map :ns inputs)))
+  ([compiler-env inputs opts trigger changed]
+   (doseq [[f & args] (:build-hooks opts)]
+     (apply (requiring-resolve f)
+       {:compiler-env       @compiler-env
+        :namespaces         (mapv :ns inputs)
+        :mode               (:mode opts)
+        :options            opts
+        :trigger            trigger
+        :changed-namespaces (vec changed)}
+       args))))
 
 (defn- cljs-warnings
   "The analyzer's warnings with the :warnings option applied, like
@@ -409,7 +423,7 @@
       (cond-> warnings-as-errors
         (as-> ws (reduce-kv (fn [m k v] (assoc m k (if (#{true :warning} v) :error v))) ws ws)))))
 
-(defn- compiler-bindings
+(defn compiler-bindings
   "The dynamic bindings compiling with opts, as cljs.closure binds them:
   :warnings, :elide-asserts and :load-tests."
   [opts]
@@ -527,12 +541,21 @@
                  (/ (- (System/nanoTime) start) 1e9))))
            (map :ns inputs)))))))
 
-(defn- event!
+(def ^:private stdout
+  "The process' standard output, events go there from any thread, i.e. the
+  REPL's, where *out* is a REPL session's."
+  (delay (.getRawRoot #'*out*)))
+
+(def ^:private stderr
+  (delay (.getRawRoot #'*err*)))
+
+(defn event!
   "Prints a build event as a JSON line, consumed by the Vite plugin."
   [type m]
-  (locking *out*
-    (println (str "[cljs.esm] " (json/write-str (assoc m :type type))))
-    (flush)))
+  (let [^java.io.Writer out @stdout]
+    (locking out
+      (.write out (str "[cljs.esm] " (json/write-str (assoc m :type type)) "\n"))
+      (.flush out))))
 
 (defn- collecting-warnings
   "The warning handlers, collecting the warnings printed into the atom
@@ -668,14 +691,23 @@
 
 (defn- start-stdin-reader!
   "Under :exit-with-parent, reads the parent's messages from stdin, puts
-  the paths of `changed <path>` lines on queue, exits on EOF: the parent
-  closes stdin when it exits, the watcher has to stop too."
+  the paths of `changed <path>` lines on queue, passes `repl <json>` lines
+  to the REPL (cljs.esm.repl), exits on EOF: the parent closes stdin when it
+  exits, the watcher has to stop too."
   [^LinkedBlockingQueue queue]
   (doto (Thread. (fn []
                    (with-open [rdr (io/reader System/in)]
                      (doseq [^String line (line-seq rdr)]
-                       (when (string/starts-with? line "changed ")
-                         (.put queue (subs line 8)))))
+                       (cond
+                         (string/starts-with? line "changed ")
+                         (.put queue (subs line 8))
+
+                         (string/starts-with? line "repl ")
+                         (try
+                           ((requiring-resolve 'cljs.esm.repl/handle-message!) (subs line 5))
+                           (catch Throwable e
+                             (binding [*out* *err*]
+                               (println "cljs.esm.repl:" (.getMessage e))))))))
                    (System/exit 0)))
     (.setDaemon true)
     (.start)))
@@ -706,40 +738,173 @@
       (.drainTo queue more)
       (map io/file (distinct (cons first-path more))))))
 
+(defn- locking*
+  "Calls f holding lock."
+  [^ReentrantLock lock f]
+  (.lock lock)
+  (try
+    (f)
+    (finally
+      (.unlock lock))))
+
+(defn- canonical-path [^File f]
+  (.getCanonicalPath f))
+
+(defn- watch-opts
+  "watch's options: :esm-hmr unless disabled, and with it :esm-repl unless
+  disabled, the namespaces required at the REPL are mains too."
+  [opts]
+  (let [opts (prepare-opts (merge {:esm-hmr true} opts))]
+    (cond-> opts
+      (and (:esm-hmr opts) (not (false? (:esm-repl opts))))
+      (assoc :esm-repl true ::repl-mains (atom #{})))))
+
 (defn watch
   "Builds like build, then recompiles namespaces as their sources change.
   With :watch-events :stdin, the parent process (the Vite plugin) watches
   the directories of the watch-dirs event and writes `changed <path>` lines
   to stdin, otherwise polls :watch-dirs (defaults to the classpath
   directories). Enables :esm-hmr, modules accept their own hot updates when
-  served by Vite. Until a build succeeds, each change builds again: a failed
-  build's output misses the namespaces it didn't get to."
+  served by Vite, and :esm-repl, the REPL evaluates forms in the pages
+  running the build (cljs.esm.repl), with an nREPL server under :repl. Until
+  a build succeeds, each change builds again: a failed build's output misses
+  the namespaces it didn't get to."
   [opts]
-  (let [opts         (prepare-opts (merge {:esm-hmr true} opts))
+  (let [opts         (watch-opts opts)
         compiler-env (env/default-compiler-env opts)
         dirs         (watch-dirs opts)
         queue        (LinkedBlockingQueue.)
         stdin?       (= :stdin (:watch-events opts))
+        ;; recompiles and the REPL's analysis both change the compiler env
+        lock         (ReentrantLock.)
         built?       (atom false)
+        ;; the build's inputs, for build hooks run by the REPL
+        inputs-      (atom [])
+        ;; the modification times of the source files compiled: a file the
+        ;; REPL compiled (load-file) isn't compiled again when the editor's
+        ;; save is reported
+        compiled-    (atom {})
+        ;; the warnings of the output files, {path [warning]}: like the Vite
+        ;; plugin, which holds back hot reloads while there are any
+        warnings-    (atom {})
+        outstanding! (fn [{:keys [files warnings]}]
+                       (swap! warnings-
+                         #(reduce (fn [m w] (update m (:output w) (fnil conj []) w))
+                            (apply dissoc % files) warnings)))
         build!       (fn []
                        (let [start    (System/nanoTime)
                              warnings (atom [])
                              nses     (binding [ana/*cljs-warning-handlers* (collecting-warnings warnings opts)]
-                                        (build opts compiler-env))]
+                                        (build opts compiler-env))
+                             inputs   (env/with-compiler-env compiler-env
+                                        (find-sources (mains opts) opts))]
                          ;; the watcher needs the analysis of the whole build
                          (env/with-compiler-env compiler-env
-                           (ensure-analyzed! compiler-env (find-sources (mains opts) opts) opts))
+                           (ensure-analyzed! compiler-env inputs opts))
+                         (reset! inputs- inputs)
                          (reset! built? true)
-                         (event! "compiled" {:namespaces (count nses)
-                                             :warnings @warnings
-                                             :ms (long (/ (- (System/nanoTime) start) 1e6))})))]
+                         (reset! warnings- {})
+                         (doto {:type       "compiled"
+                                :namespaces (count nses)
+                                :warnings   @warnings
+                                :ms         (long (/ (- (System/nanoTime) start) 1e6))}
+                           outstanding!
+                           (->> (event! "compiled")))))
+        recompile-changes!
+                     (fn [changed res-nses]
+                       (let [start  (System/nanoTime)
+                             warnings (atom [])
+                             ;; the test runner requires the test namespaces there are now
+                             runner (test-runner-source opts)
+                             before (some-> runner slurp-if-exists)
+                             gen    (if (:test-runner opts) (generate-test-runner opts) {})
+                             runner-changed (when (and runner (not= before (slurp-if-exists runner)))
+                                              [(-> opts :test-runner :ns)])
+                             inputs (binding [*generated-sources* gen]
+                                      (env/with-compiler-env compiler-env
+                                        (find-sources (mains opts) opts)))
+                             _      (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
+                             _      (reset! inputs- inputs)
+                             macros (keep #(when (re-find #"\.clj[c]?$" (.getName ^File %)) (file-ns %)) changed)
+                             _      (doseq [ns macros]
+                                      (when (find-ns ns)
+                                        (require ns :reload)))
+                             cljs   (keep #(when (re-find #"\.clj[sc]$" (.getName ^File %)) (file-ns %)) changed)
+                             ;; namespaces newly required by a changed namespace
+                             fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
+                             done   (env/with-compiler-env compiler-env
+                                      (with-bindings (assoc (compiler-bindings opts)
+                                                       #'ana/*cljs-warning-handlers* (collecting-warnings warnings opts)
+                                                       #'*generated-sources* gen)
+                                        (recompile! compiler-env inputs
+                                          (distinct (concat fresh cljs res-nses runner-changed
+                                                      (macro-dependents compiler-env macros)))
+                                          opts)))]
+                         (check-js-entries compiler-env opts)
+                         (write-constants! compiler-env opts)
+                         (install-goog-libs compiler-env opts)
+                         (env/with-compiler-env compiler-env
+                           (run-hooks! compiler-env inputs opts :watch done))
+                         (doto {:type       "compiled"
+                                :namespaces (count done)
+                                :compiled   (sort done)
+                                :files      (map #(.getPath (output-file % opts)) (sort done))
+                                :warnings   @warnings
+                                :ms         (long (/ (- (System/nanoTime) start) 1e6))}
+                           outstanding!
+                           (->> (event! "compiled")))))
+        compile!     (fn
+                       ;; Compiles changed files (sources and macros) and
+                       ;; namespaces nses (whose resources changed, or the
+                       ;; REPL's), returns the compiled event, or the error
+                       ;; event. Files compiled already are skipped, unless
+                       ;; :force, nothing to compile is a no-op.
+                       [{:keys [files nses force]}]
+                       (locking* lock
+                         (fn []
+                           ;; the watcher's output, also when the REPL compiles
+                           (binding [*out* @stdout
+                                     *err* @stderr]
+                             (let [files (remove #(= (.lastModified ^File %) (get @compiled- (canonical-path %)))
+                                           files)]
+                               (when (or force (seq files) (seq nses))
+                                 (swap! compiled- into
+                                   (map (fn [^File f] [(canonical-path f) (.lastModified f)]))
+                                   files)
+                                 (event! "compiling" {})
+                                 (try
+                                   (if-not @built?
+                                     (build!)
+                                     (recompile-changes! files nses))
+                                   (catch Throwable e
+                                     (doto (assoc (error-data e) :type "error")
+                                       (->> (event! "error")))))))))))]
     (when (:exit-with-parent opts)
       (start-stdin-reader! queue))
     (event! "watch-dirs" {:dirs dirs})
-    (try
-      (build!)
-      (catch Throwable e
-        (event! "error" (error-data e))))
+    (locking* lock
+      (fn []
+        (try
+          (build!)
+          (catch Throwable e
+            (event! "error" (error-data e))))))
+    (when (:esm-repl opts)
+      ((requiring-resolve 'cljs.esm.repl/start!)
+       {:compiler-env compiler-env
+        :options      opts
+        :lock         lock
+        :compile!     compile!
+        :inputs       inputs-
+        :warnings     warnings-
+        :watch-dirs   dirs
+        :run-hooks!   (fn [nses]
+                        (locking* lock
+                          (fn []
+                            (binding [*out* @stdout
+                                      *err* @stderr]
+                              (env/with-compiler-env compiler-env
+                                (run-hooks! compiler-env @inputs- opts :repl-eval nses))))))
+        :output-path  (fn [ns] (util/ns->relpath ns :js))}))
     (loop [files     (when-not stdin? (source-files dirs))
            resources (resource-mtimes (resource-refs compiler-env))]
       (let [[changed files'] (if stdin?
@@ -754,48 +919,7 @@
                                    (get refs path)))
                          resources')]
         (when (or (seq changed) (seq res-nses))
-          (event! "compiling" {})
-          (try
-            (if-not @built?
-              (build!)
-              (let [start  (System/nanoTime)
-                    warnings (atom [])
-                    ;; the test runner requires the test namespaces there are now
-                    runner (test-runner-source opts)
-                    before (some-> runner slurp-if-exists)
-                    gen    (if (:test-runner opts) (generate-test-runner opts) {})
-                    runner-changed (when (and runner (not= before (slurp-if-exists runner)))
-                                     [(-> opts :test-runner :ns)])
-                    inputs (binding [*generated-sources* gen]
-                             (env/with-compiler-env compiler-env
-                               (find-sources (mains opts) opts)))
-                    _      (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
-                    macros (keep #(when (re-find #"\.clj[c]?$" (.getName ^File %)) (file-ns %)) changed)
-                    _      (doseq [ns macros]
-                             (when (find-ns ns)
-                               (require ns :reload)))
-                    cljs   (keep #(when (re-find #"\.clj[sc]$" (.getName ^File %)) (file-ns %)) changed)
-                    ;; namespaces newly required by a changed namespace
-                    fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
-                    done   (env/with-compiler-env compiler-env
-                             (with-bindings (assoc (compiler-bindings opts)
-                                              #'ana/*cljs-warning-handlers* (collecting-warnings warnings opts)
-                                              #'*generated-sources* gen)
-                               (recompile! compiler-env inputs
-                                 (distinct (concat fresh cljs res-nses runner-changed
-                                             (macro-dependents compiler-env macros)))
-                                 opts)))]
-                (check-js-entries compiler-env opts)
-                (write-constants! compiler-env opts)
-                (install-goog-libs compiler-env opts)
-                (env/with-compiler-env compiler-env
-                  (run-hooks! compiler-env inputs opts))
-                (event! "compiled" {:namespaces (count done)
-                                    :files (map #(.getPath (output-file % opts)) (sort done))
-                                    :warnings @warnings
-                                    :ms (long (/ (- (System/nanoTime) start) 1e6))})))
-            (catch Throwable e
-              (event! "error" (error-data e)))))
+          (compile! {:files changed :nses res-nses}))
         (recur files' resources')))))
 
 (defn- deep-merge [& ms]

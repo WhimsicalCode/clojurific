@@ -40,12 +40,14 @@ the `:dev` profile, `build` to `:release`:
 | `:parallel-build` | compiles namespaces in parallel once their dependencies are compiled |
 | `:npm-interop :shadow` | `["pkg" :as x]` binds CommonJS packages' `module.exports`, like shadow-cljs, needs the Vite plugin |
 | `:closure-defines {goog.DEBUG false}` | `goog.DEBUG` and `goog-define`s are compile time constants |
-| `:build-hooks` | `[[fn-sym & args]]`, called with the build (`:compiler-env`, `:namespaces` in dependency order, `:mode`, `:options`) after a build and every watch recompile |
+| `:build-hooks` | `[[fn-sym & args]]`, called with the build (`:compiler-env`, `:namespaces` in dependency order, `:mode`, `:options`, `:trigger` and `:changed-namespaces`) after a build (`:trigger :build`), every watch recompile (`:watch`) and REPL forms changing a namespace's analysis (`:repl-eval`) |
 | `:warnings` | a map of warning types (`true`, `false`, `:warning`, `:error`, `:off`), or one of them for the undeclared var warnings, like `cljs.closure` |
 | `:warnings-as-errors true` | every enabled warning fails the compile, like shadow-cljs |
 | `:optimize-constants true` | keyword and symbol constants are exports of one module, `cljs/core/constants.js`, instead of allocated at each use (`cljs.core` keeps its own) |
 | `:checked-set-literals false` | set literals of runtime values collapse duplicates instead of throwing (before CLJS-3415) |
 | `:esm-hmr` | hot reloading code, enabled by `watch` |
+| `:esm-repl` | modules register themselves for the REPL, which main namespaces load first, enabled by `watch` with `:esm-hmr` |
+| `:repl` | `{:nrepl-port 0 :nrepl-host "127.0.0.1" :port-files [".nrepl-port"]}`, `watch` starts an nREPL server (`0` picks a port), writes its port to the port files no other live server's port is in, and deletes them on exit; needs nREPL on the classpath |
 | `:esm-dts false` | don't write `.d.ts` files |
 | `:esm-after-load` / `:esm-before-load` | fns run around hot reloads, like `^:dev/after-load` |
 | `:watch-dirs` | source directories, defaults to the classpath directories without the compiler's own |
@@ -98,6 +100,47 @@ recompiles.
 For server rendered pages the plugin writes `manifest.json` to Vite's `outDir`,
 each main namespace's module scripts and the chunks they import (to preload):
 the Vite dev server's modules when serving, the hashed chunks of a build.
+
+### REPL
+
+`watch` evaluates forms in the pages running the build: browser tabs, the
+Electron window (runtimes). Messages go through Vite's websocket and the
+plugin's pipe to the compiler, nothing else listens on a port but the
+optional nREPL server (`:repl`), which runs in the watcher's JVM:
+
+```clojure
+(require '[cljs.esm.repl :as repl])
+
+(repl/runtimes)            ;=> [{:runtime-id 3 :url "..." :title "..." :visible true ...}]
+(repl/cljs-eval "(+ 1 2)") ;=> {:results ["3"] :out "" :err "" :warnings [] :ns cljs.user :runtime-id 3}
+(repl/cljs-eval "(foo)" {:ns 'my.app :runtime-id 3 :await true :timeout 10000})
+(repl/load-file "src/my/app.cljs")
+(repl/tag! 3 "A")          ; target with {:tag "A"}, survives reloading the page
+(repl/repl)                ; this nREPL session evaluates ClojureScript, :cljs/quit to leave
+```
+
+- Forms are analyzed with the build's compiler environment and evaluated in
+  the runtime focused last (visible ones first) unless `:runtime-id` or
+  `:tag` pick one. The interactive REPL notes changes of its runtime.
+- `def` redefines a namespace's var for the namespace's own code and its
+  importers, as a hot reload does. Vars only defined at the REPL, and
+  namespaces only created at the REPL (`in-ns`, `ns`), are the runtime's.
+- `require` loads namespaces into the runtime. Namespaces outside the build
+  are compiled by the watcher from then on, `:reload` recompiles and hot
+  reloads them. npm modules can't be required at the REPL, a namespace's
+  forms use the npm modules it requires.
+- `load-file` compiles the file with the watcher and returns once the runtime
+  applied the hot reload (or the warnings holding it back). A file outside the
+  source directories, or an editor buffer differing from the file, is
+  evaluated form by form instead.
+- A form with compiler warnings isn't evaluated, unless `:warnings-ok`: the
+  result has `:error` and `:warnings`, `:results` ends with
+  `:cljs.esm.repl/failed`, and the forms after it aren't evaluated. The
+  nREPL middleware replies with an `eval-error`.
+- `*1`, `*2`, `*3` and `*e` in the interactive REPL, `doc`, `source`, `dir`
+  and `apropos` are answered from the compiler environment. Output printed
+  during a form is its `:out` / `:err`, and still goes to the console.
+  `:await true` waits for a promise's value.
 
 ## Interop
 
@@ -234,6 +277,18 @@ The watcher recompiles changed namespaces, their dependents when a
 namespace's API (arities, macros) changed, and namespaces using changed
 macros.
 
+### REPL
+
+Under `:esm-repl` each module registers its namespace object, the setters of
+all its instances (hot reloads keep the earlier ones, see above) and the npm
+modules it imports with `globalThis.$CLJS_ESM`. The REPL compiles a form as
+the body of a function the runtime (`cljs.esm.repl-runtime`) calls with the
+namespaces it references: views reading the module's bindings, where
+assigning a var (`def`, `set!`, `binding`) calls the setters of all instances,
+or adds it to an overlay if the module doesn't define it. Closure Library shims
+are passed as modules. Forms carry an inline source map to the text they were
+read from. Releases aren't compiled with `:esm-repl`, the REPL needs `eval`.
+
 ### Production bundles
 
 Bundlers treat `Type.prototype.cljs$core$ISeq$_first$arity$1 = ...` as a side
@@ -279,7 +334,9 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
   `goog.getUid` (used by `hash` for JavaScript objects) gives frozen objects
   stable ids from a `WeakMap` rather than failing.
 
-- REPL: not supported under `:module-format :esm` yet.
+- REPL: no Node.js runtime transport yet (the runtime's tests use one),
+  errors' stacks aren't mapped to the ClojureScript sources, npm modules
+  can't be required at the REPL.
 - FlowStorm: ClojureStorm instruments through its own build of the compiler,
   which doesn't have `cljs.esm`.
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`,
