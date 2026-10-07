@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# Writes src/main/js/cljf/resolver.lock.json, the jars of the cljf launcher's
+# resolver with their SHA-256, from src/main/js/cljf/resolver/deps.edn, see
+# script/lock_resolver.clj. Run it after changing that file.
+
+cd "$(dirname "$0")/../src/main/js/cljf/resolver" || exit 1
+
+exec clojure -M ../../../../../script/lock_resolver.clj

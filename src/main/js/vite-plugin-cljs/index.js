@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import { Worker } from 'node:worker_threads';
+import { compilerCommand } from '../cljf/launcher.js';
 import { pruneChunks, propertyRenames } from './prune.js';
 
 const EVENT_PREFIX = '[cljs.esm] ';
@@ -135,10 +136,14 @@ export default module.exports;
 
 /**
  * @param {object} options
- * @param {string[]} options.command starts Clojure with the compiler on the
- *   classpath, i.e. ["clojure", "-M:cljs"], cljs.esm's arguments follow
- * @param {string} [options.cwd] the command's working directory, defaults to
- *   Vite's root
+ * @param {string[]} [options.aliases] deps.edn aliases of the classpath the
+ *   compiler runs with, i.e. ["cljs"]. The launcher (cljf) resolves it with
+ *   the compiler added and stock ClojureScript removed, see cljf/launcher.js.
+ * @param {string[]} [options.command] starts Clojure with the compiler on the
+ *   classpath instead of the launcher, i.e. ["clojure", "-M:cljs"],
+ *   cljs.esm's arguments follow
+ * @param {string} [options.cwd] the compiler's working directory, with the
+ *   project's deps.edn, defaults to Vite's root
  * @param {string} [options.config] compiler options file (EDN, see
  *   cljs.esm/load-options), relative to cwd
  * @param {string} [options.profile] profile of the config file, defaults to
@@ -162,7 +167,7 @@ export default module.exports;
  */
 export default function cljs(options) {
   const manifestName = options.manifest ?? 'manifest.json';
-  let config, proc, server, minify, cwd, outputDir;
+  let config, proc, server, minify, cwd, outputDir, compiler;
   let compiling = Promise.resolve();
   const localModules = new Set();
   // Like shadow-cljs, the output isn't hot reloaded while namespaces have
@@ -186,7 +191,7 @@ export default function cljs(options) {
   }
 
   function run(args, onEvent) {
-    const [cmd, ...cmdArgs] = options.command;
+    const [cmd, ...cmdArgs] = compiler;
     const child = spawn(cmd, [...cmdArgs, '-m', 'cljs.esm', ...args], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -275,6 +280,17 @@ export default function cljs(options) {
     async config(userConfig, env) {
       cwd = path.resolve(options.cwd ?? userConfig.root ?? process.cwd());
       outputDir = path.resolve(cwd, options.outputDir);
+      if (options.command) {
+        compiler = options.command;
+      } else if (!env.isPreview) {
+        const launched = await compilerCommand({
+          cwd,
+          aliases: options.aliases,
+          // Vite reads the terminal only once its server listens
+          interactive: Boolean(process.stdin.isTTY && process.stderr.isTTY && !process.env.CI),
+        });
+        compiler = [launched.command, ...launched.args];
+      }
       const result = { root: outputDir };
       if (env.command === 'build' && !env.isPreview) {
         const start = Date.now();

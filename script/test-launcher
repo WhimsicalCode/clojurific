@@ -1,0 +1,28 @@
+#!/bin/sh
+
+# Tests the cljf launcher (src/main/js/cljf, with Node.js' test runner), then
+# the npm package: packs it with script/package-npm, installs it into an empty
+# project and builds a namespace with npx cljf. CLJF_TEST_DOWNLOADS=1 also
+# tests a start with an empty local Maven repository, see
+# src/main/js/cljf/test/launcher.test.js.
+
+set -e
+cd "$(dirname "$0")/.."
+
+node --test 'src/main/js/cljf/test/*.test.js'
+
+script/package-npm
+version=$(node -p "require('./builds/npm/package.json').version")
+project=$(mktemp -d)
+trap 'rm -rf "$project"' EXIT
+mkdir -p "$project/src/smoke"
+printf '{:paths ["src"]}\n' > "$project/deps.edn"
+printf '(ns smoke.core)\n(println "smoke" (+ 1 2))\n' > "$project/src/smoke/core.cljs"
+(
+  cd "$project"
+  npm init -y > /dev/null
+  npm install --silent --no-audit --no-fund "$OLDPWD/builds/clojurific-$version.tgz"
+  npx cljf build '{:main smoke.core :output-dir "out"}'
+  test "$(node out/smoke/core.js)" = "smoke 3"
+)
+echo "npm package: ok"

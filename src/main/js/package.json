@@ -1,0 +1,40 @@
+{
+  "name": "clojurific",
+  "version": "0.1.0",
+  "description": "ClojureScript compiled to ES modules, bundled by Vite",
+  "license": "EPL-1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WhimsicalCode/clojurific.git"
+  },
+  "type": "module",
+  "bin": {
+    "cljf": "./cljf/cli.js"
+  },
+  "exports": {
+    ".": "./cljf/launcher.js",
+    "./vite": "./vite-plugin-cljs/index.js",
+    "./karma": "./karma-esm/adapter.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "cljf/*.js",
+    "cljf/resolver.lock.json",
+    "cljf/resolver/deps.edn",
+    "cljf/resolver/clojurific",
+    "vite-plugin-cljs",
+    "karma-esm",
+    "compiler"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "vite": ">=6"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  }
+}

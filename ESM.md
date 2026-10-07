@@ -17,6 +17,9 @@ clojure -M -m cljs.esm build '{:main my.app :output-dir "out"}'  # build
 clojure -M -m cljs.esm watch @cljs.edn                            # watch, hot reload
 ```
 
+or without the Clojure CLI, with the npm package's launcher (see
+[Launcher](#launcher)): `npx cljf build …`, `npx cljf watch …`.
+
 Options are EDN maps, `@file.edn` to read them from a file, and `:profile`
 keywords (`cljs.esm/load-options`). Profiles are maps under `:profiles`, deep
 merged over the rest; the profile names the build's `:mode`. `watch` defaults to
@@ -108,12 +111,17 @@ loaded meanwhile show the overlay of the current error or warnings.
 
 ```js
 // vite.config.mjs
-import cljs from 'vite-plugin-cljs';
+import cljs from 'clojurific/vite';
 
 export default {
-  plugins: [cljs({ command: ['clojure', '-M:cljs'], config: 'cljs.edn', outputDir: 'out' })],
+  plugins: [cljs({ aliases: ['cljs'], config: 'cljs.edn', outputDir: 'out' })],
 };
 ```
+
+The plugin starts the compiler with the launcher, on the classpath of the
+project's `deps.edn` with `aliases`. `command` starts it with another
+command instead, e.g. the Clojure CLI's `['clojure', '-M:cljs']` (the monorepo's
+projects do), cljs.esm's arguments follow it.
 
 ```html
 <script type="module" src="/out/my/app.js"></script>
@@ -128,6 +136,49 @@ recompiles.
 For server rendered pages the plugin writes `manifest.json` to Vite's `outDir`,
 each main namespace's module scripts and the chunks they import (to preload):
 the Vite dev server's modules when serving, the hashed chunks of a build.
+
+### Launcher
+
+`src/main/js` is the npm package `clojurific` (`script/package-npm` packs it,
+adding the compiler's sources as `compiler/`): the `cljf` command, the Vite
+plugin (`clojurific/vite`) and the Karma adapter (`clojurific/karma`). Its
+launcher (`src/main/js/cljf`) needs Java and Node.js, not the Clojure CLI:
+
+```sh
+npx cljf build '{:main my.app :output-dir "out"}'
+npx cljf -A:test watch @cljs.edn :test
+npx cljf classpath      # like clojure -Spath
+npx cljf setup-java     # downloads Eclipse Temurin, for machines without Java
+```
+
+It resolves the project's `deps.edn` (and the user's, as the Clojure CLI does)
+with tools.deps, adding the compiler (`com.whimsical/clojurific`, unless the
+project lists it itself, e.g. as a git dependency) and replacing every
+`org.clojure/clojurescript` with `no-clojurescript/`, then runs
+`clojure.main -m cljs.esm` with the aliases' `:jvm-opts`. Dependencies are
+downloaded into the local Maven repository (`~/.m2/repository`, or
+`:mvn/local-repo`), shared with the Clojure CLI. The classpath is cached in the
+project's `.cljf/cpcache` until a `deps.edn` it was resolved from changes,
+`--force` resolves it again.
+
+tools.deps can't download itself: the launcher downloads the jars listed in
+`src/main/js/cljf/resolver.lock.json` with their SHA-256 (from Maven Central,
+or `CLJF_MAVEN_REPO`), then runs the resolver (`clojurific.resolve`) with
+them. `script/lock-resolver` writes the lock from `cljf/resolver/deps.edn`,
+run it after changing that file. tools.deps' S3 transporter is left out:
+`s3://` repositories aren't supported. Git dependencies need `git` on `PATH`.
+
+Java 17 or later comes from `CLJF_JAVA`, `JAVA_HOME`, `PATH`, then the runtimes
+`cljf setup-java [version]` installed into the per-user cache
+(`~/Library/Caches/cljf`, `$XDG_CACHE_HOME/cljf`, `%LOCALAPPDATA%\cljf`, or
+`CLJF_CACHE_DIR`). Without one, the launcher explains how to install it, and
+offers to run `setup-java` in a terminal; `CLJF_INSTALL_JDK=1` runs it without
+asking. setup-java gets Temurin's JRE (the latest LTS by default) from the
+Adoptium API, checking the archive's SHA-256 against the API's.
+
+Class data sharing (CDS) archives would load Clojure's classes faster, but the
+JVM doesn't create them while the classpath has non-empty directories, which
+the compiler's and the project's sources are.
 
 ### REPL
 

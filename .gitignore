@@ -34,4 +34,4 @@ package.json
 package-lock.json
 .cpcache
 resources/brepl_client.js
-!src/main/js/*/package.json
+!src/main/js/package.json

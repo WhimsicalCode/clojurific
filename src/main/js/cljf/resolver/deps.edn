@@ -1,0 +1,10 @@
+;; The classpath of clojurific.resolve, which the cljf launcher downloads from
+;; resolver.lock.json (script/lock-resolver writes it from this file). Without
+;; tools.deps' S3 transporter (aws-api, core.async): s3:// repositories aren't
+;; supported.
+{:paths ["."]
+ :deps {org.clojure/clojure {:mvn/version "1.12.6"}
+        org.clojure/tools.deps {:mvn/version "0.31.1646"
+                                :exclusions [org.clojure/tools.deps.maven-s3-transporter]}
+        ;; silences SLF4J's warning that it has no logger
+        org.slf4j/slf4j-nop {:mvn/version "1.7.36"}}}
