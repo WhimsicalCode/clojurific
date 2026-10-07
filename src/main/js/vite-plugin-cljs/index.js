@@ -38,6 +38,16 @@ function isCommonJS(code) {
   return !/(^|[;\n])\s*(import\s*[\w*{"']|export\s+[\w*{]|export\s*\{)/.test(stripped);
 }
 
+// A Rollup input (a file, files or {name: file}) as {name: absolute file}
+function inputObject(input, root) {
+  if (!input) return {};
+  if (typeof input === 'object' && !Array.isArray(input)) {
+    return Object.fromEntries(Object.entries(input).map(([name, file]) => [name, path.resolve(root, file)]));
+  }
+  return Object.fromEntries([].concat(input).map(file =>
+    [path.basename(file, path.extname(file)), path.resolve(root, file)]));
+}
+
 function ednString(s) {
   return JSON.stringify(s);
 }
@@ -143,13 +153,14 @@ export default module.exports;
  *   classpath instead of the launcher, i.e. ["clojure", "-M:cljs"],
  *   cljs.esm's arguments follow
  * @param {string} [options.cwd] the compiler's working directory, with the
- *   project's deps.edn, defaults to Vite's root
+ *   project's deps.edn, defaults to Vite's root (the project's directory)
  * @param {string} [options.config] compiler options file (EDN, see
  *   cljs.esm/load-options), relative to cwd
  * @param {string} [options.profile] profile of the config file, defaults to
  *   dev when serving and release when building
  * @param {string} options.outputDir the compiler's output directory, relative
- *   to cwd, Vite's root
+ *   to cwd. Pages load namespaces from it, i.e. outputDir "out" serves my.app
+ *   as /out/my/app.js
  * @param {object|string} [options.compilerOptions] more compiler options, an
  *   EDN string or an object with keyword keys
  * @param {string|false} [options.manifest] writes the entry points' scripts
@@ -167,7 +178,7 @@ export default module.exports;
  */
 export default function cljs(options) {
   const manifestName = options.manifest ?? 'manifest.json';
-  let config, proc, server, minify, cwd, outputDir, compiler;
+  let config, proc, server, minify, root, cwd, outputDir, compiler;
   let compiling = Promise.resolve();
   const localModules = new Set();
   // Like shadow-cljs, the output isn't hot reloaded while namespaces have
@@ -263,6 +274,14 @@ export default function cljs(options) {
     return (compiled ? path.relative(outputDir, file) : path.relative(cwd, file)).split(path.sep).join('/');
   }
 
+  // The dev server's URL of an output file (relative to outputDir)
+  function devUrl(file) {
+    const relative = path.relative(config.root, path.join(outputDir, file));
+    return config.base + (relative.startsWith('..') || path.isAbsolute(relative)
+      ? `@fs${path.join(outputDir, file)}`
+      : relative).split(path.sep).join('/');
+  }
+
   async function writeManifest(manifest) {
     if (!manifestName) return;
     const file = path.resolve(config.root, config.build.outDir, manifestName);
@@ -278,7 +297,8 @@ export default function cljs(options) {
     enforce: 'pre',
 
     async config(userConfig, env) {
-      cwd = path.resolve(options.cwd ?? userConfig.root ?? process.cwd());
+      root = path.resolve(userConfig.root ?? process.cwd());
+      cwd = path.resolve(options.cwd ?? root);
       outputDir = path.resolve(cwd, options.outputDir);
       if (options.command) {
         compiler = options.command;
@@ -291,7 +311,9 @@ export default function cljs(options) {
         });
         compiler = [launched.command, ...launched.args];
       }
-      const result = { root: outputDir };
+      const result = {};
+      // the project's page, an input of builds and the dev server's /
+      const indexHtml = existsSync(path.join(root, 'index.html')) ? path.join(root, 'index.html') : null;
       if (env.command === 'build' && !env.isPreview) {
         const start = Date.now();
         if (userConfig.build?.watch) {
@@ -310,9 +332,19 @@ export default function cljs(options) {
         const jsEntries = Object.fromEntries(Object.entries(info.entries ?? {})
           .filter(([name]) => !options.entries || options.entries.includes(name)));
         const entries = { ...info.main, ...jsEntries };
+        // The namespaces and :js-entries, with the HTML pages: the project's
+        // input, else its index.html. Set on the user's config, since merging
+        // an input object into a string or array doesn't work.
+        userConfig.build ??= {};
+        // rolldownOptions since Vite 8
+        const key = userConfig.build.rolldownOptions ? 'rolldownOptions' : 'rollupOptions';
+        userConfig.build[key] ??= {};
+        userConfig.build[key].input = {
+          ...Object.fromEntries(Object.entries(entries).map(([name, file]) => [name, path.join(outputDir, file)])),
+          ...inputObject(userConfig.build[key].input ?? indexHtml, root),
+        };
         result.build = {
           rollupOptions: {
-            input: Object.fromEntries(Object.entries(entries).map(([name, file]) => [name, path.join(outputDir, file)])),
             // :js-entries' exports are the bundle's interface, namespaces'
             // exports are only for each other
             preserveEntrySignatures: Object.keys(jsEntries).length ? 'exports-only' : false,
@@ -332,8 +364,14 @@ export default function cljs(options) {
         }
       } else {
         // dependencies to pre-bundle, from the previous build's entry points
+        // and the page, not every HTML file under the root
         const info = await buildInfo();
-        if (info) result.optimizeDeps = { entries: Object.values(info.main) };
+        result.optimizeDeps = {
+          entries: [
+            ...Object.values(info?.main ?? {}).map(file => path.relative(root, path.join(outputDir, file)).split(path.sep).join('/')),
+            ...(indexHtml ? ['index.html'] : []),
+          ],
+        };
       }
       return result;
     },
@@ -579,7 +617,7 @@ export default function cljs(options) {
         const info = await buildInfo();
         if (info) {
           await writeManifest(Object.fromEntries(Object.entries(info.main).map(([ns, file]) =>
-            [ns, { scripts: [`${config.base}@vite/client`, config.base + file], preload: [] }])));
+            [ns, { scripts: [`${config.base}@vite/client`, devUrl(file)], preload: [] }])));
         }
         const outstanding = [...warnings.values()].flat();
         if (event.type === 'compiled' && outstanding.length) {

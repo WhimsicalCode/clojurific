@@ -120,12 +120,21 @@ export default {
 
 The plugin starts the compiler with the launcher, on the classpath of the
 project's `deps.edn` with `aliases`. `command` starts it with another
-command instead, e.g. the Clojure CLI's `['clojure', '-M:cljs']` (the monorepo's
-projects do), cljs.esm's arguments follow it.
+command instead, e.g. the Clojure CLI's `['clojure', '-M:cljs']`, cljs.esm's
+arguments follow it.
+
+The project's directory is Vite's root, so pages load namespaces from the
+output directory, and the project's `index.html` is the dev server's page and
+an input of builds, which bundle the namespaces it loads like any other script:
 
 ```html
+<!-- index.html -->
 <script type="module" src="/out/my/app.js"></script>
 ```
+
+Builds of more pages list them in `build.rollupOptions.input`
+(`build.rolldownOptions.input` in Vite 8), the plugin adds the main namespaces
+and `:js-entries` to them.
 
 `:js-entries` are bundle inputs too, their exports kept: a build of a library or
 a Node service's worker (`build.ssr`) is one module exporting what the entry

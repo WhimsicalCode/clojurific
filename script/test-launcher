@@ -2,7 +2,8 @@
 
 # Tests the cljf launcher (src/main/js/cljf, with Node.js' test runner), then
 # the npm package: packs it with script/package-npm, installs it into an empty
-# project and builds a namespace with npx cljf. CLJF_TEST_DOWNLOADS=1 also
+# project, builds a namespace with npx cljf, and bundles a page loading it with
+# Vite and the plugin. CLJF_TEST_DOWNLOADS=1 also
 # tests a start with an empty local Maven repository, see
 # src/main/js/cljf/test/launcher.test.js.
 
@@ -21,8 +22,24 @@ printf '(ns smoke.core)\n(println "smoke" (+ 1 2))\n' > "$project/src/smoke/core
 (
   cd "$project"
   npm init -y > /dev/null
-  npm install --silent --no-audit --no-fund "$OLDPWD/builds/clojurific-$version.tgz"
+  npm pkg set type=module
+  npm install --silent --no-audit --no-fund vite@8.2.2 "$OLDPWD/builds/clojurific-$version.tgz"
   npx cljf build '{:main smoke.core :output-dir "out"}'
-  test "$(node out/smoke/core.js)" = "smoke 3"
+  output=$(node out/smoke/core.js)
+  test "$output" = "smoke 3"
+
+  printf '<!doctype html>\n<script type="module" src="/out/smoke/core.js"></script>\n' > index.html
+  printf '%s\n' "import cljs from 'clojurific/vite';" \
+    "export default {" \
+    "  plugins: [cljs({ outputDir: 'out', compilerOptions: { main: \"'smoke.core\" } })]," \
+    "  // the polyfill needs a document, the bundle runs in Node.js here" \
+    "  build: { modulePreload: { polyfill: false } }," \
+    "};" > vite.config.mjs
+  npx vite build --logLevel warn
+  # the page loads the bundle, which prints what the namespace did
+  bundle=$(sed -n 's|.*src="/\(assets/[^"]*\.js\)".*|\1|p' dist/index.html)
+  test -n "$bundle"
+  output=$(node "dist/$bundle")
+  test "$output" = "smoke 3"
 )
 echo "npm package: ok"

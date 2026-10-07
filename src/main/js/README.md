@@ -32,8 +32,14 @@ export default {
 ```
 
 ```html
+<!-- index.html -->
+<!doctype html>
+<div id="app"></div>
 <script type="module" src="/out/my/app.js"></script>
 ```
+
+`npx vite` serves the page and hot reloads changed namespaces, `npx vite build`
+bundles it into `dist/`.
 
 or with the command line:
 
