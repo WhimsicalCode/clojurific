@@ -9,7 +9,9 @@ without the Google Closure Compiler. This package has the compiler, the `cljf`
 command, a Vite plugin with hot reloading, and a Karma adapter. It needs
 Node.js 20 or later and Java 17 or later, not the Clojure CLI.
 
-Status: experimental.
+Status: experimental. Versions are `0.<minor>.<release>`: `<minor>` is the
+ClojureScript 1.x release it's compatible with (12 for 1.12.x), `<release>`
+counts Clojurific's releases, starting from 1.
 
 ## Usage
 

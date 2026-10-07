@@ -15,6 +15,10 @@ It's based on ClojureScript 1.12.145 and keeps its namespaces (`cljs.core`,
 `cljs.analyzer`, …), so libraries written for ClojureScript work unchanged.
 Status: experimental.
 
+Versions are `0.<minor>.<release>`: `<minor>` is the ClojureScript 1.x release
+it's compatible with (12 for 1.12.x), `<release>` counts Clojurific's releases,
+starting from 1.
+
 ## Dependency information ##
 
 [Clojure deps.edn](https://clojure.org/guides/deps_and_cli), as a git
