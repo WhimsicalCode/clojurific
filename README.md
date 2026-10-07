@@ -11,8 +11,10 @@ plugin, hot reloading and an nREPL server evaluating in the browser. See
 (`cljs.main`, `cljs.build.api`) is still there and needs the Closure Compiler,
 see [Dependencies](ESM.md#dependencies).
 
-It's based on ClojureScript 1.12.145 and keeps its namespaces (`cljs.core`,
-`cljs.analyzer`, …), so libraries written for ClojureScript work unchanged.
+It's based on ClojureScript's master after the 1.12.145 release; see
+[CHANGELOG.md](CHANGELOG.md) for where it forked and what it changed. It keeps ClojureScript's
+namespaces (`cljs.core`, `cljs.analyzer`, …), so libraries written for
+ClojureScript work unchanged.
 Status: experimental.
 
 Versions are `0.<minor>.<release>`: `<minor>` is the ClojureScript 1.x release

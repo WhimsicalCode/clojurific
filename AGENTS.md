@@ -1,0 +1,66 @@
+# Clojurific
+
+Clojurific is a fork of ClojureScript: `:module-format :esm` compiles namespaces to ES modules
+bundled by Vite, without the Closure Compiler. Its coordinate is `com.whimsical/clojurific`; its
+namespaces stay `cljs.*`, so libraries written for ClojureScript work unchanged. Read
+[`ESM.md`](ESM.md) (usage, design, known gaps) before changing it.
+
+## Where things are
+
+- `src/main/clojure/cljs/esm.clj` — the ES module build, watch and test runner generation
+- `src/main/clojure/cljs/esm/repl.clj`, `src/main/cljs/cljs/esm/repl_runtime.cljs` — the nREPL server
+  and its browser runtime
+- `src/main/cljs/cljs/esm/` — runtime support: `goog.js`, `lazy`, `node_test`, `karma`
+- `src/main/js/` — the npm package `clojurific` (its `package.json`); `script/package-npm` packs it
+  with the compiler's sources as `compiler/`
+- `src/main/js/vite-plugin-cljs/` — the Vite plugin
+- `src/main/js/cljf/` — the `cljf` launcher (Node.js built-ins only, no npm dependencies): finding
+  and installing Java (`java.js`), downloading the resolver's jars (`bootstrap.js`), the cached
+  classpath and the compiler command (`launcher.js`), the resolver run with tools.deps
+  (`resolver/clojurific/resolve.clj`), and its tests (`test/`)
+- `no-clojurescript/` — an empty project replacing stock ClojureScript (`org.clojure/clojurescript`)
+  through `:override-deps`
+- `src/test/clojure/cljs/esm_build_tests.clj`, `esm_repl_tests.clj` — build and REPL tests
+
+## Testing
+
+`script/test-esm` runs the build and REPL tests, then the ClojureScript runtime test suite compiled
+to ES modules under Node.js. It must end with `0 failures, 0 errors.` It runs without the Closure
+Compiler on the classpath, which the ES module build doesn't need. Changes outside `cljs.esm` that
+can affect the classic compiler also need `script/test` (runtime tests, `:advanced`) and the
+compiler tests (`clojure -M:closure:compiler.test:compiler.test.run`). The classic compiler needs
+the Closure Compiler, which only the `:closure` alias adds: list it with the other aliases, e.g.
+`clojure -M:closure:runtime.test.build`.
+
+`script/test-launcher` tests the launcher (`node --test`) and the npm package: it packs it, installs
+it into an empty project and builds with `npx cljf`. The integration tests resolve and build real
+projects with the local Maven repository; `CLJF_TEST_DOWNLOADS=1` adds a cold start from an empty
+one (about 20 MB from Maven Central). Java 17 is the launcher's minimum: run `script/test-esm` and
+`script/test-launcher` on it too after changes that could need a newer Java.
+
+After updating `com.google.javascript/closure-compiler` (e.g. when merging an upstream bump), run
+`script/gen-default-externs` and commit `src/main/clojure/cljs/externs/default.edn`, the default
+externs the analyzer reads without the Closure Compiler. After changing
+`src/main/js/cljf/resolver/deps.edn` (i.e. to update tools.deps), run `script/lock-resolver` and
+commit `src/main/js/cljf/resolver.lock.json`.
+
+ClojureScript namespaces requiring `cljs.repl` load `cljs/repl.cljc` on the JVM for its macros, so
+keep it free of load-time `cljs.closure` requires; `script/test-esm` fails without the jar otherwise.
+
+When diffing the compiler's output across changes, `:parallel-build` makes some local names
+nondeterministic (`shadow-depth` renames a local when a namespace starting with its name was already
+analyzed): normalize `__$N` suffixes and gensym numbers, or build without `:parallel-build`.
+
+## Versions and the changelog
+
+The npm package's version (`src/main/js/package.json`) is `0.<minor>.<release>`: `<minor>` is the
+ClojureScript 1.x release the fork is based on (12 for 1.12.x), `<release>` counts Clojurific's
+releases from 1. Bump `<release>` for each release; when merging a new upstream minor release, set
+`<minor>` to it and `<release>` back to 1.
+
+[`CHANGELOG.md`](CHANGELOG.md) records the fork's changes since it was forked, not upstream's (its
+`changes.md` isn't kept). Add each noteworthy change under the `[Next]` release, in `### Added`,
+`### Changed` or `### Fixed` (in that order, only the ones with entries), as one concise bullet.
+Record merges of upstream ClojureScript too, naming the upstream commit or release. Omit changes
+only to tests, tooling or the fork's own unreleased features. When releasing, replace `[Next]` with
+the release date (`[YYYY-MM-DD]`) and start a new `[Next]` release with the next version.
