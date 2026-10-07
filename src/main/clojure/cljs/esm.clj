@@ -493,6 +493,29 @@
                  (list* 'cljs.test/run-tests env (map #(list 'quote %) nses)))))))
     {ns file}))
 
+(defn- check-classpath!
+  "Fails when another ClojureScript compiler is on the classpath, usually
+  org.clojure/clojurescript brought in by a library: the classpath order
+  decides whose namespaces load, and its jar's precompiled classes are loaded
+  instead of these sources."
+  []
+  (let [loader (.getContextClassLoader (Thread/currentThread))
+        dupes  (keep (fn [path]
+                       (let [urls (distinct (map str (enumeration-seq (.getResources loader path))))]
+                         (when (next urls)
+                           [path urls])))
+                 ["cljs/analyzer.cljc" "cljs/core.cljs"])]
+    (when (seq dupes)
+      (throw (ex-info (str "More than one ClojureScript compiler is on the classpath:\n"
+                        (apply str (for [[path urls] dupes]
+                                     (apply str "  " path "\n" (map #(str "    " % "\n") urls))))
+                        "Exclude org.clojure/clojurescript from the library that brings it in"
+                        " (clojure -X:deps tree shows which one) with :exclusions"
+                        " [org.clojure/clojurescript], or from the whole dependency tree with"
+                        " :override-deps, replacing it with the empty project in this"
+                        " compiler's no-clojurescript directory.")
+               {:resources (into {} dupes)})))))
+
 (defn build
   "Compiles the namespaces in :main (a symbol or a collection of symbols) and
   their dependencies to ES modules in :output-dir. Returns the compiled
@@ -502,6 +525,7 @@
   generates (and compiles) namespace my.test-runner, requiring the test
   namespaces of the source directories, calling (my.test/start run-tests)."
   ([opts]
+   (check-classpath!)
    (build opts (env/default-compiler-env (merge default-opts opts))))
   ([opts compiler-env]
    (let [opts (prepare-opts opts)]
@@ -770,6 +794,7 @@
   a build succeeds, each change builds again: a failed build's output misses
   the namespaces it didn't get to."
   [opts]
+  (check-classpath!)
   (let [opts         (watch-opts opts)
         compiler-env (env/default-compiler-env opts)
         dirs         (watch-dirs opts)

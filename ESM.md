@@ -83,6 +83,18 @@ and `:cljs-lite-repl` too).
 `pom.template.xml` and `project.clj` are upstream's publishing setup, and still
 list the Closure Compiler.
 
+The fork's coordinate is `com.whimsical/clojurific`. Stock ClojureScript
+(`org.clojure/clojurescript`, which many libraries depend on) has the same
+namespaces, so the classpath order would decide whose namespaces load, and its
+jar's precompiled classes win over the fork's sources. `cljs.esm`'s `build` and
+`watch` fail when `cljs/analyzer.cljc` or `cljs/core.cljs` is on the classpath
+more than once, listing where. Exclude it from the library bringing it in
+(`:exclusions [org.clojure/clojurescript]`), or replace it in the whole tree
+with the empty project in `no-clojurescript/`:
+`:override-deps {org.clojure/clojurescript {:local/root "<fork>/no-clojurescript"}}`
+(`:git/url`, `:git/sha` and `:deps/root "no-clojurescript"` for a git
+dependency).
+
 ### Vite
 
 `src/main/js/vite-plugin-cljs` runs the compiler: a one-shot build for
@@ -306,7 +318,7 @@ they get the same map: `(doc js/isNaN)` prints no JSDoc text.
 
 `script/gen-default-externs` regenerates the file, run it after updating
 the Closure Compiler. The `compiler` suite of the monorepo's
-`clojurescript.yml` fails when the file is out of date.
+`clojurific.yml` fails when the file is out of date.
 
 ### Hot reloading
 

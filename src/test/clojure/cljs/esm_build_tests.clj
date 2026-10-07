@@ -14,6 +14,7 @@
             [clojure.string :as string]
             [clojure.test :refer [deftest is testing]])
   (:import [java.io File]
+           [java.net URL URLClassLoader]
            [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]))
 
@@ -79,3 +80,22 @@
     (is (nil? (find-ns 'cljs.externs)))
     (testing "the default externs' types, from cljs/externs/default.edn: isNaN returns a boolean"
       (is (string/includes? (output dir 'test.d) "if(isNaN(x))")))))
+
+(deftest fails-with-another-compiler-on-the-classpath
+  (let [dir    (temp-dir)
+        stock  (io/file dir "stock")
+        thread (Thread/currentThread)
+        loader (.getContextClassLoader thread)]
+    (io/make-parents (io/file stock "cljs" "analyzer.cljc"))
+    (spit (io/file stock "cljs" "analyzer.cljc") "(ns cljs.analyzer)")
+    (.setContextClassLoader thread (URLClassLoader. (into-array URL [(.toURL (.toURI stock))]) loader))
+    (try
+      (let [e (try
+                (esm/build {:main 'test.e :output-dir (str (io/file dir "out"))})
+                nil
+                (catch clojure.lang.ExceptionInfo e e))]
+        (is (string/starts-with? (ex-message e) "More than one ClojureScript compiler is on the classpath"))
+        (is (= ["cljs/analyzer.cljc"] (keys (:resources (ex-data e)))))
+        (is (some #(string/includes? % (str stock)) (get-in (ex-data e) [:resources "cljs/analyzer.cljc"]))))
+      (finally
+        (.setContextClassLoader thread loader)))))
