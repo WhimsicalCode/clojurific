@@ -1,36 +1,46 @@
-## What is ClojureScript? ##
+# Clojurific #
 
-[ClojureScript](https://clojurescript.org) is a compiler for [Clojure](https://clojure.org) that targets JavaScript. It is designed to emit JavaScript code which is compatible with the advanced compilation mode of the [Google Closure](https://developers.google.com/closure/compiler/) optimizing compiler.
+ClojureScript compiled to ES modules, bundled by Vite.
 
-Official web site: https://clojurescript.org
+Clojurific is a fork of [ClojureScript](https://github.com/clojure/clojurescript)
+by [Whimsical](https://whimsical.com). Its `:module-format :esm` compiles every
+namespace to an ES module and leaves bundling, minification, npm packages and
+TypeScript to Vite, without the Google Closure Compiler. It includes a Vite
+plugin, hot reloading and an nREPL server evaluating in the browser. See
+[ESM.md](ESM.md) for usage, design and known gaps. The classic compiler
+(`cljs.main`, `cljs.build.api`) is still there and needs the Closure Compiler,
+see [Dependencies](ESM.md#dependencies).
 
-## Releases and dependency information ##
+It's based on ClojureScript 1.12.145 and keeps its namespaces (`cljs.core`,
+`cljs.analyzer`, …), so libraries written for ClojureScript work unchanged.
+Status: experimental.
 
-Latest stable release: 1.12.145
+## Dependency information ##
 
-* [All released versions](https://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22org.clojure%22%20AND%20a%3A%22clojurescript%22)
+[Clojure deps.edn](https://clojure.org/guides/deps_and_cli), as a git
+dependency:
 
-[Clojure deps.edn](http://clojure.org/guides/deps_and_cli) dependency information:
-
- ```
- org.clojure/clojurescript {:mvn/version "1.12.145"}
- ```
-
-[Leiningen](https://github.com/technomancy/leiningen/) dependency information:
-
+```clojure
+com.whimsical/clojurific {:git/url "https://github.com/WhimsicalCode/clojurific"
+                          :git/sha "…"}
 ```
-[org.clojure/clojurescript "1.12.145"]
+
+Stock ClojureScript (`org.clojure/clojurescript`) has the same namespaces, so
+it mustn't be on the classpath too: `cljs.esm` fails at startup, naming both,
+when it is. Exclude it from the library that brings it in with
+`:exclusions [org.clojure/clojurescript]`, or from the whole dependency tree
+with the empty project in `no-clojurescript/`:
+
+```clojure
+:override-deps {org.clojure/clojurescript {:git/url "https://github.com/WhimsicalCode/clojurific"
+                                           :git/sha "…"
+                                           :deps/root "no-clojurescript"}}
 ```
 
-[Maven](https://maven.apache.org) dependency information:
-
-```
-<dependency>
-  <groupId>org.clojure</groupId>
-  <artifactId>clojurescript</artifactId>
-  <version>1.12.145</version>
-</dependency>
-```
+The rest of this README is upstream's, about ClojureScript itself. Report
+problems with the fork's additions (`cljs.esm`, the Vite plugin) to
+[WhimsicalCode/clojurific](https://github.com/WhimsicalCode/clojurific)
+instead.
 
 ## Getting Started ##
 
