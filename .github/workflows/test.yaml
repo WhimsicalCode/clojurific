@@ -39,7 +39,7 @@ jobs:
             ${{ runner.os }}-${{ env.cache-name }}-
 
       - name: Build tests
-        run: clojure -M:runtime.test.build
+        run: clojure -M:closure:runtime.test.build
 
       - name: Run tests
         run: |
@@ -83,7 +83,7 @@ jobs:
             ${{ runner.os }}-${{ env.cache-name }}-
 
       - name: Build tests
-        run: clojure -M:lite.test.build
+        run: clojure -M:closure:lite.test.build
 
       - name: Run tests
         run: |
@@ -107,7 +107,7 @@ jobs:
           cli: '1.10.1.763'
 
       - name: Build tests
-        run: clojure -M:runtime.test.build
+        run: clojure -M:closure:runtime.test.build
         shell: powershell
 
       - name: Run tests
@@ -153,7 +153,7 @@ jobs:
             ${{ runner.os }}-${{ env.cache-name }}-
 
       - name: Build tests
-        run: clojure -M:selfhost.test.build
+        run: clojure -M:closure:selfhost.test.build
 
       - name: Run tests
         run: |
@@ -197,7 +197,7 @@ jobs:
             ${{ runner.os }}-${{ env.cache-name }}-
 
       - name: Build tests
-        run: clojure -M:selfparity.test.build
+        run: clojure -M:closure:selfparity.test.build
 
       - name: Run tests
         run: |
@@ -241,7 +241,7 @@ jobs:
             ${{ runner.os }}-${{ env.cache-name }}-
 
       - name: Run tests
-        run: clojure -M:compiler.test:compiler.test.run
+        run: clojure -M:closure:compiler.test:compiler.test.run
 
   # Compiler Windows Tests
   compiler-windows-test:
@@ -260,7 +260,7 @@ jobs:
           cli: '1.10.1.763'
 
       - name: Run tests
-        run: clojure -M:compiler.test:compiler.test.run
+        run: clojure -M:closure:compiler.test:compiler.test.run
         shell: powershell
 
   # CLI Tests
@@ -307,5 +307,5 @@ jobs:
       - name: Run tests
         run: |
           unset JAVA_TOOL_OPTIONS
-          clojure -M:cli.test.run | tee test-out.txt
+          clojure -M:closure:cli.test.run | tee test-out.txt
           grep -qxF '0 failures, 0 errors.' test-out.txt

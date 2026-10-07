@@ -18,7 +18,6 @@
                      [cljs.analyzer.passes.and-or :as and-or]
                      [cljs.analyzer.passes.lite :as lite]
                      [cljs.env :as env :refer [ensure]]
-                     [cljs.externs :as externs]
                      [cljs.js-deps :as deps]
                      [cljs.tagged-literals :as tags]
                      [cljs.util :as util :refer [ns->relpath topo-sort]]
@@ -2875,7 +2874,8 @@ x                          (not (contains? ret :info)))
                  (when (and (string/starts-with? dep-name "goog.")
                             (not= :esm (:module-format opts)))
                    #?(:clj (let [js-lib (get idx dep-name)
-                                 ns (externs/analyze-goog-file (:file js-lib) (symbol dep-name))]
+                                 ns ((requiring-resolve 'cljs.externs/analyze-goog-file)
+                                     (:file js-lib) (symbol dep-name))]
                              (swap! env/*compiler* update-in [::namespaces dep] merge ns)))))
                #?(:clj  (if-some [src (locate-src dep)]
                           (analyze-file src opts)

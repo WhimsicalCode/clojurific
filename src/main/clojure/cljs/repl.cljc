@@ -22,7 +22,6 @@
             [cljs.analyzer.api :as ana-api]
             [cljs.env :as env]
             [cljs.js-deps :as deps]
-            [cljs.closure :as cljsc]
             [cljs.source-map :as sm])
   (:import [java.io File PushbackReader FileWriter PrintWriter]
            [java.net URL]
@@ -30,6 +29,13 @@
            [java.util.concurrent.atomic AtomicLong]
            [clojure.lang IExceptionInfo]
            [java.util.regex Pattern]))
+
+(defn- cljsc
+  "The var named sym of cljs.closure, loaded on first use: ES module builds
+  (cljs.esm) use this namespace's macros without the Closure Compiler on the
+  classpath."
+  [sym]
+  (requiring-resolve (symbol "cljs.closure" (name sym))))
 
 (def ^:dynamic *cljs-verbose* false)
 (def ^:dynamic *repl-opts* nil)
@@ -215,7 +221,7 @@
     (let [sb (StringBuffer.)]
       (doseq [source sources]
         (with-open [rdr (io/reader (:url source))]
-          (.append sb (cljsc/add-dep-string opts source))))
+          (.append sb ((cljsc 'add-dep-string) opts source))))
       (when (:repl-verbose opts)
         (println (.toString sb)))
       (-evaluate repl-env "<cljs repl>" 1 (.toString sb)))
@@ -227,7 +233,7 @@
   "Compile and load the cljs.loader namespace if it's present in `sources`."
   [repl-env sources opts]
   (when-let [source (first (filter #(= (:ns %) 'cljs.loader) sources))]
-    (cljsc/compile-loader sources opts)
+    ((cljsc 'compile-loader) sources opts)
     (load-sources repl-env [source] opts)))
 
 (defn load-namespace
@@ -241,11 +247,11 @@
                    (when-not (ana/node-module-dep? ns)
                      (let [input (ns->input ns opts)]
                        (if (compilable? input)
-                         (->> (cljsc/compile-inputs [input]
+                         (->> ((cljsc 'compile-inputs) [input]
                                 (merge (env->opts repl-env) opts))
                            (remove (comp #{["goog"]} :provides)))
-                         (map #(cljsc/source-on-disk opts %)
-                              (cljsc/add-js-sources [input] opts))))))]
+                         (map #((cljsc 'source-on-disk) opts %)
+                              ((cljsc 'add-js-sources) [input] opts))))))]
      (when (:repl-verbose opts)
        (println (str "load-namespace " ns " , compiled:") (map :provides sources)))
      (load-sources repl-env sources opts)
@@ -524,9 +530,9 @@
            ast (if-not (#{:ns :ns*} (:op ast))
                  ast
                  (let [ijs (ana/parse-ns [form])]
-                   (cljsc/handle-js-modules opts
+                   ((cljsc 'handle-js-modules) opts
                      (deps/dependency-order
-                       (cljsc/add-dependency-sources [ijs] opts))
+                       ((cljsc 'add-dependency-sources) [ijs] opts))
                      env/*compiler*)
                    (binding [ana/*check-alias-dupes* false]
                      (ana/no-warn (->ast form))))) ;; need new AST after we know what the modules are - David
@@ -603,15 +609,15 @@
                   (.exists (io/file f)) (io/file f)
                   :else (io/resource f))
             compiled (binding [ana/*reload-macros* true]
-                       (cljsc/handle-js-modules opts
+                       ((cljsc 'handle-js-modules) opts
                          (deps/dependency-order
-                           (cljsc/add-dependency-sources [(ana/parse-ns src)] opts))
+                           ((cljsc 'add-dependency-sources) [(ana/parse-ns src)] opts))
                          env/*compiler*)
-                       (cljsc/compile src
+                       ((cljsc 'compile) src
                          (assoc opts
                            ;; need to set opts to nil here so that we don't 
                            ;; double up output-dir
-                           :output-file (cljsc/src-file->target-file src nil)
+                           :output-file ((cljsc 'src-file->target-file) src nil)
                            :force true
                            :mode :interactive)))]
         ;; copy over the original source file if source maps enabled
@@ -623,9 +629,9 @@
         ;; need to load dependencies first
         (let [sources (load-dependencies repl-env (:requires compiled) opts)]
           (load-cljs-loader repl-env (conj sources compiled) opts))
-        (-evaluate repl-env f 1 (cljsc/add-dep-string opts compiled))
+        (-evaluate repl-env f 1 ((cljsc 'add-dep-string) opts compiled))
         (-evaluate repl-env f 1
-          (cljsc/src-file->goog-require src
+          ((cljsc 'src-file->goog-require) src
             {:wrap true :reload true :macros-ns (:macros-ns compiled)})))
       (binding [ana/*cljs-ns* ana/*cljs-ns*]
         (let [res (if (= File/separatorChar (first f)) f (io/resource f))]
@@ -1025,11 +1031,11 @@
 
 (defn maybe-install-npm-deps [opts]
   (when (:install-deps opts)
-    (cljsc/check-npm-deps opts)
+    ((cljsc 'check-npm-deps) opts)
     (swap! env/*compiler* update-in [:npm-deps-installed?]
       (fn [installed?]
         (if-not installed?
-          (cljsc/maybe-install-node-deps! opts)
+          ((cljsc 'maybe-install-node-deps!) opts)
           installed?)))))
 
 (defn initial-prompt [quit-prompt prompt]
@@ -1065,7 +1071,7 @@
   (when (and (find-ns 'clojure.tools.reader)
              (not (find-ns 'cljs.vendor.bridge)))
     (require 'cljs.vendor.bridge))
-  (doseq [[unknown-opt suggested-opt] (util/unknown-opts (set (keys opts)) (set/union known-repl-opts cljsc/known-opts))]
+  (doseq [[unknown-opt suggested-opt] (util/unknown-opts (set (keys opts)) (set/union known-repl-opts @(cljsc 'known-opts)))]
     (when suggested-opt
       (println (str "WARNING: Unknown option '" unknown-opt "'. Did you mean '" suggested-opt "'?"))))
   (when (true? fast-initial-prompt?)
@@ -1078,7 +1084,7 @@
          :or   {warn-on-undeclared true}}
         (merge
           {:def-emits-var true}
-          (cljsc/add-implicit-options
+          ((cljsc 'add-implicit-options)
             (merge-with (fn [a b] (if (nil? b) a b))
               repl-opts
               opts
@@ -1202,7 +1208,7 @@
                                (let [log-out (FileWriter. log-file)]
                                  (binding [*err* log-out
                                            *out* log-out]
-                                   (cljsc/watch src (dissoc opts :watch)
+                                   ((cljsc 'watch) src (dissoc opts :watch)
                                      env/*compiler* done?)))
                                (catch Throwable e
                                  (caught e repl-env opts)))))))))

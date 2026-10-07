@@ -2,7 +2,7 @@
 
 `:module-format :esm` compiles every namespace to an ES module. Bundling,
 minification, npm and TypeScript are left to standard JavaScript tooling
-(Vite / Rolldown). The Closure Compiler isn't run, and externs aren't needed.
+(Vite / Rolldown). The Closure Compiler isn't run, and isn't on the classpath.
 
 Status: experimental. The ClojureScript runtime test suite passes, and the
 Whimsical app (3037 namespaces) compiles, bundles and boots in both production
@@ -66,6 +66,20 @@ remove the output directory after changing a macro library.
 Macros reading classpath resources call `cljs.esm/watch-resource!`, the watcher
 then recompiles the namespace when the resource changes. `shadow.resource` is
 provided for code written for shadow-cljs.
+
+### Dependencies
+
+`deps.edn` has the fork's dependencies, which don't include the Closure
+Compiler (`com.google.javascript/closure-compiler`): `cljs.esm`, its REPL and
+the analyzer (`cljs.analyzer.api`) don't need it. The classic compiler
+(`cljs.closure`, `cljs.build.api`, `cljs.main` and the classic REPLs) does, and
+fails with a `ClassNotFoundException` for `com.google.javascript.jscomp` classes
+without it: add the `:closure` alias, i.e.
+`clojure -M:closure:compiler.test:compiler.test.run` for the compiler tests.
+`cljs.repl` loads `cljs.closure` on first use, so namespaces requiring
+`cljs.repl` (its macros) compile without it.
+`pom.template.xml` and `project.clj` are upstream's publishing setup, and still
+list the Closure Compiler.
 
 ### Vite
 
@@ -272,6 +286,23 @@ disabled, dependencies are imports. Members are resolved per reference, a shim
 is used if it exports the member, otherwise the Closure Library. Its direct
 `eval` calls (`goog.json.parse`, base.js' module loader) are made indirect: a
 direct eval keeps minifiers from renaming the top level of the chunk it's in.
+
+### Externs
+
+Externs aren't needed: `:externs` and `:infer-externs` aren't used by
+`cljs.esm`. The analyzer still reads the types of JavaScript's standard and
+browser APIs from Closure's default externs, i.e. `isNaN` returns a boolean,
+so `(if (js/isNaN x) ...)` compiles to `if(isNaN(x))` rather than a
+`cljs.core.truth_` call. A build without `:externs-sources` (all `cljs.esm`
+builds) reads them from `cljs/externs/default.edn`, the map
+`cljs.externs/externs-map` parses, without docs and source locations
+(`cljs.analyzer.api/resolve-extern`'s `:info` has no `:doc`). Only builds with
+`:externs-sources` (the classic compiler's, with `:infer-externs`) parse
+externs with the Closure Compiler.
+
+`script/gen-default-externs` regenerates the file, run it after updating
+the Closure Compiler. The `compiler` suite of the monorepo's
+`clojurescript.yml` fails when the file is out of date.
 
 ### Hot reloading
 

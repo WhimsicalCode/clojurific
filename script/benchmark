@@ -3,7 +3,7 @@
 rm -rf builds/out-simp-bench
 mkdir -p builds/out-simp-bench
 
-clojure -M:benchmark.build
+clojure -M:closure:benchmark.build
 
 if [ "$V8_HOME" = "" ]; then
   echo "V8_HOME not set, skipping V8 benchmarks"

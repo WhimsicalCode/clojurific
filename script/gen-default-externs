@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# Writes src/main/clojure/cljs/externs/default.edn from the Closure Compiler's
+# default externs, see script/gen_default_externs.clj. Run it after updating
+# com.google.javascript/closure-compiler in deps.edn.
+
+cd "$(dirname "$0")/.." || exit 1
+
+exec clojure -M:closure script/gen_default_externs.clj
