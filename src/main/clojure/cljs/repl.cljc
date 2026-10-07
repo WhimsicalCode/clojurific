@@ -35,7 +35,8 @@
   (cljs.esm) use this namespace's macros without the Closure Compiler on the
   classpath."
   [sym]
-  (requiring-resolve (symbol "cljs.closure" (name sym))))
+  (require 'cljs.closure)
+  (resolve (symbol "cljs.closure" (name sym))))
 
 (def ^:dynamic *cljs-verbose* false)
 (def ^:dynamic *repl-opts* nil)

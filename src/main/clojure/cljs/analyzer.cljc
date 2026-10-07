@@ -2874,8 +2874,9 @@ x                          (not (contains? ret :info)))
                  (when (and (string/starts-with? dep-name "goog.")
                             (not= :esm (:module-format opts)))
                    #?(:clj (let [js-lib (get idx dep-name)
-                                 ns ((requiring-resolve 'cljs.externs/analyze-goog-file)
-                                     (:file js-lib) (symbol dep-name))]
+                                 ns (do (require 'cljs.externs)
+                                        ((resolve 'cljs.externs/analyze-goog-file)
+                                         (:file js-lib) (symbol dep-name)))]
                              (swap! env/*compiler* update-in [::namespaces dep] merge ns)))))
                #?(:clj  (if-some [src (locate-src dep)]
                           (analyze-file src opts)

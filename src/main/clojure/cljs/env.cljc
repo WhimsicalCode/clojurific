@@ -58,8 +58,9 @@ state that is accessed/maintained by many different components."}
      :cljs.analyzer/data-readers   {}
      :cljs.analyzer/externs        #?(:clj  (if (empty? (:externs-sources options))
                                                @default-externs
-                                               ((requiring-resolve 'cljs.externs/externs-map)
-                                                (:externs-sources options)))
+                                               (do (require 'cljs.externs)
+                                                   ((resolve 'cljs.externs/externs-map)
+                                                    (:externs-sources options))))
                                       :cljs nil)
      :options                      options}
     #?@(:clj [(when (and (= :nodejs (:target options))
