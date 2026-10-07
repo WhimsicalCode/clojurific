@@ -74,8 +74,10 @@ Compiler (`com.google.javascript/closure-compiler`): `cljs.esm`, its REPL and
 the analyzer (`cljs.analyzer.api`) don't need it. The classic compiler
 (`cljs.closure`, `cljs.build.api`, `cljs.main` and the classic REPLs) does, and
 fails with a `ClassNotFoundException` for `com.google.javascript.jscomp` classes
-without it: add the `:closure` alias, i.e.
-`clojure -M:closure:compiler.test:compiler.test.run` for the compiler tests.
+without it: add the `:closure` alias to every alias running them, i.e.
+`clojure -M:closure:compiler.test:compiler.test.run` for the compiler tests,
+`clojure -M:closure:cljs-repl` for `cljs.main`'s Node.js REPL (`:cljs-brepl`
+and `:cljs-lite-repl` too).
 `cljs.repl` loads `cljs.closure` on first use, so namespaces requiring
 `cljs.repl` (its macros) compile without it.
 `pom.template.xml` and `project.clj` are upstream's publishing setup, and still
@@ -298,7 +300,9 @@ builds) reads them from `cljs/externs/default.edn`, the map
 `cljs.externs/externs-map` parses, without docs and source locations
 (`cljs.analyzer.api/resolve-extern`'s `:info` has no `:doc`). Only builds with
 `:externs-sources` (the classic compiler's, with `:infer-externs`) parse
-externs with the Closure Compiler.
+externs with the Closure Compiler. The classic REPLs (`cljs.main`,
+`cljs.repl/repl`, `cljs.server.*`) don't set `:externs-sources` either, so
+they get the same map: `(doc js/isNaN)` prints no JSDoc text.
 
 `script/gen-default-externs` regenerates the file, run it after updating
 the Closure Compiler. The `compiler` suite of the monorepo's
