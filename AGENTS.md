@@ -71,12 +71,20 @@ the release date (`[YYYY-MM-DD]`) and start a new `[Next]` release with the next
 
 ## Releasing
 
-`.github/workflows/release.yml` stages the npm package when a GitHub release is published, with
-npm's trusted publishing (no token) and provenance, and deploys the Clojars artifact (the
-`CLOJARS_USERNAME` and `CLOJARS_DEPLOY_TOKEN` secrets), which is public right away. Date the version in `CHANGELOG.md`, then create
-the release with a tag matching `src/main/js/package.json`'s version:
-`gh release create v0.12.2 --repo WhimsicalCode/clojurific --target main`. The workflow runs
+`.github/workflows/release.yml` releases when a GitHub release is published. Date the version in
+`CHANGELOG.md`, then create the release from `main` with a tag matching
+`src/main/js/package.json`'s version:
+`gh release create v0.12.2 --repo WhimsicalCode/clojurific --target main`.
+
+The workflow checks that the commit is on `main` and that the tag and the changelog match, runs
 `script/test-esm`, `script/test-launcher` and `script/test-clojars` on Linux (Java 17 and 25) and
-macOS after checking the tag and the changelog, then stages the npm package and deploys to Clojars. A maintainer then approves the staged
-version with 2FA (`npm stage list clojurific`, `npm stage approve <id>`, or on npmjs.com) to publish
-it. Then start the next `[Next]` release and bump the version. Only release when the user asks.
+macOS, then:
+
+- deploys the Clojars artifact in the `release` environment, whose required reviewer approves the
+  deployment and which holds the `CLOJARS_USERNAME` and `CLOJARS_DEPLOY_TOKEN` secrets. It's public
+  right away, Clojars has no staging.
+- stages the npm package with npm's trusted publishing (no token) and provenance. A maintainer
+  approves the staged version with 2FA (`npm stage list clojurific`, `npm stage approve <id>`, or on
+  npmjs.com) to publish it.
+
+Then start the next `[Next]` release and bump the version. Only release when the user asks.

@@ -4,15 +4,17 @@ name: Release
 #
 #   gh release create v0.12.2 --repo WhimsicalCode/clojurific --target main --notes-file notes.md
 #
-# The release's tag must match src/main/js/package.json's version, and
-# CHANGELOG.md must date it. After the tests:
+# The release's commit must be on main, its tag must match
+# src/main/js/package.json's version, and CHANGELOG.md must date it. After the
+# tests:
 # - npm: stages the package clojurific with trusted publishing (GitHub's OIDC
 #   token, configured in the package's settings on npmjs.com for this
 #   workflow) and provenance, no npm token. A maintainer approves the staged
 #   version with 2FA (npm stage approve <id>, or on npmjs.com) to publish it.
-# - Clojars: deploys com.whimsical/clojurific with the CLOJARS_USERNAME and
-#   CLOJARS_DEPLOY_TOKEN secrets. Clojars has no staging, the version is public
-#   right away.
+# - Clojars: deploys com.whimsical/clojurific in the release environment, whose
+#   required reviewer approves the deployment and which holds the
+#   CLOJARS_USERNAME and CLOJARS_DEPLOY_TOKEN secrets. Clojars has no staging,
+#   the version is public right away.
 
 on:
   release:
@@ -29,12 +31,19 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
 
       - name: Check the version
         id: version
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
+          git fetch --quiet --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::The release's commit $GITHUB_SHA isn't on main"
+            exit 1
+          fi
           version=$(node -p "require('./src/main/js/package.json').version")
           if [ "$TAG" != "v$version" ]; then
             echo "::error::The release's tag $TAG doesn't match package.json's version $version"
@@ -137,6 +146,7 @@ jobs:
   clojars:
     needs: [check, test]
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
