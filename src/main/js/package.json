@@ -24,7 +24,7 @@
     "cljf/resolver/clojurific",
     "vite-plugin-cljs",
     "karma-esm",
-    "compiler"
+    "no-clojurescript"
   ],
   "engines": {
     "node": ">=20"

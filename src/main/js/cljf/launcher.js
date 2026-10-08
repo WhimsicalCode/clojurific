@@ -21,11 +21,18 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 
 export const version = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
 
-// The compiler's sources: compiler/ in the npm package, the fork itself
-// (src/main/js is the package's root) when run from its repository
-export const compilerDir = existsSync(path.join(packageRoot, 'compiler', 'deps.edn'))
-  ? path.join(packageRoot, 'compiler')
-  : path.resolve(packageRoot, '../../..');
+// Whether this is the npm package, which has no-clojurescript/, rather than
+// the fork's repository (src/main/js is the package's root)
+const packaged = existsSync(path.join(packageRoot, 'no-clojurescript', 'deps.edn'));
+
+// The fork's repository, its compiler's sources, when run from it
+export const compilerDir = packaged ? null : path.resolve(packageRoot, '../../..');
+
+// The compiler: the npm package's version from Clojars (com.whimsical/clojurific
+// is released with the package), or the fork's sources
+export const compiler = packaged ? { ':mvn/version': version } : { ':local/root': compilerDir };
+
+const noClojureScript = path.join(packaged ? packageRoot : compilerDir, 'no-clojurescript');
 
 const log = line => process.stderr.write(`${line}\n`);
 
@@ -37,7 +44,7 @@ export function normalizeAliases(aliases = []) {
 
 function cacheKey(aliases) {
   return createHash('sha256')
-    .update(JSON.stringify({ version, compiler: compilerDir, aliases }))
+    .update(JSON.stringify({ version, compiler, aliases }))
     .digest('hex')
     .slice(0, 32);
 }
@@ -75,8 +82,8 @@ async function resolve({ project, aliases, java, cache, env, log }) {
   const output = `${cache}.resolve.json`;
   await fs.writeFile(input, edn({
     ':aliases': aliases,
-    ':compiler': { ':local/root': compilerDir },
-    ':no-clojurescript': { ':local/root': path.join(compilerDir, 'no-clojurescript') },
+    ':compiler': compiler,
+    ':no-clojurescript': { ':local/root': noClojureScript },
     ':output': output,
   }));
   log('cljf: resolving dependencies');

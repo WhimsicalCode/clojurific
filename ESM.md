@@ -162,9 +162,10 @@ the Vite dev server's modules when serving, the hashed chunks of a build.
 
 ### Launcher
 
-`src/main/js` is the npm package `clojurific` (`script/package-npm` packs it,
-adding the compiler's sources as `compiler/`): the `cljf` command, the Vite
-plugin (`clojurific/vite`) and the Karma adapter (`clojurific/karma`). Its
+`src/main/js` is the npm package `clojurific` (`script/package-npm` packs it):
+the `cljf` command, the Vite plugin (`clojurific/vite`) and the Karma adapter
+(`clojurific/karma`). It has no compiler: the launcher gets the Clojars artifact
+of the package's version, run from the repository it uses the fork's sources. Its
 launcher (`src/main/js/cljf`) needs Java and Node.js, not the Clojure CLI:
 
 ```sh
@@ -175,8 +176,8 @@ npx cljf setup-java     # downloads Eclipse Temurin, for machines without Java
 ```
 
 It resolves the project's `deps.edn` (and the user's, as the Clojure CLI does)
-with tools.deps, adding the compiler (`com.whimsical/clojurific`, unless the
-project lists it itself, e.g. as a git dependency) and replacing every
+with tools.deps, adding the compiler (`com.whimsical/clojurific` from Clojars,
+unless the project lists it itself, e.g. as a git dependency) and replacing every
 `org.clojure/clojurescript` with `no-clojurescript/`, then runs
 `clojure.main -m cljs.esm` with the aliases' `:jvm-opts`. Dependencies are
 downloaded into the local Maven repository (`~/.m2/repository`, or

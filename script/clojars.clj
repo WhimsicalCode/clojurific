@@ -1,7 +1,7 @@
-;; The Clojars artifact com.whimsical/clojurific: the compiler's sources, as in
-;; the npm package's compiler/ (script/package-npm), with a pom of the fork's
-;; dependencies without test.check and with a current Clojure. Its version is
-;; the npm package's. Run by script/clojars:
+;; The Clojars artifact com.whimsical/clojurific: the compiler's sources, with
+;; a pom of the fork's dependencies without test.check and with a current
+;; Clojure. Its version is the npm package's, whose launcher depends on it.
+;; Run by script/clojars:
 ;;
 ;;   jar             writes builds/clojars/clojurific-<version>.jar and its pom
 ;;   install <repo>  installs the jar into the local Maven repository <repo>

@@ -97,7 +97,8 @@ jobs:
         run: script/test-clojars
 
   npm:
-    needs: [check, test]
+    # the package gets the compiler from Clojars
+    needs: [check, test, clojars]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

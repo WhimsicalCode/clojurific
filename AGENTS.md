@@ -12,15 +12,15 @@ namespaces stay `cljs.*`, so libraries written for ClojureScript work unchanged.
   and its browser runtime
 - `src/main/cljs/cljs/esm/` — runtime support: `goog.js`, `lazy`, `node_test`, `karma`
 - `src/main/js/` — the npm package `clojurific` (its `package.json`); `script/package-npm` packs it
-  with the compiler's sources as `compiler/`
+  with `no-clojurescript/`. It has no compiler: the launcher gets `com.whimsical/clojurific` of its
+  version from Clojars, or the fork's sources when run from this repository
 - `src/main/js/vite-plugin-cljs/` — the Vite plugin
 - `src/main/js/cljf/` — the `cljf` launcher (Node.js built-ins only, no npm dependencies): finding
   and installing Java (`java.js`), downloading the resolver's jars (`bootstrap.js`), the cached
   classpath and the compiler command (`launcher.js`), the resolver run with tools.deps
   (`resolver/clojurific/resolve.clj`), and its tests (`test/`)
-- `script/package-npm`, `script/clojars` (`clojars.clj`) — the npm package and the Clojars artifact
-  (`com.whimsical/clojurific`, the compiler's sources and a pom), both with the version
-  `script/stamp-version` sets in the compiler's sources
+- `script/clojars` (`clojars.clj`) — the Clojars artifact `com.whimsical/clojurific`: the
+  compiler's sources, with the version `script/stamp-version` sets in them, and a pom
 - `no-clojurescript/` — an empty project replacing stock ClojureScript (`org.clojure/clojurescript`)
   through `:override-deps`
 - `src/test/clojure/cljs/esm_build_tests.clj`, `esm_repl_tests.clj` — build and REPL tests

@@ -2,7 +2,7 @@
 
 # script/stamp-version <dir> <version>: Sets the compiler's version in a copy of
 # its sources (<dir>/clojure, <dir>/cljs), as upstream's script/build does in
-# its releases, for the npm package and the Clojars jar. Unset, the version is
+# its releases, for the Clojars jar. Unset, the version is
 # a hash of the sources, which needs them to be files, not in a jar.
 #
 # The version is 1.<minor>.clojurific-<version> (1.12.clojurific-0.12.2):

@@ -5,8 +5,9 @@ ClojureScript compiled to ES modules, bundled by Vite.
 [Clojurific](https://github.com/WhimsicalCode/clojurific) is a fork of
 ClojureScript whose `:module-format :esm` compiles every namespace to an ES
 module, leaving bundling, minification, npm packages and TypeScript to Vite,
-without the Google Closure Compiler. This package has the compiler, the `cljf`
-command, a Vite plugin with hot reloading, and a Karma adapter. It needs
+without the Google Closure Compiler. This package has the `cljf` command, a
+Vite plugin with hot reloading, and a Karma adapter; `cljf` gets the compiler,
+`com.whimsical/clojurific`, from Clojars. It needs
 Node.js 20 or later and Java 17 or later, not the Clojure CLI.
 
 Status: experimental. Versions are `0.<minor>.<release>`: `<minor>` is the

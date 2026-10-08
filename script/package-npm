@@ -2,37 +2,21 @@
 
 # Assembles the npm package clojurific in builds/npm and packs it into
 # builds/clojurific-<version>.tgz: src/main/js (the cljf launcher, the Vite
-# plugin and the Karma adapter, see its package.json) and the compiler's
-# sources in compiler/, with their deps.edn. The package has no jars, the
-# launcher resolves them with the project's dependencies.
+# plugin and the Karma adapter, see its package.json) and no-clojurescript/.
+# The package has no compiler and no jars: the launcher resolves the Clojars
+# artifact com.whimsical/clojurific of the package's version (script/clojars)
+# with the project's dependencies.
 
 set -e
 cd "$(dirname "$0")/.."
 
 out=builds/npm
 rm -rf "$out"
-mkdir -p "$out/compiler/src/main"
+mkdir -p "$out"
 
 cp -R src/main/js/. "$out"
 rm -rf "$out/cljf/test" "$out/cljf/resolver/.cpcache"
+cp -R no-clojurescript "$out/"
 cp epl-v10.html "$out/LICENSE.html"
-
-cp -R src/main/clojure src/main/cljs "$out/compiler/src/main/"
-script/stamp-version "$out/compiler/src/main" "$(node -p "require('./src/main/js/package.json').version")"
-cp -R no-clojurescript "$out/compiler/"
-# The fork's dependencies without test.check (only its tests use it), with a
-# current Clojure. A project's own Clojure version wins.
-clojure -M -e "
-(require 'clojure.pprint)
-(let [deps (:deps (clojure.edn/read-string (slurp \"deps.edn\")))]
-  (binding [*print-namespace-maps* false]
-    (spit \"$out/compiler/deps.edn\"
-      (with-out-str
-        (clojure.pprint/pprint
-          {:paths [\"src/main/clojure\" \"src/main/cljs\"]
-           :deps  (into (sorted-map)
-                    (-> deps
-                        (dissoc 'org.clojure/test.check)
-                        (assoc 'org.clojure/clojure {:mvn/version \"1.12.6\"})))})))))"
 
 npm pack --silent --pack-destination builds "./$out"

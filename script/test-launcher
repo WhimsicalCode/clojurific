@@ -3,7 +3,10 @@
 # Tests the cljf launcher (src/main/js/cljf, with Node.js' test runner), then
 # the npm package: packs it with script/package-npm, installs it into an empty
 # project, builds a namespace with npx cljf, and bundles a page loading its
-# source with Vite and the plugin. CLJF_TEST_DOWNLOADS=1 also
+# source with Vite and the plugin. The package gets the compiler from Clojars:
+# the project's local Maven repository has the jar of this version
+# (script/clojars install), and downloads the rest (about 20 MB).
+# CLJF_TEST_DOWNLOADS=1 also
 # tests a start with an empty local Maven repository, see
 # src/main/js/cljf/test/launcher.test.js.
 
@@ -17,13 +20,15 @@ version=$(node -p "require('./builds/npm/package.json').version")
 project=$(mktemp -d)
 trap 'rm -rf "$project"' EXIT
 mkdir -p "$project/src/smoke"
-printf '{:paths ["src"]}\n' > "$project/deps.edn"
+script/clojars install "$project/m2"
+printf '{:paths ["src"] :mvn/local-repo "%s"}\n' "$project/m2" > "$project/deps.edn"
 printf '(ns smoke.core)\n(println "smoke" (+ 1 2))\n' > "$project/src/smoke/core.cljs"
 (
   cd "$project"
   npm init -y > /dev/null
   npm pkg set type=module
   npm install --silent --no-audit --no-fund vite@8.2.2 "$OLDPWD/builds/clojurific-$version.tgz"
+  npx cljf classpath | tr ':' '\n' | grep -qx "$project/m2/com/whimsical/clojurific/$version/clojurific-$version.jar"
   npx cljf build '{:main smoke.core :output-dir "out"}'
   output=$(node out/smoke/core.js)
   test "$output" = "smoke 3"
