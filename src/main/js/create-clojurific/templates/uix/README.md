@@ -1,0 +1,18 @@
+# {{name}}
+
+A ClojureScript app compiled by [Clojurific](https://github.com/WhimsicalCode/clojurific)
+and bundled by [Vite](https://vite.dev).
+
+- `npm run dev` starts the dev server, which hot reloads changed namespaces
+- `npm run repl` starts a ClojureScript REPL evaluating in the pages the dev
+  server runs (start `npm run dev` and open the page first)
+- `npm run build` bundles the app into `dist/`
+- `npm run preview` serves the bundle
+
+The app is `src/{{nsDir}}/core.cljs`. ClojureScript dependencies go in
+`deps.edn`, npm packages in `package.json`. The compiler needs Java 17 or
+later: `npx cljf setup-java` downloads one.
+
+Editors connect to the dev server's nREPL server, its port in `.nrepl-port`
+(i.e. Calva's "Connect to a running REPL", CIDER's `cider-connect-clj`), and
+evaluate `(cljs.esm.repl/repl)` to switch the session to ClojureScript.

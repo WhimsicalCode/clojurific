@@ -1906,16 +1906,23 @@
              {:ns ns-name :dep dep :clojure.error/phase :compilation}))))))
 
 #?(:clj
+   (defn esm-preloads
+     "The namespaces main namespace ns-name imports first: the :preloads, and
+     under :esm-repl the REPL runtime. Main namespaces are :main's and
+     :extra-main's."
+     [ns-name {:keys [main extra-main preloads esm-repl]}]
+     (let [mains (set (map symbol (concat (cond (coll? main) main main [main]) extra-main)))]
+       (when (and (contains? mains ns-name)
+                  (not (some #{ns-name} (map symbol preloads))))
+         (cond->> preloads esm-repl (cons esm-repl-runtime))))))
+
+#?(:clj
    (defn- emit-esm-preloads
      "Main namespaces import the :preloads first, ES modules evaluate their
      imports in order."
      [ns-name]
-     (let [{:keys [main preloads esm-repl]} (:options @env/*compiler*)
-           mains (set (map symbol (cond (coll? main) main main [main])))]
-       (when (and (contains? mains ns-name)
-                  (not (some #{ns-name} (map symbol preloads))))
-         (doseq [preload (cond->> preloads esm-repl (cons esm-repl-runtime))]
-           (emitln "import \"" (esm-ns-path ns-name preload) "\";"))))))
+     (doseq [preload (esm-preloads ns-name (:options @env/*compiler*))]
+       (emitln "import \"" (esm-ns-path ns-name preload) "\";"))))
 
 #?(:clj (declare emit-esm-ns-import))
 
@@ -2214,11 +2221,24 @@
     (emitln "});")
     (emit body)))
 
+(defn- esm-js-path
+  "The JavaScript path of a js/ global, or of fields read from one:
+  (.. js/my -ns -foo) is my.ns.foo. nil for anything else."
+  [{:keys [op field target] var-name :name}]
+  (case op
+    :js-var     (when (= "js" (namespace var-name)) (name var-name))
+    :host-field (some-> (esm-js-path target) (str "." (munge field #{})))
+    nil))
+
 (defn emit-dot
-  [{:keys [target field method args env]}]
+  [{:keys [target field method args env] :as ast}]
   (emit-wrap env
     (if field
-      (emits target "." (munge field #{}))
+      ;; namespaces read as JavaScript globals' fields, i.e.
+      ;; (.. js/cljs -core -PersistentArrayMap -EMPTY), as js/my.ns.foo
+      (if-some [ref (when *esm-emitting* (some-> (esm-js-path ast) esm-js-ns-ref))]
+        (emits ref)
+        (emits target "." (munge field #{})))
       (emits target "." (munge method #{}) "("
         (comma-sep args)
         ")"))))

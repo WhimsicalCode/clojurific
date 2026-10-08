@@ -16,6 +16,9 @@ counts Clojurific's releases, starting from 1.
 
 ## Usage
 
+`npm create clojurific@latest` scaffolds a project (Vanilla, Reagent or UIx)
+like the one below, installs it and starts the dev server.
+
 Dependencies and source paths come from the project's `deps.edn`:
 
 ```clojure
@@ -50,7 +53,13 @@ or with the command line:
 npx cljf build '{:main my.app :output-dir "out"}'
 npx cljf -A:test watch @cljs.edn
 npx cljf classpath
+npx cljf repl
 ```
+
+`cljf repl` is a ClojureScript REPL evaluating in the pages the dev server
+runs, through its nREPL server: `cljs({ outputDir: 'target/cljs',
+compilerOptions: { repl: { 'nrepl-port': 0 } } })` with `nrepl/nrepl` in
+`deps.edn`.
 
 `cljf` resolves `deps.edn` with tools.deps, adds the compiler, and removes
 stock ClojureScript (`org.clojure/clojurescript`) that libraries depend on.

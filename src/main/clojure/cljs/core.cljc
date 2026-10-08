@@ -1148,6 +1148,19 @@
     (bool-expr (core/list 'js* "(typeof ~{} !== 'undefined')"
                  (vary-meta x assoc :cljs.analyzer/no-resolve true)))
 
+    ;; nor are npm modules, imported bindings: check the properties read
+    ;; through them (react/a.b checks react/a, then react/a.b)
+    (core/and (core/symbol? x)
+              (core/not= "js" (namespace x))
+              (= :esm (:module-format (cljs.analyzer/compiler-options)))
+              (core/not (contains? (:locals &env) x))
+              (:foreign (cljs.analyzer/resolve-var &env x)))
+    (core/let [segs (string/split (name x) #"\.")
+               syms (map #(symbol (namespace x) (string/join "." %))
+                      (reverse (take (count segs) (iterate butlast segs))))]
+      (bool-expr (concat (core/list 'js* (string/join " && " (repeat (count segs) "(typeof ~{} !== 'undefined')")))
+                   syms)))
+
     (core/symbol? x)
     (core/let [x     (core/cond-> (:name (cljs.analyzer/resolve-var &env x))
                        (= "js" (namespace x)) name)

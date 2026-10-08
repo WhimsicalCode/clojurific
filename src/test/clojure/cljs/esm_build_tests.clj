@@ -113,6 +113,20 @@
     (is (= {"test.f" "test/f.js" "test.g" "test/g.js"}
            (get (json/read-str (slurp (io/file dir "out" "cljs-esm.json"))) "main")))))
 
+(deftest extra-main-namespaces-import-the-preloads
+  (let [dir     (temp-dir)
+        ms      (- (System/currentTimeMillis) 60000)
+        sources (into {} [(write-source! dir 'test.p "(ns test.p)" ms)
+                          (write-source! dir 'test.m "(ns test.m)" ms)
+                          (write-source! dir 'test.x "(ns test.x (:require [test.m]))" ms)])
+        build   #(binding [esm/*generated-sources* sources]
+                   (esm/build (merge {:preloads '[test.p] :output-dir (str (io/file dir "out"))} %)))]
+    (build {:main 'test.x})
+    (is (not (string/includes? (output dir 'test.m) "import \"./p.js\";")))
+    (testing "a namespace compiled before it was a main namespace, i.e. a page's script, is recompiled"
+      (build {:main 'test.x :extra-main '[test.m]})
+      (is (string/includes? (output dir 'test.m) "import \"./p.js\";")))))
+
 (deftest reuses-output-compiled-with-a-released-version
   (let [dir     (temp-dir)
         sources (into {} [(write-source! dir 'test.h "(ns test.h)" (- (System/currentTimeMillis) 60000))])]

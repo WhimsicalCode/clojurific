@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { LauncherError } from './errors.js';
 import { classpath, compilerCommand, findJava, setupJava, version } from './launcher.js';
+import { repl } from './repl.js';
 
 const usage = `Usage: cljf [options] <command> [arguments]
 
@@ -13,6 +14,9 @@ Commands:
                          and :profile keywords (defaults to :release)
   watch [options...]     compile, then recompile on changes (defaults to :dev)
   classpath              print the project's classpath
+  repl [--port <port>]   a ClojureScript REPL into the pages running the dev
+                         server's (or watch's) build, through its nREPL server
+                         (:repl {:nrepl-port 0}, port from .nrepl-port)
   setup-java [version]   download Eclipse Temurin (the latest LTS by default)
                          into cljf's cache, for machines without Java
 
@@ -71,6 +75,11 @@ async function main() {
     case 'classpath': {
       const cp = await classpath({ ...opts, java: findJava({ interactive, log }), log });
       console.log(cp.classpath.join(path.delimiter));
+      break;
+    }
+    case 'repl': {
+      const i = args.indexOf('--port');
+      process.exit(await repl({ port: i >= 0 ? Number(args[i + 1]) : undefined }));
       break;
     }
     case 'setup-java': {

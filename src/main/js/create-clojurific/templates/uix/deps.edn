@@ -1,0 +1,5 @@
+{:paths ["src"]
+ :deps {com.pitch/uix.core {:mvn/version "1.4.9"}
+        com.pitch/uix.dom {:mvn/version "1.4.9"}
+        ;; the dev server's nREPL server, for npm run repl and editors
+        nrepl/nrepl {:mvn/version "1.8.0"}}}

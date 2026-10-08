@@ -6,6 +6,10 @@
 # The package has no compiler and no jars: the launcher resolves the Clojars
 # artifact com.whimsical/clojurific of the package's version (script/clojars)
 # with the project's dependencies.
+#
+# Also packs create-clojurific (src/main/js/create-clojurific, npm create
+# clojurific), released with the same version, into
+# builds/create-clojurific-<version>.tgz.
 
 set -e
 cd "$(dirname "$0")/.."
@@ -15,8 +19,16 @@ rm -rf "$out"
 mkdir -p "$out"
 
 cp -R src/main/js/. "$out"
-rm -rf "$out/cljf/test" "$out/cljf/resolver/.cpcache"
+rm -rf "$out/cljf/test" "$out/cljf/resolver/.cpcache" "$out/create-clojurific"
 cp -R no-clojurescript "$out/"
 cp epl-v10.html "$out/LICENSE.html"
 
 npm pack --silent --pack-destination builds "./$out"
+
+create=builds/create-clojurific
+rm -rf "$create"
+cp -R src/main/js/create-clojurific "$create"
+rm -rf "$create/test"
+cp epl-v10.html "$create/LICENSE.html"
+
+npm pack --silent --pack-destination builds "./$create"

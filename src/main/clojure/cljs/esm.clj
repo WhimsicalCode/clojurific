@@ -336,6 +336,16 @@
   dependents of every namespace recompiled."
   nil)
 
+(defn- missing-preloads?
+  "Whether the output of namespace ns lacks the imports of the :preloads (and
+  the REPL runtime) it needs as a main namespace, compiled before it was one,
+  i.e. before a page loaded it."
+  [ns ^File dest opts]
+  (boolean
+    (when-let [preloads (and (.exists dest) (seq (comp/esm-preloads ns opts)))]
+      (let [out (slurp dest)]
+        (not-every? #(string/includes? out (str "import \"" (comp/esm-ns-path ns %) "\";")) preloads)))))
+
 (defn- compile-ns
   "Compiles a namespace if its output isn't up to date, or when a namespace
   it requires was recompiled with a different api. Up to date namespaces
@@ -344,7 +354,8 @@
   them concurrently."
   [{:keys [ns source-file requires]} opts]
   (let [dest   (output-file ns opts)
-        force? (and *api-changed* (some @*api-changed* (map symbol (remove string? requires))))
+        force? (or (and *api-changed* (some @*api-changed* (map symbol (remove string? requires))))
+                   (missing-preloads? ns dest opts))
         opts   (cond-> opts force? (assoc :force true))
         stale? (and *api-changed*
                     (or (:force opts) (comp/requires-compilation? source-file dest opts)))

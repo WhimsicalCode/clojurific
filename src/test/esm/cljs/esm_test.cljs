@@ -8,7 +8,8 @@
 
 (ns cljs.esm-test
   "Tests of behavior specific to :module-format :esm."
-  (:require [cljs.esm.lazy :as lazy]
+  (:require ["node:path" :as node-path]
+            [cljs.esm.lazy :as lazy]
             [cljs.test :refer-macros [async deftest is testing]]))
 
 (deftest test-hash-non-extensible-objects
@@ -20,6 +21,19 @@
       (is (= (hash sealed) (hash sealed)))
       (is (not= (hash frozen) (hash (js/Object.freeze #js {:a 1}))))
       (is (= :v (get {[frozen] :v} [frozen]))))))
+
+(deftest test-exists-npm-module-property
+  (testing "exists? checks the properties of an npm module's binding, which isn't a global"
+    (is (exists? node-path/join))
+    (is (exists? node-path/posix.join))
+    (is (not (exists? node-path/noSuchExport)))
+    (is (not (exists? node-path/noSuchExport.nested)))))
+
+(deftest test-namespace-fields-of-js-globals
+  (testing "namespaces read as fields of JavaScript globals are their modules, like js/cljs.core.inc"
+    (is (identical? (.-EMPTY PersistentArrayMap) (.. js/cljs -core -PersistentArrayMap -EMPTY)))
+    (is (= 3 (.. js/cljs -core (inc 2))))
+    (is (= 3 ((.. js/cljs -core -inc) 2)))))
 
 (defn variadic-fn [x & _] [:original x])
 

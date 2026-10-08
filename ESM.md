@@ -101,6 +101,9 @@ dependency).
 
 ### Vite
 
+`npm create clojurific@latest` scaffolds a project with the plugin (Vanilla,
+Reagent or UIx), see `src/main/js/create-clojurific`.
+
 `src/main/js/vite-plugin-cljs` runs the compiler: a one-shot build for
 `vite build` (the main namespaces are the bundle's entry points), watch mode for
 `vite`, compile errors go to Vite's error overlay. In watch mode Vite's file
@@ -175,6 +178,7 @@ launcher (`src/main/js/cljf`) needs Java and Node.js, not the Clojure CLI:
 npx cljf build '{:main my.app :output-dir "out"}'
 npx cljf -A:test watch @cljs.edn :test
 npx cljf classpath      # like clojure -Spath
+npx cljf repl           # a ClojureScript REPL into the dev server's pages, see REPL
 npx cljf setup-java     # downloads Eclipse Temurin, for machines without Java
 ```
 
@@ -224,6 +228,15 @@ optional nREPL server (`:repl`), which runs in the watcher's JVM:
 (repl/tag! 3 "A")          ; target with {:tag "A"}, survives reloading the page
 (repl/repl)                ; this nREPL session evaluates ClojureScript, :cljs/quit to leave
 ```
+
+`cljf repl` is that REPL in a terminal (`npm run repl` in
+`create-clojurific`'s projects): an nREPL client, without Java, of the server
+whose port is in `.nrepl-port` (or `--port`), waiting for the dev server to
+write it. It switches its session with `(repl/repl)`, reads forms over several
+lines until they're closed, keeps a history in `.cljf/repl-history`, and
+interrupts the evaluation on Ctrl-C. The Vite plugin's projects start the
+server with `compilerOptions: { repl: { 'nrepl-port': 0 } }` and
+`nrepl/nrepl` in `deps.edn`.
 
 - Forms are analyzed with the build's compiler environment and evaluated in
   the runtime focused last (visible ones first) unless `:runtime-id` or
@@ -359,8 +372,10 @@ export { my$app$greet as greet };
   `$set$name` for dynamic vars and `$$set` for any var.
 - `def`s nested in functions are hoisted as `var` declarations.
 - Multi-arity and variadic fns are `/*@__PURE__*/` annotated.
-- `js/my.ns.foo` references to namespaces as JavaScript globals are rewritten to
-  module references, `(exists? my.ns/foo)` checks the binding.
+- `js/my.ns.foo` references to namespaces as JavaScript globals, and fields read
+  from them (`(.. js/my -ns -foo)`), are rewritten to module references,
+  `(exists? my.ns/foo)` checks the binding. `(exists? react/useEffectEvent)`
+  checks the property of the npm module's binding.
 - `js/eval` is an indirect eval, a direct one defeats tree shaking and renaming
   of the whole module.
 

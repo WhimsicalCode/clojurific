@@ -21,6 +21,16 @@ Versions are `0.<minor>.<release>`: `<minor>` is the ClojureScript 1.x release
 it's compatible with (12 for 1.12.x), `<release>` counts Clojurific's releases,
 starting from 1.
 
+## Getting started ##
+
+```sh
+npm create clojurific@latest
+```
+
+scaffolds a Vite project (Vanilla, [Reagent](https://reagent-project.github.io) or
+[UIx](https://github.com/pitch-io/uix)), installs it and starts the dev server.
+It needs Node.js 20 and Java 17 or later, and offers to download Java when there's none.
+
 ## Dependency information ##
 
 [Clojure deps.edn](https://clojure.org/guides/deps_and_cli), from

@@ -15,9 +15,12 @@ namespaces stay `cljs.*`, so libraries written for ClojureScript work unchanged.
   with `no-clojurescript/`. It has no compiler: the launcher gets `com.whimsical/clojurific` of its
   version from Clojars, or the fork's sources when run from this repository
 - `src/main/js/vite-plugin-cljs/` — the Vite plugin
+- `src/main/js/create-clojurific/` — the npm package `create-clojurific` (`npm create clojurific`,
+  Node.js built-ins only): its prompts, the templates (`templates/{vanilla,reagent,uix}`) and their
+  tests. It's released with `clojurific`, of the same version, which its projects depend on
 - `src/main/js/cljf/` — the `cljf` launcher (Node.js built-ins only, no npm dependencies): finding
   and installing Java (`java.js`), downloading the resolver's jars (`bootstrap.js`), the cached
-  classpath and the compiler command (`launcher.js`), the resolver run with tools.deps
+  classpath and the compiler command (`launcher.js`), the terminal REPL, an nREPL client (`repl.js`), the resolver run with tools.deps
   (`resolver/clojurific/resolve.clj`), and its tests (`test/`)
 - `script/clojars` (`clojars.clj`) — the Clojars artifact `com.whimsical/clojurific`: the
   compiler's sources, with the version `script/stamp-version` sets in them, and a pom
@@ -36,8 +39,9 @@ the Closure Compiler, which only the `:closure` alias adds: list it with the oth
 `clojure -M:closure:runtime.test.build`.
 
 `script/test-clojars` installs the Clojars artifact into an empty local Maven repository and builds
-with it from the Clojure CLI. `script/test-launcher` tests the launcher (`node --test`) and the npm package: it packs it, installs
-it into an empty project and builds with `npx cljf`. The integration tests resolve and build real
+with it from the Clojure CLI. `script/test-launcher` tests the launcher and `create-clojurific`
+(`node --test`) and the npm packages: it packs them, installs `clojurific` into an empty project and
+builds with `npx cljf`, then scaffolds and bundles each template. The integration tests resolve and build real
 projects with the local Maven repository; `CLJF_TEST_DOWNLOADS=1` adds a cold start from an empty
 one (about 20 MB from Maven Central). Java 17 is the launcher's minimum: run `script/test-esm` and
 `script/test-launcher` on it too after changes that could need a newer Java.
@@ -57,7 +61,8 @@ analyzed): normalize `__$N` suffixes and gensym numbers, or build without `:para
 
 ## Versions and the changelog
 
-The npm package's version (`src/main/js/package.json`) is `0.<minor>.<release>`: `<minor>` is the
+The npm package's version (`src/main/js/package.json`, and `create-clojurific`'s, which must match
+it) is `0.<minor>.<release>`: `<minor>` is the
 ClojureScript 1.x release the fork is based on (12 for 1.12.x), `<release>` counts Clojurific's
 releases from 1. Bump `<release>` for each release; when merging a new upstream minor release, set
 `<minor>` to it and `<release>` back to 1.
@@ -83,8 +88,8 @@ macOS, then:
 - deploys the Clojars artifact in the `release` environment, whose required reviewer approves the
   deployment and which holds the `CLOJARS_USERNAME` and `CLOJARS_DEPLOY_TOKEN` secrets. It's public
   right away, Clojars has no staging.
-- stages the npm package with npm's trusted publishing (no token) and provenance. A maintainer
-  approves the staged version with 2FA (`npm stage list clojurific`, `npm stage approve <id>`, or on
-  npmjs.com) to publish it.
+- stages the npm packages (`clojurific`, `create-clojurific`) with npm's trusted publishing (no
+  token) and provenance. A maintainer approves the staged versions with 2FA (`npm stage list
+  clojurific`, `npm stage approve <id>`, or on npmjs.com) to publish them.
 
-Then start the next `[Next]` release and bump the version. Only release when the user asks.
+Then start the next `[Next]` release and bump the version (both `package.json`s). Only release when the user asks.
