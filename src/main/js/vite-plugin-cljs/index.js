@@ -7,7 +7,7 @@
 // TypeScript files they import.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -31,16 +31,51 @@ async function sourceNamespace(file) {
   return ns;
 }
 
-// The ClojureScript sources pages load with module scripts
-async function pageSources(pages, root) {
-  const sources = [];
-  for (const page of pages) {
-    const html = await fs.readFile(page, 'utf8');
-    for (const [, src] of html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"'?#]+\.clj[sc])["'][^>]*>/gi)) {
-      sources.push(src.startsWith('/') ? path.join(root, src) : path.resolve(path.dirname(page), src));
+const SCRIPT_SRC = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
+// import "x", import x from "x", export … from "x", import("x")
+const IMPORT = /(?:\bimport\s*(?:[\w$*{}\s,]+\bfrom\s*)?|\bexport\s*[\w$*{}\s,]+\bfrom\s*|\bimport\s*\(\s*)["']([^"']+)["']/g;
+const SCRIPT_FILE = /\.(?:[cm]?[jt]sx?)$/;
+// extensionless imports, as TypeScript projects write them
+const SCRIPT_SUFFIXES = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '/index.ts', '/index.js'];
+
+// The file a page's script or a module's import names: root-absolute or
+// relative paths, not packages or aliases, which the bundler resolves
+function importedFile(spec, from, root) {
+  const file = spec.replace(/[?#].*$/, '');
+  if (!file.startsWith('/') && !file.startsWith('.')) return null;
+  return file.startsWith('/') ? path.join(root, file) : path.resolve(path.dirname(from), file);
+}
+
+// The ClojureScript sources the entries (pages and JavaScript or TypeScript
+// modules) load: the pages' scripts and the modules' imports, followed through
+// the project's modules
+async function entrySources(entries, root) {
+  const sources = new Set();
+  const seen = new Set();
+  const queue = [...entries];
+  while (queue.length) {
+    const file = queue.shift();
+    if (seen.has(file) || file.includes(`${path.sep}node_modules${path.sep}`)) continue;
+    seen.add(file);
+    let code;
+    try {
+      code = await fs.readFile(file, 'utf8');
+    } catch (e) {
+      continue;
+    }
+    for (const [, spec] of code.matchAll(file.endsWith('.html') ? SCRIPT_SRC : IMPORT)) {
+      const target = importedFile(spec, file, root);
+      if (!target) continue;
+      if (SOURCE_FILE.test(target)) {
+        if (existsSync(target)) sources.add(target);
+      } else {
+        const module = SCRIPT_SUFFIXES.map(suffix => target + suffix)
+          .find(f => SCRIPT_FILE.test(f) && existsSync(f) && !statSync(f).isDirectory());
+        if (module) queue.push(module);
+      }
     }
   }
-  return [...new Set(sources)];
+  return [...sources];
 }
 
 // Whether address is this machine's
@@ -325,7 +360,8 @@ export default function cljs(options) {
       `${ns.split('.').map(part => part.replace(/-/g, '_')).join('/')}.js`;
     const module = path.join(outputDir, relative);
     if (!existsSync(module)) {
-      throw new Error(`${ns} (${file}) isn't compiled: load it with a page's script, or add it to :main`);
+      throw new Error(`${ns} (${file}) isn't compiled: load it from a page's script or a module the pages ` +
+        'import (through relative or root-absolute imports, restarting Vite after adding it), or add it to :main');
     }
     return module;
   }
@@ -372,8 +408,8 @@ export default function cljs(options) {
       // the project's page, an input of builds and the dev server's /
       const indexHtml = existsSync(path.join(root, 'index.html')) ? path.join(root, 'index.html') : null;
       const userInput = userConfig.build?.rolldownOptions?.input ?? userConfig.build?.rollupOptions?.input;
-      const pages = Object.values(inputObject(userInput ?? indexHtml, root)).filter(f => f.endsWith('.html'));
-      pageNamespaces = await Promise.all((await pageSources(pages, root)).map(sourceNamespace));
+      const entries = Object.values(inputObject(userInput ?? indexHtml, root));
+      pageNamespaces = await Promise.all((await entrySources(entries, root)).map(sourceNamespace));
       if (env.command === 'build' && !env.isPreview) {
         const start = Date.now();
         if (userConfig.build?.watch) {

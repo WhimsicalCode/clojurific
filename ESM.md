@@ -138,9 +138,12 @@ The dev server serves the page with the compiled module's URL instead
 (`/out/my/app.js`, which pages can load directly too), builds bundle it.
 JavaScript and TypeScript modules can import sources as well
 (`import './my/app.cljs'`), which loads the namespace; its vars aren't
-exports, `:js-entries` export them under JavaScript names. A source's
-namespace comes from its `ns` form. The pages' scripts are read when Vite
-starts: restart it after adding one.
+exports, `:js-entries` export them under JavaScript names. The plugin finds
+those sources by following the pages' modules (and JavaScript inputs) through
+relative and root-absolute imports, not packages or aliases: list namespaces
+imported otherwise in `:main`. A source's namespace comes from its `ns` form.
+The pages and their imports are read when Vite starts: restart it after
+adding a source.
 
 Builds of more pages list them in `build.rollupOptions.input`
 (`build.rolldownOptions.input` in Vite 8), the plugin adds the main namespaces

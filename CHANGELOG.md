@@ -7,6 +7,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ### Fixed
 
+- ClojureScript sources imported only from JavaScript or TypeScript modules weren't compiled. The Vite plugin now follows the pages' modules through relative and root-absolute imports to find them.
 - Released compilers (0.12.2 from npm and Clojars) recompiled every namespace on every build: output compiled by a version like `1.12.clojurific-0.12.2` wasn't recognised as up to date.
 
 ## 0.12.2 [2026-10-08]
