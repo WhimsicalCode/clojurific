@@ -42,9 +42,10 @@ function parse(argv) {
 
 function run(command, args) {
   const child = spawn(command, args, { stdio: 'inherit' });
+  // forwarded: only a terminal signals the JVM too (SIGINT), not kill, an IDE
+  // or a process supervisor; a second SIGINT is harmless
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-    // the terminal sends SIGINT to the JVM too, other signals are forwarded
-    process.on(signal, () => signal !== 'SIGINT' && child.kill(signal));
+    process.on(signal, () => child.kill(signal));
   }
   child.on('error', e => {
     console.error(`cljf: ${command}: ${e.message}`);
