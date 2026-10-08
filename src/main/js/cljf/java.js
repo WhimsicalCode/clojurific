@@ -203,7 +203,8 @@ export async function setupJava({
   await fs.mkdir(dir, { recursive: true });
   const tmp = await fs.mkdtemp(path.join(dir, '.setup-'));
   try {
-    const archive = path.join(tmp, pkg.name);
+    // a name from the API, not a path
+    const archive = path.join(tmp, path.basename(pkg.name));
     try {
       await download(pkg.link, archive, { sha256: pkg.checksum, fetch });
     } catch (e) {
