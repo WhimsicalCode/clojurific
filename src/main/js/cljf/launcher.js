@@ -4,7 +4,7 @@
 // Classpaths are cached in the project's .cljf/cpcache, like the Clojure
 // CLI's .cpcache, until a deps.edn they were resolved from changes.
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -78,8 +78,10 @@ async function resolve({ project, aliases, java, cache, env, log }) {
     repository: env.CLJF_MAVEN_REPO || undefined,
     log,
   });
-  const input = `${cache}.resolve.edn`;
-  const output = `${cache}.resolve.json`;
+  // per process: another one may resolve the same classpath at the same time
+  const tmp = `${cache}.${process.pid}.${randomBytes(4).toString('hex')}`;
+  const input = `${tmp}.resolve.edn`;
+  const output = `${tmp}.resolve.json`;
   await fs.writeFile(input, edn({
     ':aliases': aliases,
     ':compiler': compiler,
