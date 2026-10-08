@@ -488,7 +488,7 @@ export default function cljs(options) {
       // A ClojureScript source: its compiled module, as a module importing it
       // when serving, which a page loading it by its source's URL and the
       // modules importing it by its own share
-      const file = source.split('?')[0];
+      const file = source.split(/[?#]/)[0];
       if (SOURCE_FILE.test(file) && !source.startsWith('\0')) {
         const candidates = [
           ...(path.isAbsolute(file) ? [file] : []),
@@ -640,9 +640,10 @@ export default function cljs(options) {
       async handler(html, { filename }) {
         if (config.command !== 'serve') return html;
         const replacements = await Promise.all(
-          [...html.matchAll(/(<script\b[^>]*\bsrc\s*=\s*["'])([^"'?#]+\.clj[sc])(["'])/gi)].map(async match => {
+          // with a query or fragment, which the compiled module's URL keeps
+          [...html.matchAll(/(<script\b[^>]*\bsrc\s*=\s*["'])([^"'?#]+\.clj[sc])([?#][^"']*)?(["'])/gi)].map(async match => {
             const file = match[2].startsWith('/') ? path.join(config.root, match[2]) : path.resolve(path.dirname(filename), match[2]);
-            return [match[0], match[1] + devUrl(await compiledModule(file)) + match[3]];
+            return [match[0], match[1] + devUrl(await compiledModule(file)) + (match[3] ?? '') + match[4]];
           }));
         return replacements.reduce((result, [from, to]) => result.replace(from, to), html);
       },
