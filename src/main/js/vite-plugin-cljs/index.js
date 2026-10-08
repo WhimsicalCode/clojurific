@@ -350,6 +350,13 @@ export default function cljs(options) {
     return (compiled ? path.relative(outputDir, file) : path.relative(cwd, file)).split(path.sep).join('/');
   }
 
+  // Whether a ClojureScript source may be served: in Vite's root or
+  // server.fs.allow
+  function servedSource(file) {
+    const dirs = [config.root, ...(config.server?.fs?.allow ?? [])].map(dir => path.resolve(dir));
+    return SOURCE_FILE.test(file) && dirs.some(dir => file.startsWith(dir + path.sep));
+  }
+
   // The compiled module of a ClojureScript source file: its namespace's in the
   // build info, or its munged name
   async function compiledModule(file) {
@@ -490,12 +497,15 @@ export default function cljs(options) {
       // modules importing it by its own share
       const file = source.split(/[?#]/)[0];
       if (SOURCE_FILE.test(file) && !source.startsWith('\0')) {
+        // URLs are root-relative, files are only served from the project
         const candidates = [
-          ...(path.isAbsolute(file) ? [file] : []),
           ...(file.startsWith('/') ? [path.join(root, file)] : []),
-          ...(importer && !importer.startsWith('\0') ? [path.resolve(path.dirname(importer.split('?')[0]), file)] : []),
+          ...(importer && !importer.startsWith('\0') && !file.startsWith('/')
+            ? [path.resolve(path.dirname(importer.split('?')[0]), file)]
+            : []),
+          ...(path.isAbsolute(file) ? [file] : []),
         ];
-        const found = candidates.find(f => existsSync(f));
+        const found = candidates.find(f => servedSource(f) && existsSync(f));
         if (!found) return null;
         return config.command === 'build' ? compiledModule(found) : '\0' + SOURCE + found;
       }
@@ -515,7 +525,9 @@ export default function cljs(options) {
 
     async load(id) {
       if (id.startsWith('\0' + SOURCE)) {
-        const module = await compiledModule(id.slice(SOURCE.length + 1));
+        const file = id.slice(SOURCE.length + 1);
+        if (!servedSource(file)) this.error(`${file} is outside the project`);
+        const module = await compiledModule(file);
         return `import ${JSON.stringify(module)};\nexport * from ${JSON.stringify(module)};\n`;
       }
       // compiled namespaces with their source maps, to the ClojureScript sources
