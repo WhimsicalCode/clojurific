@@ -76,14 +76,15 @@
 
 (defn ^String compiled-by-version [f]
   (with-open [reader (io/reader f)]
+    ;; any version, not only x.y.z: i.e. Clojurific's 1.12.clojurific-0.12.3
     (let [match (some->> reader line-seq first
-                         (re-matches #".*ClojureScript (\d+\.\d+\.\d+).*$"))]
+                         (re-matches #".*ClojureScript (\S+).*$"))]
       (or (and match (second match)) "0.0.0000"))))
 
 (defn build-options [^File f]
   (with-open [reader (io/reader f)]
     (let [match (some->> reader line-seq first
-                           (re-matches #".*ClojureScript \d+\.\d+\.\d+ (.*)$"))]
+                           (re-matches #".*ClojureScript \S+ (.*)$"))]
       (and match (edn/read-string (second match))))))
 
 (defn munge-path [ss]

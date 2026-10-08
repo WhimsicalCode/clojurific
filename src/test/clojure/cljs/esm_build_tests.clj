@@ -10,6 +10,7 @@
   "cljs.esm builds reusing the output of a previous build."
   (:require [cljs.compiler :as comp]
             [cljs.esm :as esm]
+            [cljs.util :as util]
             [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as string]
@@ -111,3 +112,13 @@
     (is (.exists (io/file dir "out" "test" "g.js")))
     (is (= {"test.f" "test/f.js" "test.g" "test/g.js"}
            (get (json/read-str (slurp (io/file dir "out" "cljs-esm.json"))) "main")))))
+
+(deftest reuses-output-compiled-with-a-released-version
+  (let [dir     (temp-dir)
+        sources (into {} [(write-source! dir 'test.h "(ns test.h)" (- (System/currentTimeMillis) 60000))])]
+    ;; as script/stamp-version sets it in released compilers
+    (binding [util/*clojurescript-version* {:major 1 :minor 12 :qualifier "clojurific-0.12.3"}]
+      (is (contains? (build! dir sources 'test.h) "test_h.cljs"))
+      (is (string/starts-with? (output dir 'test.h) "// Compiled by ClojureScript 1.12.clojurific-0.12.3 "))
+      (testing "a second build compiles nothing"
+        (is (= #{} (build! dir sources 'test.h)))))))
