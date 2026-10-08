@@ -1,15 +1,18 @@
 name: Release
 
-# Stages the npm package clojurific when a GitHub release is published:
+# Releases Clojurific when a GitHub release is published:
 #
 #   gh release create v0.12.2 --repo WhimsicalCode/clojurific --target main --notes-file notes.md
 #
 # The release's tag must match src/main/js/package.json's version, and
-# CHANGELOG.md must date it. npm authenticates with trusted publishing
-# (GitHub's OIDC token, configured in the package's settings on npmjs.com for
-# this workflow), which also adds provenance: no npm token. The workflow may
-# only stage: a maintainer approves the staged version with 2FA
-# (npm stage approve <id>, or on npmjs.com) to publish it.
+# CHANGELOG.md must date it. After the tests:
+# - npm: stages the package clojurific with trusted publishing (GitHub's OIDC
+#   token, configured in the package's settings on npmjs.com for this
+#   workflow) and provenance, no npm token. A maintainer approves the staged
+#   version with 2FA (npm stage approve <id>, or on npmjs.com) to publish it.
+# - Clojars: deploys com.whimsical/clojurific with the CLOJARS_USERNAME and
+#   CLOJARS_DEPLOY_TOKEN secrets. Clojars has no staging, the version is public
+#   right away.
 
 on:
   release:
@@ -19,7 +22,32 @@ permissions:
   contents: read
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Check the version
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./src/main/js/package.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The release's tag $TAG doesn't match package.json's version $version"
+            exit 1
+          fi
+          if ! grep -qE "^## $version \[[0-9]{4}-[0-9]{2}-[0-9]{2}\]$" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md doesn't date $version (## $version [YYYY-MM-DD])"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: check
     name: test (${{ matrix.os }}, Java ${{ matrix.java }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -65,14 +93,19 @@ jobs:
           CLJF_TEST_DOWNLOADS: '1'
         run: script/test-launcher
 
-  publish:
-    needs: test
+      - name: Clojars artifact test
+        run: script/test-clojars
+
+  npm:
+    needs: [check, test]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       # npm's trusted publishing and provenance
       id-token: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -94,23 +127,34 @@ jobs:
       - name: Install npm
         run: npm install -g npm@11.20.0
 
-      - name: Check the version
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          version=$(node -p "require('./src/main/js/package.json').version")
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::The release's tag $TAG doesn't match package.json's version $version"
-            exit 1
-          fi
-          if ! grep -qE "^## $version \[[0-9]{4}-[0-9]{2}-[0-9]{2}\]$" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md doesn't date $version (## $version [YYYY-MM-DD])"
-            exit 1
-          fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-
       - name: Pack
         run: script/package-npm
 
       - name: Stage
         run: npm stage publish "./builds/clojurific-$VERSION.tgz" --access public --provenance
+
+  clojars:
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
+        with:
+          cli: 1.11.1.1155
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+
+      - name: Deploy
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_DEPLOY_TOKEN }}
+        run: script/clojars deploy

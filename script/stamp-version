@@ -1,0 +1,26 @@
+#!/bin/sh
+
+# script/stamp-version <dir> <version>: Sets the compiler's version in a copy of
+# its sources (<dir>/clojure, <dir>/cljs), as upstream's script/build does in
+# its releases, for the npm package and the Clojars jar. Unset, the version is
+# a hash of the sources, which needs them to be files, not in a jar.
+#
+# The version is 1.<minor>.clojurific-<version> (1.12.clojurific-0.12.2):
+# ClojureScript's major and minor, which libraries may check, and the
+# release, which names the analysis caches and invalidates compiled output.
+
+set -e
+
+dir=$1
+version=$2
+minor=$(echo "$version" | cut -d. -f2)
+qualifier="clojurific-$version"
+
+sed -i.orig -e 's/^.def ^:dynamic \*clojurescript-version\*.*$/(def ^:dynamic *clojurescript-version* {:major 1, :minor '"$minor"', :qualifier "'"$qualifier"'"})/' \
+  "$dir/clojure/cljs/util.cljc"
+sed -i.orig -e 's/^.def \*clojurescript-version\*.*$/(def *clojurescript-version* "1.'"$minor.$qualifier"'")/' \
+  "$dir/cljs/cljs/core.cljs"
+rm "$dir/clojure/cljs/util.cljc.orig" "$dir/cljs/cljs/core.cljs.orig"
+
+grep -q "qualifier \"$qualifier\"" "$dir/clojure/cljs/util.cljc"
+grep -q "^(def \*clojurescript-version\* \"1.$minor.$qualifier\")" "$dir/cljs/cljs/core.cljs"

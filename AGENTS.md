@@ -18,6 +18,9 @@ namespaces stay `cljs.*`, so libraries written for ClojureScript work unchanged.
   and installing Java (`java.js`), downloading the resolver's jars (`bootstrap.js`), the cached
   classpath and the compiler command (`launcher.js`), the resolver run with tools.deps
   (`resolver/clojurific/resolve.clj`), and its tests (`test/`)
+- `script/package-npm`, `script/clojars` (`clojars.clj`) — the npm package and the Clojars artifact
+  (`com.whimsical/clojurific`, the compiler's sources and a pom), both with the version
+  `script/stamp-version` sets in the compiler's sources
 - `no-clojurescript/` — an empty project replacing stock ClojureScript (`org.clojure/clojurescript`)
   through `:override-deps`
 - `src/test/clojure/cljs/esm_build_tests.clj`, `esm_repl_tests.clj` — build and REPL tests
@@ -32,7 +35,8 @@ compiler tests (`clojure -M:closure:compiler.test:compiler.test.run`). The class
 the Closure Compiler, which only the `:closure` alias adds: list it with the other aliases, e.g.
 `clojure -M:closure:runtime.test.build`.
 
-`script/test-launcher` tests the launcher (`node --test`) and the npm package: it packs it, installs
+`script/test-clojars` installs the Clojars artifact into an empty local Maven repository and builds
+with it from the Clojure CLI. `script/test-launcher` tests the launcher (`node --test`) and the npm package: it packs it, installs
 it into an empty project and builds with `npx cljf`. The integration tests resolve and build real
 projects with the local Maven repository; `CLJF_TEST_DOWNLOADS=1` adds a cold start from an empty
 one (about 20 MB from Maven Central). Java 17 is the launcher's minimum: run `script/test-esm` and
@@ -68,10 +72,11 @@ the release date (`[YYYY-MM-DD]`) and start a new `[Next]` release with the next
 ## Releasing
 
 `.github/workflows/release.yml` stages the npm package when a GitHub release is published, with
-npm's trusted publishing (no token) and provenance. Date the version in `CHANGELOG.md`, then create
+npm's trusted publishing (no token) and provenance, and deploys the Clojars artifact (the
+`CLOJARS_USERNAME` and `CLOJARS_DEPLOY_TOKEN` secrets), which is public right away. Date the version in `CHANGELOG.md`, then create
 the release with a tag matching `src/main/js/package.json`'s version:
 `gh release create v0.12.2 --repo WhimsicalCode/clojurific --target main`. The workflow runs
-`script/test-esm` and `script/test-launcher` on Linux (Java 17 and 25) and macOS, checks the tag and
-the changelog, packs with `script/package-npm` and stages it. A maintainer then approves the staged
+`script/test-esm`, `script/test-launcher` and `script/test-clojars` on Linux (Java 17 and 25) and
+macOS after checking the tag and the changelog, then stages the npm package and deploys to Clojars. A maintainer then approves the staged
 version with 2FA (`npm stage list clojurific`, `npm stage approve <id>`, or on npmjs.com) to publish
 it. Then start the next `[Next]` release and bump the version. Only release when the user asks.

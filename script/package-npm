@@ -18,6 +18,7 @@ rm -rf "$out/cljf/test" "$out/cljf/resolver/.cpcache"
 cp epl-v10.html "$out/LICENSE.html"
 
 cp -R src/main/clojure src/main/cljs "$out/compiler/src/main/"
+script/stamp-version "$out/compiler/src/main" "$(node -p "require('./src/main/js/package.json').version")"
 cp -R no-clojurescript "$out/compiler/"
 # The fork's dependencies without test.check (only its tests use it), with a
 # current Clojure. A project's own Clojure version wins.

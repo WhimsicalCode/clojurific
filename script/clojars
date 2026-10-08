@@ -1,0 +1,14 @@
+#!/bin/sh
+
+# Builds, installs or deploys the Clojars artifact com.whimsical/clojurific,
+# see script/clojars.clj:
+#
+#   script/clojars jar | install <local-repo> | deploy
+
+cd "$(dirname "$0")/.." || exit 1
+
+exec clojure -Sdeps '{:aliases {:clojars {:replace-paths ["script"]
+                                          :replace-deps {org.clojure/clojure {:mvn/version "1.12.6"}
+                                                         io.github.clojure/tools.build {:mvn/version "0.10.14"}
+                                                         slipset/deps-deploy {:mvn/version "0.2.5"}}}}}' \
+  -M:clojars script/clojars.clj "$@"

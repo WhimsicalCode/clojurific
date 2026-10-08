@@ -1,0 +1,29 @@
+#!/bin/sh
+
+# Tests the Clojars artifact: installs it (script/clojars) into an empty local
+# Maven repository, then compiles a namespace with the Clojure CLI in a project
+# depending on com.whimsical/clojurific by version. Downloads its dependencies
+# (about 10 MB) into that repository.
+
+set -e
+cd "$(dirname "$0")/.."
+
+version=$(node -p "require('./src/main/js/package.json').version")
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+
+script/clojars install "$dir/m2"
+
+mkdir -p "$dir/project/src/smoke"
+printf '{:paths ["src"]\n :deps {com.whimsical/clojurific {:mvn/version "%s"}}\n :mvn/local-repo "%s"}\n' \
+  "$version" "$dir/m2" > "$dir/project/deps.edn"
+printf '(ns smoke.core)\n(println "smoke" (+ 1 2))\n' > "$dir/project/src/smoke/core.cljs"
+(
+  cd "$dir/project"
+  # the installed jar, not the fork's sources
+  clojure -Spath | tr ':' '\n' | grep -qx "$dir/m2/com/whimsical/clojurific/$version/clojurific-$version.jar"
+  clojure -M -m cljs.esm build '{:main smoke.core :output-dir "out"}'
+  output=$(node out/smoke/core.js)
+  test "$output" = "smoke 3"
+)
+echo "Clojars artifact: ok"

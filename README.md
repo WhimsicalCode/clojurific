@@ -23,13 +23,22 @@ starting from 1.
 
 ## Dependency information ##
 
-[Clojure deps.edn](https://clojure.org/guides/deps_and_cli), as a git
-dependency:
+[Clojure deps.edn](https://clojure.org/guides/deps_and_cli), from
+[Clojars](https://clojars.org/com.whimsical/clojurific):
+
+```clojure
+com.whimsical/clojurific {:mvn/version "0.12.2"}
+```
+
+or as a git dependency:
 
 ```clojure
 com.whimsical/clojurific {:git/url "https://github.com/WhimsicalCode/clojurific"
                           :git/sha "…"}
 ```
+
+[npm](https://www.npmjs.com/package/clojurific), with the `cljf` launcher, which
+needs Java but not the Clojure CLI: `npm install clojurific`.
 
 Stock ClojureScript (`org.clojure/clojurescript`) has the same namespaces, so
 it mustn't be on the classpath too: `cljs.esm` fails at startup, naming both,

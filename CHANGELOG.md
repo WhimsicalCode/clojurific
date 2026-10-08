@@ -5,6 +5,14 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.2 [Next]
 
+### Added
+
+- The Clojars artifact `com.whimsical/clojurific`, for the Clojure CLI and Leiningen.
+
+### Changed
+
+- Released compilers report their version as ClojureScript's major and minor version with Clojurific's release, i.e. `1.12.clojurific-0.12.2`, in compiled files' headers and `cljs.core/*clojurescript-version*`, instead of a hash of their sources.
+
 ## 0.12.1 [2026-10-08]
 
 ### Added
