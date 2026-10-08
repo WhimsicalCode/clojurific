@@ -88,9 +88,11 @@
           ns-info))))
 
 (defn- main-namespaces
-  "The :main namespaces, a symbol or a collection of them."
-  [{:keys [main]}]
-  (cond (coll? main) main main [main]))
+  "The :main namespaces, a symbol or a collection of them, and :extra-main's,
+  which tools add to them (the Vite plugin, the namespaces of the pages'
+  scripts)."
+  [{:keys [main extra-main]}]
+  (distinct (concat (cond (coll? main) main main [main]) extra-main)))
 
 (defn- js-entry-namespaces
   "The namespaces of the vars :js-entries export."

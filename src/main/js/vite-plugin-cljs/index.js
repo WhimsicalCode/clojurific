@@ -18,6 +18,30 @@ import { pruneChunks, propertyRenames } from './prune.js';
 
 const EVENT_PREFIX = '[cljs.esm] ';
 const NPM_AS = 'cljs-npm-as:';
+// a ClojureScript source loaded by a page or imported from JavaScript, which
+// the dev server serves as an import of its compiled module
+const SOURCE = 'cljs-source:';
+const SOURCE_FILE = /\.clj[sc]$/;
+
+// The namespace of a ClojureScript source file, from its ns form
+async function sourceNamespace(file) {
+  const code = (await fs.readFile(file, 'utf8')).replace(/;.*$/gm, '');
+  const ns = code.match(/\(\s*ns\s+(?:\^(?:\{[^}]*\}|\S+)\s+)*([^\s()[\]{}"^;]+)/)?.[1];
+  if (!ns) throw new Error(`${file} has no ns form`);
+  return ns;
+}
+
+// The ClojureScript sources pages load with module scripts
+async function pageSources(pages, root) {
+  const sources = [];
+  for (const page of pages) {
+    const html = await fs.readFile(page, 'utf8');
+    for (const [, src] of html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"'?#]+\.clj[sc])["'][^>]*>/gi)) {
+      sources.push(src.startsWith('/') ? path.join(root, src) : path.resolve(path.dirname(page), src));
+    }
+  }
+  return [...new Set(sources)];
+}
 
 // Whether address is this machine's
 function isLoopback(address) {
@@ -36,6 +60,17 @@ function isLocalConnection(req) {
 function isCommonJS(code) {
   const stripped = code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   return !/(^|[;\n])\s*(import\s*[\w*{"']|export\s+[\w*{]|export\s*\{)/.test(stripped);
+}
+
+// Whether the project's package.json makes its .js files CommonJS ("type":
+// "commonjs", which npm init writes; without a type, the bundler detects ES
+// modules)
+async function commonJSPackage(root) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).type === 'commonjs';
+  } catch (e) {
+    return false;
+  }
 }
 
 // A Rollup input (a file, files or {name: file}) as {name: absolute file}
@@ -179,6 +214,8 @@ export default module.exports;
 export default function cljs(options) {
   const manifestName = options.manifest ?? 'manifest.json';
   let config, proc, server, minify, root, cwd, outputDir, compiler;
+  // the namespaces of the pages' scripts, compiled as main namespaces
+  let pageNamespaces = [];
   let compiling = Promise.resolve();
   const localModules = new Set();
   // Like shadow-cljs, the output isn't hot reloaded while namespaces have
@@ -196,7 +233,11 @@ export default function cljs(options) {
       command,
       ...(options.config ? [`@${options.config}`] : []),
       `:${profile}`,
-      ednValue({ ':output-dir': outputDir, ...extra }),
+      ednValue({
+        ':output-dir': outputDir,
+        ...(pageNamespaces.length ? { ':extra-main': pageNamespaces.map(ns => `'${ns}`) } : {}),
+        ...extra,
+      }),
       more,
     ];
   }
@@ -274,11 +315,27 @@ export default function cljs(options) {
     return (compiled ? path.relative(outputDir, file) : path.relative(cwd, file)).split(path.sep).join('/');
   }
 
+  // The compiled module of a ClojureScript source file: its namespace's in the
+  // build info, or its munged name
+  async function compiledModule(file) {
+    // a source added while serving is compiled first
+    await compiling;
+    const ns = await sourceNamespace(file);
+    const relative = (await buildInfo())?.main?.[ns] ??
+      `${ns.split('.').map(part => part.replace(/-/g, '_')).join('/')}.js`;
+    const module = path.join(outputDir, relative);
+    if (!existsSync(module)) {
+      throw new Error(`${ns} (${file}) isn't compiled: load it with a page's script, or add it to :main`);
+    }
+    return module;
+  }
+
   // The dev server's URL of an output file (relative to outputDir)
   function devUrl(file) {
-    const relative = path.relative(config.root, path.join(outputDir, file));
+    const absolute = path.resolve(outputDir, file);
+    const relative = path.relative(config.root, absolute);
     return config.base + (relative.startsWith('..') || path.isAbsolute(relative)
-      ? `@fs${path.join(outputDir, file)}`
+      ? `@fs${absolute}`
       : relative).split(path.sep).join('/');
   }
 
@@ -314,6 +371,9 @@ export default function cljs(options) {
       const result = {};
       // the project's page, an input of builds and the dev server's /
       const indexHtml = existsSync(path.join(root, 'index.html')) ? path.join(root, 'index.html') : null;
+      const userInput = userConfig.build?.rolldownOptions?.input ?? userConfig.build?.rollupOptions?.input;
+      const pages = Object.values(inputObject(userInput ?? indexHtml, root)).filter(f => f.endsWith('.html'));
+      pageNamespaces = await Promise.all((await pageSources(pages, root)).map(sourceNamespace));
       if (env.command === 'build' && !env.isPreview) {
         const start = Date.now();
         if (userConfig.build?.watch) {
@@ -389,6 +449,20 @@ export default function cljs(options) {
     // :npm-interop :shadow, ["pkg" :as x] binds module.exports of CommonJS
     // modules and the namespace of ES modules, like shadow-cljs
     async resolveId(source, importer, opts) {
+      // A ClojureScript source: its compiled module, as a module importing it
+      // when serving, which a page loading it by its source's URL and the
+      // modules importing it by its own share
+      const file = source.split('?')[0];
+      if (SOURCE_FILE.test(file) && !source.startsWith('\0')) {
+        const candidates = [
+          ...(path.isAbsolute(file) ? [file] : []),
+          ...(file.startsWith('/') ? [path.join(root, file)] : []),
+          ...(importer && !importer.startsWith('\0') ? [path.resolve(path.dirname(importer.split('?')[0]), file)] : []),
+        ];
+        const found = candidates.find(f => existsSync(f));
+        if (!found) return null;
+        return config.command === 'build' ? compiledModule(found) : '\0' + SOURCE + found;
+      }
       if (!source.startsWith(NPM_AS)) return null;
       const resolved = await this.resolve(source.slice(NPM_AS.length), importer, { ...opts, skipSelf: true });
       if (!resolved) return null;
@@ -404,6 +478,10 @@ export default function cljs(options) {
     },
 
     async load(id) {
+      if (id.startsWith('\0' + SOURCE)) {
+        const module = await compiledModule(id.slice(SOURCE.length + 1));
+        return `import ${JSON.stringify(module)};\nexport * from ${JSON.stringify(module)};\n`;
+      }
       // compiled namespaces with their source maps, to the ClojureScript sources
       if (config.command === 'build' && config.build.sourcemap && id.startsWith(outputDir + path.sep) && id.endsWith('.js')) {
         try {
@@ -483,6 +561,10 @@ export default function cljs(options) {
           }
           chunk.code = code;
         }));
+        if (!pruned.removed && await commonJSPackage(config.root)) {
+          this.warn('nothing was pruned: package.json has "type": "commonjs", so the bundler treats the project\'s ' +
+            '.js files as CommonJS and wraps the ClojureScript they import in initializers. Use "type": "module".');
+        }
         config.logger.info(`[cljs] removed ${pruned.removed} unused statements (${pruneMs}ms), ` +
           `renamed ${Object.keys(renames).length} properties, ` +
           `minified (${Date.now() - start - pruneMs}ms)`);
@@ -513,6 +595,22 @@ export default function cljs(options) {
         this.emitFile({ type: 'asset', fileName: manifestName, source: JSON.stringify(manifest, null, 2) });
       }
     } },
+
+    // The dev server's pages load the compiled modules of their scripts'
+    // ClojureScript sources, which Vite would serve as files. Builds resolve
+    // them (resolveId).
+    transformIndexHtml: {
+      order: 'pre',
+      async handler(html, { filename }) {
+        if (config.command !== 'serve') return html;
+        const replacements = await Promise.all(
+          [...html.matchAll(/(<script\b[^>]*\bsrc\s*=\s*["'])([^"'?#]+\.clj[sc])(["'])/gi)].map(async match => {
+            const file = match[2].startsWith('/') ? path.join(config.root, match[2]) : path.resolve(path.dirname(filename), match[2]);
+            return [match[0], match[1] + devUrl(await compiledModule(file)) + match[3]];
+          }));
+        return replacements.reduce((result, [from, to]) => result.replace(from, to), html);
+      },
+    },
 
     // Hot updates of compiled modules wait for the compile (and its build
     // hooks, i.e. generated CSS) to finish.

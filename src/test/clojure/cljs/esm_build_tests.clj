@@ -10,6 +10,7 @@
   "cljs.esm builds reusing the output of a previous build."
   (:require [cljs.compiler :as comp]
             [cljs.esm :as esm]
+            [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as string]
             [clojure.test :refer [deftest is testing]])
@@ -99,3 +100,14 @@
         (is (some #(string/includes? % (str stock)) (get-in (ex-data e) [:resources "cljs/analyzer.cljc"]))))
       (finally
         (.setContextClassLoader thread loader)))))
+
+(deftest extra-main-adds-main-namespaces
+  (let [dir     (temp-dir)
+        ms      (- (System/currentTimeMillis) 60000)
+        sources (into {} [(write-source! dir 'test.f "(ns test.f)" ms)
+                          (write-source! dir 'test.g "(ns test.g)" ms)])]
+    (binding [esm/*generated-sources* sources]
+      (esm/build {:main 'test.f :extra-main '[test.g test.f] :output-dir (str (io/file dir "out"))}))
+    (is (.exists (io/file dir "out" "test" "g.js")))
+    (is (= {"test.f" "test/f.js" "test.g" "test/g.js"}
+           (get (json/read-str (slurp (io/file dir "out" "cljs-esm.json"))) "main")))))

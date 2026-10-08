@@ -38,6 +38,7 @@ the `:dev` profile, `build` to `:release`:
 | option | |
 |---|---|
 | `:main` | a namespace or a collection of them, i.e. the app plus lazily loaded entries, optional with `:js-entries` |
+| `:extra-main` | namespaces added to `:main`, i.e. by the Vite plugin, the namespaces of the pages' `.cljs` scripts |
 | `:js-entries` | `{name {:exports {jsName my.ns/var}}}`, generated entry modules (`cljs-esm-entries/<name>.js`) exporting vars under JavaScript names, for libraries and workers; an undefined var fails the build |
 | `:preloads` | namespaces the main namespaces import first |
 | `:parallel-build` | compiles namespaces in parallel once their dependencies are compiled |
@@ -123,18 +124,31 @@ project's `deps.edn` with `aliases`. `command` starts it with another
 command instead, e.g. the Clojure CLI's `['clojure', '-M:cljs']`, cljs.esm's
 arguments follow it.
 
-The project's directory is Vite's root, so pages load namespaces from the
-output directory, and the project's `index.html` is the dev server's page and
-an input of builds, which bundle the namespaces it loads like any other script:
+The project's directory is Vite's root, and its `index.html` the dev server's
+page and an input of builds. Like TypeScript files in a Vite project, pages
+load ClojureScript sources, and the plugin compiles their namespaces as main
+namespaces (`:extra-main`), so `:main` is optional:
 
 ```html
 <!-- index.html -->
-<script type="module" src="/out/my/app.js"></script>
+<script type="module" src="/src/my/app.cljs"></script>
 ```
+
+The dev server serves the page with the compiled module's URL instead
+(`/out/my/app.js`, which pages can load directly too), builds bundle it.
+JavaScript and TypeScript modules can import sources as well
+(`import './my/app.cljs'`), which loads the namespace; its vars aren't
+exports, `:js-entries` export them under JavaScript names. A source's
+namespace comes from its `ns` form. The pages' scripts are read when Vite
+starts: restart it after adding one.
 
 Builds of more pages list them in `build.rollupOptions.input`
 (`build.rolldownOptions.input` in Vite 8), the plugin adds the main namespaces
-and `:js-entries` to them.
+and `:js-entries` to them. The project's `package.json` needs `"type":
+"module"` (or no type): with `"type": "commonjs"`, which `npm init` writes,
+the bundler treats the project's `.js` files as CommonJS and wraps the
+ClojureScript they import in initializers, which production bundles can't
+prune; the plugin warns then.
 
 `:js-entries` are bundle inputs too, their exports kept: a build of a library or
 a Node service's worker (`build.ssr`) is one module exporting what the entry

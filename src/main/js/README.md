@@ -27,7 +27,7 @@ Dependencies and source paths come from the project's `deps.edn`:
 import cljs from 'clojurific/vite';
 
 export default {
-  plugins: [cljs({ outputDir: 'out', compilerOptions: { main: "'my.app" } })],
+  plugins: [cljs({ outputDir: 'target/cljs' })],
 };
 ```
 
@@ -35,11 +35,13 @@ export default {
 <!-- index.html -->
 <!doctype html>
 <div id="app"></div>
-<script type="module" src="/out/my/app.js"></script>
+<script type="module" src="/src/my/app.cljs"></script>
 ```
 
 `npx vite` serves the page and hot reloads changed namespaces, `npx vite build`
-bundles it into `dist/`.
+bundles it into `dist/`. JavaScript can import namespaces too:
+`import './my/app.cljs'`. The project's `package.json` needs `"type":
+"module"`.
 
 or with the command line:
 
