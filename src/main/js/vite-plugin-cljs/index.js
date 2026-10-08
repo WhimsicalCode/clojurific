@@ -108,14 +108,20 @@ async function commonJSPackage(root) {
   }
 }
 
-// A Rollup input (a file, files or {name: file}) as {name: absolute file}
+// A Rollup input (a file, files or {name: file}) as {name: absolute file},
+// files named by their path in the root without the extension, so pages with
+// the same file name in different directories (about/index.html) keep apart
 function inputObject(input, root) {
   if (!input) return {};
   if (typeof input === 'object' && !Array.isArray(input)) {
     return Object.fromEntries(Object.entries(input).map(([name, file]) => [name, path.resolve(root, file)]));
   }
-  return Object.fromEntries([].concat(input).map(file =>
-    [path.basename(file, path.extname(file)), path.resolve(root, file)]));
+  return Object.fromEntries([].concat(input).map(file => {
+    const absolute = path.resolve(root, file);
+    const relative = path.relative(root, absolute);
+    const name = relative.startsWith('..') || path.isAbsolute(relative) ? path.basename(absolute) : relative;
+    return [name.slice(0, name.length - path.extname(name).length).split(path.sep).join('/'), absolute];
+  }));
 }
 
 function ednString(s) {
