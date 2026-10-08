@@ -64,3 +64,14 @@ releases from 1. Bump `<release>` for each release; when merging a new upstream 
 Record merges of upstream ClojureScript too, naming the upstream commit or release. Omit changes
 only to tests, tooling or the fork's own unreleased features. When releasing, replace `[Next]` with
 the release date (`[YYYY-MM-DD]`) and start a new `[Next]` release with the next version.
+
+## Releasing
+
+`.github/workflows/release.yml` stages the npm package when a GitHub release is published, with
+npm's trusted publishing (no token) and provenance. Date the version in `CHANGELOG.md`, then create
+the release with a tag matching `src/main/js/package.json`'s version:
+`gh release create v0.12.2 --repo WhimsicalCode/clojurific --target main`. The workflow runs
+`script/test-esm` and `script/test-launcher` on Linux (Java 17 and 25) and macOS, checks the tag and
+the changelog, packs with `script/package-npm` and stages it. A maintainer then approves the staged
+version with 2FA (`npm stage list clojurific`, `npm stage approve <id>`, or on npmjs.com) to publish
+it. Then start the next `[Next]` release and bump the version. Only release when the user asks.

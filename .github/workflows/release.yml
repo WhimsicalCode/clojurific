@@ -1,41 +1,116 @@
-name: Release on demand
+name: Release
+
+# Stages the npm package clojurific when a GitHub release is published:
+#
+#   gh release create v0.12.2 --repo WhimsicalCode/clojurific --target main --notes-file notes.md
+#
+# The release's tag must match src/main/js/package.json's version, and
+# CHANGELOG.md must date it. npm authenticates with trusted publishing
+# (GitHub's OIDC token, configured in the package's settings on npmjs.com for
+# this workflow), which also adds provenance: no npm token. The workflow may
+# only stage: a maintainer approves the staged version with 2FA
+# (npm stage approve <id>, or on npmjs.com) to publish it.
 
 on:
-  workflow_dispatch:
-    inputs:
-      deploy:
-        description: "Deploy to Maven Central"
-        required: true
-        default: false
-        type: boolean
+  release:
+    types: [published]
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  test:
+    name: test (${{ matrix.os }}, Java ${{ matrix.java }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Java 17 is the launcher's minimum
+          - os: ubuntu-latest
+            java: '17'
+          - os: ubuntu-latest
+            java: '25'
+          - os: macos-latest
+            java: '25'
     steps:
-    - name: Check out
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
-    - name: Set Github identity
-      run: |
-        git config --global user.name clojure-build
-        git config --global user.email "clojure-build@users.noreply.github.com"
-    - name: Set up Java
-      uses: actions/setup-java@v3
-      with:
-        java-version: 21
-        distribution: 'temurin'
-        cache: 'maven'
-        server-id: central
-        server-username: MAVEN_USERNAME
-        server-password: MAVEN_PASSWORD
-        gpg-private-key: ${{ secrets.CENTRAL_GPG_SECRET_KEY }}
-        gpg-passphrase: GPG_PASSPHRASE
-    - name: Release
-      run: script/build
-      env:
-        HUDSON: ${{ github.event.inputs.deploy }}
-        MAVEN_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
-        MAVEN_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
-        GPG_PASSPHRASE: ${{ secrets.CENTRAL_GPG_SECRET_KEY_PASSWORD }}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
+
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
+        with:
+          cli: 1.11.1.1155
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-release-${{ hashFiles('deps.edn', 'src/main/js/cljf/resolver.lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-release-
+
+      - name: ES module build and runtime tests
+        run: script/test-esm
+
+      - name: Launcher and npm package tests
+        env:
+          CLJF_TEST_DOWNLOADS: '1'
+        run: script/test-launcher
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # npm's trusted publishing and provenance
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
+        with:
+          cli: 1.11.1.1155
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.1'
+          registry-url: 'https://registry.npmjs.org'
+
+      # trusted publishing and npm stage need a current npm, Node.js 22 bundles npm 10
+      - name: Install npm
+        run: npm install -g npm@11.20.0
+
+      - name: Check the version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./src/main/js/package.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The release's tag $TAG doesn't match package.json's version $version"
+            exit 1
+          fi
+          if ! grep -qE "^## $version \[[0-9]{4}-[0-9]{2}-[0-9]{2}\]$" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md doesn't date $version (## $version [YYYY-MM-DD])"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Pack
+        run: script/package-npm
+
+      - name: Stage
+        run: npm stage publish "./builds/clojurific-$VERSION.tgz" --access public --provenance
