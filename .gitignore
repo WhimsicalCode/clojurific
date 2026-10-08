@@ -35,3 +35,5 @@ package-lock.json
 .cpcache
 resources/brepl_client.js
 !src/main/js/package.json
+!src/main/js/create-clojurific/package.json
+!src/main/js/create-clojurific/templates/*/package.json

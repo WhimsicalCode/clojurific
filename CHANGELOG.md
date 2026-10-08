@@ -5,6 +5,17 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.4 [Next]
 
+### Added
+
+- `npm create clojurific@latest` (the npm package `create-clojurific`) scaffolds a Vite project, Vanilla, Reagent or UIx, with its namespace named after the project, then installs it and starts the dev server, offering to download Java when there's none. Its projects' dev server starts an nREPL server, and `npm run repl` evaluates in their pages.
+- `cljf repl`, a ClojureScript REPL in the terminal evaluating in the pages running a watched build: an nREPL client of the watcher's nREPL server (`.nrepl-port`), with multi-line forms and history.
+
+### Fixed
+
+- `exists?` of an npm module's property (`(exists? react/useEffectEvent)`, in UIx) checked globals that don't exist under ES modules, so it was always false, and Vite warned of the import.
+- Namespaces loaded by pages' scripts or JavaScript imports (`:extra-main`) didn't import the `:preloads` or, when watched, the REPL runtime, so the REPL found no runtime to evaluate in.
+- Namespaces read as fields of JavaScript globals (`(.. js/cljs -core -PersistentArrayMap -EMPTY)`, in cljs-bean) weren't rewritten to module references, and threw `cljs is not defined`.
+
 ## 0.12.3 [2026-10-08]
 
 ### Fixed

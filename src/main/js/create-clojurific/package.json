@@ -1,0 +1,24 @@
+{
+  "name": "create-clojurific",
+  "version": "0.12.4",
+  "description": "Scaffolds a ClojureScript project compiled by Clojurific and bundled by Vite: npm create clojurific@latest",
+  "license": "EPL-1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WhimsicalCode/clojurific.git",
+    "directory": "src/main/js/create-clojurific"
+  },
+  "type": "module",
+  "bin": {
+    "create-clojurific": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "create.js",
+    "prompts.js",
+    "templates"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

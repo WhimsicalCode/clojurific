@@ -1,19 +1,21 @@
 #!/bin/sh
 
-# Tests the cljf launcher (src/main/js/cljf, with Node.js' test runner), then
-# the npm package: packs it with script/package-npm, installs it into an empty
-# project, builds a namespace with npx cljf, and bundles a page loading its
-# source, and a JavaScript module importing another, with Vite and the plugin. The package gets the compiler from Clojars:
-# the project's local Maven repository has the jar of this version
-# (script/clojars install), and downloads the rest (about 20 MB).
-# CLJF_TEST_DOWNLOADS=1 also
-# tests a start with an empty local Maven repository, see
-# src/main/js/cljf/test/launcher.test.js.
+# Tests the cljf launcher and create-clojurific (src/main/js/cljf,
+# src/main/js/create-clojurific, with Node.js' test runner), then the npm
+# packages: packs them with script/package-npm, installs clojurific into an
+# empty project, builds a namespace with npx cljf, and bundles a page loading
+# its source, and a JavaScript module importing another, with Vite and the
+# plugin. Then scaffolds a project of each create-clojurific template and
+# bundles it. The package gets the compiler from Clojars: the project's local
+# Maven repository has the jar of this version (script/clojars install), and
+# downloads the rest (about 20 MB, and the templates' libraries).
+# CLJF_TEST_DOWNLOADS=1 also tests a start with an empty local Maven
+# repository, see src/main/js/cljf/test/launcher.test.js.
 
 set -e
 cd "$(dirname "$0")/.."
 
-node --test 'src/main/js/cljf/test/*.test.js'
+node --test 'src/main/js/cljf/test/*.test.js' 'src/main/js/create-clojurific/test/*.test.js'
 
 script/package-npm
 version=$(node -p "require('./builds/npm/package.json').version")
@@ -52,4 +54,28 @@ printf '(ns smoke.core)\n(println "smoke" (+ 1 2))\n' > "$project/src/smoke/core
     for (const script of process.argv.slice(1)) await import(pathToFileURL(script).href);" $scripts)
   test "$output" = "$(printf 'smoke 3\nextra')"
 )
-echo "npm package: ok"
+
+# the templates' projects get this version's jar from the local Maven
+# repository above through the user's deps.edn
+repo=$(pwd)
+mkdir -p "$project/clj-config"
+printf '{:mvn/local-repo "%s"}\n' "$project/m2" > "$project/clj-config/deps.edn"
+for template in vanilla reagent uix; do
+  (
+    cd "$project"
+    npm exec --yes --package="$repo/builds/create-clojurific-$version.tgz" -- \
+      create-clojurific "create-$template" --template "$template" --no-interactive > /dev/null
+    cd "create-$template"
+    test -f .gitignore
+    npm install --silent --no-audit --no-fund "$repo/builds/clojurific-$version.tgz"
+    output=$(CLJ_CONFIG="$project/clj-config" npx vite build --logLevel warn 2>&1)
+    # Rolldown's warnings, i.e. [IMPORT_IS_UNDEFINED]
+    if echo "$output" | grep -q '\[[A-Z_]*\]'; then
+      echo "$output"
+      exit 1
+    fi
+    grep -q "create-$template.core" dist/manifest.json
+    echo "create-clojurific $template: ok"
+  )
+done
+echo "npm packages: ok"
