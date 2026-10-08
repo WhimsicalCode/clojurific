@@ -1,311 +1,91 @@
 name: Tests
-on: [push]
+
+# The classic compiler's suites (with the Closure Compiler, the :closure
+# alias), the ES module suite without it, and the launcher's: cljf, the npm
+# package and the Clojars artifact. The ES module and launcher suites also run
+# on Java 17, the launcher's minimum.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  # Runtime Tests
-  runtime-test:
-    name: Runtime Tests
+  test:
+    name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: compiler
+            run: |
+              clojure -M:closure:compiler.test:compiler.test.run
+              script/gen-default-externs
+              git diff --exit-code src/main/clojure/cljs/externs/default.edn ||
+                { echo "::error::cljs/externs/default.edn is out of date, run script/gen-default-externs"; exit 1; }
+          - suite: runtime
+            run: |
+              clojure -M:closure:runtime.test.build
+              node builds/out-adv/core-advanced-test.js | tee test-out.txt
+              grep -qxF '0 failures, 0 errors.' test-out.txt
+          - suite: lite
+            run: |
+              clojure -M:closure:lite.test.build
+              node builds/out-lite/lite-test.js | tee test-out.txt
+              grep -qxF '0 failures, 0 errors.' test-out.txt
+          - suite: self-host
+            run: |
+              clojure -M:closure:selfhost.test.build
+              node builds/out-self/core-self-test.js | tee test-out.txt
+              grep -qxF '0 failures, 0 errors.' test-out.txt
+          - suite: self-parity
+            run: |
+              clojure -M:closure:selfparity.test.build
+              node builds/out-self-parity/main.js | tee test-out.txt
+              grep -qxF '0 failures, 0 errors.' test-out.txt
+          - suite: esm
+            run: script/test-esm
+          - suite: esm (Java 17)
+            java: '17'
+            run: script/test-esm
+          - suite: launcher
+            run: |
+              CLJF_TEST_DOWNLOADS=1 script/test-launcher
+              script/test-clojars
+          - suite: launcher (Java 17)
+            java: '17'
+            run: script/test-launcher
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: actions/setup-java@v4
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
+        with:
+          cli: 1.11.1.1155
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-test-${{ hashFiles('deps.edn', 'src/main/js/cljf/resolver.lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-test-
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: ${{ matrix.java || '25' }}
 
-      - uses: DeLaGuardo/setup-clojure@3.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          tools-deps: '1.10.1.763'
-
-      - name: Cache maven
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-maven
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Cache gitlibs
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-gitlibs
-        with:
-          path: ~/.gitlibs
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Build tests
-        run: clojure -M:closure:runtime.test.build
+          node-version: '22.23.1'
 
       - name: Run tests
-        run: |
-          node builds/out-adv/core-advanced-test.js | tee test-out.txt
-          grep -qxF '0 failures, 0 errors.' test-out.txt
-
-  # Lite Tests
-  lite-test:
-    name: Lite Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - uses: DeLaGuardo/setup-clojure@3.1
-        with:
-          tools-deps: '1.10.1.763'
-
-      - name: Cache maven
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-maven
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Cache gitlibs
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-gitlibs
-        with:
-          path: ~/.gitlibs
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Build tests
-        run: clojure -M:closure:lite.test.build
-
-      - name: Run tests
-        run: |
-          node builds/out-lite/lite-test.js | tee test-out.txt
-          grep -qxF '0 failures, 0 errors.' test-out.txt
-
-    # Runtime Tests
-  runtime-windows-test:
-    name: Runtime Windows Tests
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - uses: DeLaGuardo/setup-clojure@3.5
-        with:
-          cli: '1.10.1.763'
-
-      - name: Build tests
-        run: clojure -M:closure:runtime.test.build
-        shell: powershell
-
-      - name: Run tests
-        run: |
-          node builds/out-adv/core-advanced-test.js | tee test-out.txt
-          findstr "0 failures, 0 errors." test-out.txt
-        shell: powershell
-
-  # Self-host Tests
-  self-host-test:
-    name: Self-host Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - uses: DeLaGuardo/setup-clojure@3.1
-        with:
-          tools-deps: '1.10.1.763'
-
-      - name: Cache maven
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-maven
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Cache gitlibs
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-gitlibs
-        with:
-          path: ~/.gitlibs
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Build tests
-        run: clojure -M:closure:selfhost.test.build
-
-      - name: Run tests
-        run: |
-          node builds/out-self/core-self-test.js | tee test-out.txt
-          grep -qxF '0 failures, 0 errors.' test-out.txt
-
-  # Self-parity Tests
-  self-parity-test:
-    name: Self-parity Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - uses: DeLaGuardo/setup-clojure@3.1
-        with:
-          tools-deps: '1.10.1.763'
-
-      - name: Cache maven
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-maven
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Cache gitlibs
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-gitlibs
-        with:
-          path: ~/.gitlibs
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Build tests
-        run: clojure -M:closure:selfparity.test.build
-
-      - name: Run tests
-        run: |
-          node builds/out-self-parity/main.js | tee test-out.txt
-          grep -qxF '0 failures, 0 errors.' test-out.txt
-
-  # Compiler Tests
-  compiler-test:
-    name: Compiler Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - uses: DeLaGuardo/setup-clojure@3.1
-        with:
-          tools-deps: '1.10.1.763'
-
-      - name: Cache maven
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-maven
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Cache gitlibs
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-gitlibs
-        with:
-          path: ~/.gitlibs
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Run tests
-        run: clojure -M:closure:compiler.test:compiler.test.run
-
-  # Compiler Windows Tests
-  compiler-windows-test:
-    name: Compiler Windows Tests
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - uses: DeLaGuardo/setup-clojure@3.5
-        with:
-          cli: '1.10.1.763'
-
-      - name: Run tests
-        run: clojure -M:closure:compiler.test:compiler.test.run
-        shell: powershell
-
-  # CLI Tests
-  cli-test:
-    name: CLI Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - uses: DeLaGuardo/setup-clojure@3.1
-        with:
-          tools-deps: '1.10.1.763'
-
-      - name: Cache maven
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-maven
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Cache gitlibs
-        uses: actions/cache@v4.2.0
-        env:
-          cache-name: cache-gitlibs
-        with:
-          path: ~/.gitlibs
-          key: ${{ runner.os }}-${{ env.cache-name }}-${{ hashFiles('deps.edn', '*/deps.edn') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ env.cache-name }}-
-
-      - name: Build Uberjar
-        run: ./script/uberjar
-
-      - name: Run tests
-        run: |
-          unset JAVA_TOOL_OPTIONS
-          clojure -M:closure:cli.test.run | tee test-out.txt
-          grep -qxF '0 failures, 0 errors.' test-out.txt
+        run: ${{ matrix.run }}
