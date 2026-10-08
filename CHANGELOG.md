@@ -3,12 +3,16 @@
 Changes since Clojurific was forked from ClojureScript. For ClojureScript's own
 releases, see its [changelog](https://github.com/clojure/clojurescript/blob/master/changes.md).
 
-## 0.12.3 [Next]
+## 0.12.3 [2026-10-08]
 
 ### Fixed
 
 - ClojureScript sources imported only from JavaScript or TypeScript modules weren't compiled. The Vite plugin now follows the pages' modules through relative and root-absolute imports to find them.
 - Released compilers (0.12.2 from npm and Clojars) recompiled every namespace on every build: output compiled by a version like `1.12.clojurific-0.12.2` wasn't recognised as up to date.
+- Page scripts loading ClojureScript sources with a query or fragment (`/src/app.cljs?v=1`) weren't compiled or rewritten in dev.
+- Builds of several pages with the same file name in different directories (`index.html`, `about/index.html`) kept only one of them.
+- The Vite dev server no longer serves ClojureScript sources outside Vite's root and `server.fs.allow`.
+- `cljf watch` and its JVM kept running after a SIGINT sent only to `cljf`, i.e. by an IDE or a process supervisor.
 
 ## 0.12.2 [2026-10-08]
 
