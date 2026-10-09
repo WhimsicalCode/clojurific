@@ -1061,9 +1061,13 @@
    consistent with =."
   [o]
   (cond
-    ;; the most common keys, a call V8 inlines: a keyword caches its hash
+    ;; the most common keys: a keyword caches its hash, read here rather
+    ;; than through its -hash (caching-hash), which computes it when nil
     (instance? Keyword o)
-    (bit-xor (-hash ^not-native o) 0)
+    (let [h (.-_hash o)]
+      (if (nil? h)
+        (bit-xor (-hash ^not-native o) 0)
+        (bit-xor h 0)))
 
     ;; the method implements? found, without -hash's dispatch checking again
     (implements? IHash o)

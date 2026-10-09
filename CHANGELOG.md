@@ -9,7 +9,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 - In fn bodies, `let`s in expression position (`or`, `and`, higher order calls binding their arguments, ...) assign their locals in a comma expression instead of binding them in an IIFE, and `do`s in expression position are comma expressions: their functions allocate less and V8 optimizes them better (about 4% faster on the Whimsical app's benchmarks).
 - A `let` binding initialized by a `loop`, `case`, `try` or `letfn` (or an `if`, `do` or `let` ending in one) is assigned from statements instead of an IIFE.
-- `hash` of a keyword, and of other `IHash` values, calls their `-hash` method directly instead of through `-hash`'s dispatch: hash maps with keyword keys are faster.
+- `hash` of a keyword reads the hash the keyword caches (computing it once through its `-hash` method when it isn't cached yet), and of other `IHash` values calls their `-hash` method directly instead of through `-hash`'s dispatch: hash maps with keyword keys are faster.
 - `mapv`, `filterv`, `vec` and `into` a vector add to their transient vector through its method rather than `-conj!`, which dispatches on every kind of transient collection.
 - `merge` of up to two maps and `assoc` of two key/value pairs have fixed arities: their calls don't build a seq of their arguments.
 - A multimethod remembers the method of its last dispatch value, used while its method cache is unchanged and the next dispatch value is identical: repeated dispatch skips the cache lookup.
