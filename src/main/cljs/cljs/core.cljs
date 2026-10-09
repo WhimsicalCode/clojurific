@@ -1840,10 +1840,16 @@ reduces them without incurring seq initialization"
 
 (es6-iterable RSeq)
 
+(declare PersistentVector)
+
 (defn second
   "Same as (first (next x))"
   [coll]
-  (first (next coll)))
+  (if (instance? PersistentVector coll)
+    ;; by index, without the seqs of next
+    (when (< 1 (.-cnt coll))
+      (-nth ^not-native coll 1))
+    (first (next coll))))
 
 (defn ffirst
   "Same as (first (first x))"
@@ -1868,10 +1874,16 @@ reduces them without incurring seq initialization"
 (defn last
   "Return the last item in coll, in linear time"
   [s]
-  (let [sn (next s)]
-    (if-not (nil? sn)
-      (recur sn)
-      (first s))))
+  (if (instance? PersistentVector s)
+    ;; by index, rather than walking a seq to the end
+    (let [cnt (.-cnt s)]
+      (when (pos? cnt)
+        (-nth ^not-native s (dec cnt))))
+    (loop [s s]
+      (let [sn (next s)]
+        (if-not (nil? sn)
+          (recur sn)
+          (first s))))))
 
 (extend-type default
   IEquiv
