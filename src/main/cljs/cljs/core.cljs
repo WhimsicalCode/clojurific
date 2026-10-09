@@ -11801,22 +11801,34 @@ reduces them without incurring seq initialization"
   (assert (string? s))
   (UUID. (.toLowerCase s) nil))
 
+(def ^:private uuid-hex-bytes nil)
+
+(defn- uuid-hex4
+  "n, a 16 bit number, as 4 lower case hex digits."
+  [n]
+  (let [t (or uuid-hex-bytes
+              ;; two lower case hex digits per byte, built on first use
+              (let [t (make-array 256)]
+                (dotimes [i 256]
+                  (aset t i (.slice (.toString (+ 256 i) 16) 1)))
+                (set! uuid-hex-bytes t)
+                t))]
+    (js* "(~{} + ~{})" (aget t (bit-shift-right n 8)) (aget t (bit-and n 255)))))
+
 (defn random-uuid
   "Returns a pseudo-randomly generated UUID instance (i.e. type 4)."
   []
-  (letfn [(^string quad-hex []
-            (let [unpadded-hex ^string (.toString (rand-int 65536) 16)]
-              (case (count unpadded-hex)
-                1 (str_ "000" unpadded-hex)
-                2 (str_ "00" unpadded-hex)
-                3 (str_ "0" unpadded-hex)
-                unpadded-hex)))]
-    (let [ver-tripple-hex ^string (.toString (bit-or 0x4000 (bit-and 0x0fff (rand-int 65536))) 16)
-          res-tripple-hex ^string (.toString (bit-or 0x8000 (bit-and 0x3fff (rand-int 65536))) 16)]
-      (uuid
-        (str_ (quad-hex) (quad-hex) "-" (quad-hex) "-"
-             ver-tripple-hex "-" res-tripple-hex "-"
-             (quad-hex) (quad-hex) (quad-hex))))))
+  ;; hex digits from a table rather than formatted and padded per number,
+  ;; from the same random numbers in the same order as before
+  (let [ver-tripple-hex (uuid-hex4 (bit-or 0x4000 (bit-and 0x0fff (rand-int 65536))))
+        res-tripple-hex (uuid-hex4 (bit-or 0x8000 (bit-and 0x3fff (rand-int 65536))))]
+    (UUID. (js* "(~{} + ~{} + '-' + ~{} + '-' + ~{} + '-' + ~{} + '-' + ~{} + ~{} + ~{})"
+                (uuid-hex4 (rand-int 65536)) (uuid-hex4 (rand-int 65536))
+                (uuid-hex4 (rand-int 65536))
+                ver-tripple-hex res-tripple-hex
+                (uuid-hex4 (rand-int 65536)) (uuid-hex4 (rand-int 65536))
+                (uuid-hex4 (rand-int 65536)))
+           nil)))
 
 (defn uuid?
   "Return true if x is a UUID."
