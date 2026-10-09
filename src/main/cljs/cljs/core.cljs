@@ -1359,7 +1359,11 @@
     (if (nil? x)
       (nil? y)
       (or (identical? x y)
-        ^boolean (-equiv x y))))
+        (if (instance? Keyword x)
+          ;; Keyword's -equiv, without -equiv's dispatch on every type
+          (and (instance? Keyword y)
+               (identical? (.-fqn x) (.-fqn y)))
+          ^boolean (-equiv x y)))))
   ([x y & more]
      (if (= x y)
        (if (next more)
