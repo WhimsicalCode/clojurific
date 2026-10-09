@@ -4428,14 +4428,25 @@ reduces them without incurring seq initialization"
          (.createMulti TransformerIterator xform (map iter (cons coll colls))))
        ())))
 
+(declare PersistentVector)
+
 (defn every?
   "Returns true if (pred x) is logical true for every x in coll, else
   false."
   [pred coll]
-  (cond
-   (nil? (seq coll)) true
-   (pred (first coll)) (recur pred (next coll))
-   :else false))
+  (if (instance? PersistentVector coll)
+    ;; by index, without a seq per element
+    (let [cnt (.-cnt coll)]
+      (loop [i 0]
+        (cond
+          (== i cnt) true
+          (pred (-nth ^not-native coll i)) (recur (inc i))
+          :else false)))
+    (loop [coll coll]
+      (cond
+        (nil? (seq coll)) true
+        (pred (first coll)) (recur (next coll))
+        :else false))))
 
 (defn not-every?
   "Returns false if (pred x) is logical true for every x in
@@ -4448,8 +4459,15 @@ reduces them without incurring seq initialization"
   this will return :fred if :fred is in the sequence, otherwise nil:
   (some #{:fred} coll)"
   [pred coll]
-  (when-let [s (seq coll)]
-    (or (pred (first s)) (recur pred (next s)))))
+  (if (instance? PersistentVector coll)
+    ;; by index, without a seq per element
+    (let [cnt (.-cnt coll)]
+      (loop [i 0]
+        (when (< i cnt)
+          (or (pred (-nth ^not-native coll i)) (recur (inc i))))))
+    (loop [s (seq coll)]
+      (when s
+        (or (pred (first s)) (recur (next s)))))))
 
 (defn not-any?
   "Returns false if (pred x) is logical true for any x in coll,
@@ -5531,13 +5549,29 @@ reduces them without incurring seq initialization"
   {:added "1.2"
    :static true}
   ([m ks]
-   (loop [m m
-          ks (seq ks)]
-     (if (nil? ks)
-       m
-       (recur (get m (first ks))
-         (next ks)))))
+   (if (instance? PersistentVector ks)
+     ;; by index, without a seq per key
+     (let [cnt (.-cnt ks)]
+       (loop [m m i 0]
+         (if (< i cnt)
+           (recur (get m (-nth ^not-native ks i)) (inc i))
+           m)))
+     (loop [m m
+            ks (seq ks)]
+       (if (nil? ks)
+         m
+         (recur (get m (first ks))
+           (next ks))))))
   ([m ks not-found]
+   (if (instance? PersistentVector ks)
+     (let [cnt (.-cnt ks)]
+       (loop [m m i 0]
+         (if (< i cnt)
+           (let [m (get m (-nth ^not-native ks i) lookup-sentinel)]
+             (if (identical? lookup-sentinel m)
+               not-found
+               (recur m (inc i))))
+           m)))
      (loop [sentinel lookup-sentinel
             m m
             ks (seq ks)]
@@ -5546,7 +5580,7 @@ reduces them without incurring seq initialization"
            (if (identical? sentinel m)
              not-found
              (recur sentinel m (next ks))))
-         m))))
+         m)))))
 
 (defn assoc-in
   "Associates a value in a nested associative structure, where ks is a
