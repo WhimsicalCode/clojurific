@@ -1303,8 +1303,33 @@
       (emitln "return " mname ";")
       (emitln "})()"))))
 
+(declare ast-children)
+
+(defn- captured-locals
+  "The locals of bindings (loop locals, which a fn created in a loop captures
+  by value) that fn-ast may refer to: by name, over-approximated with every
+  symbol of its form and the js* code it contains."
+  [fn-ast bindings]
+  (when (seq bindings)
+    (let [codes (volatile! [])
+          names (loop [names (into #{} (filter symbol?) (tree-seq coll? seq (:form fn-ast)))
+                       nodes [fn-ast]]
+                  (if-let [node (first nodes)]
+                    (recur (case (:op node)
+                             :local (conj names (:name node))
+                             :js (do (vswap! codes conj (str (:code node) (apply str (:segs node))))
+                                     names)
+                             names)
+                           (into (rest nodes) (ast-children node)))
+                    names))]
+      (filter (fn [binding]
+                (or (contains? names (:name binding))
+                    (let [munged (str (munge binding))]
+                      (some #(string/includes? % munged) @codes))))
+              bindings))))
+
 (defmethod emit* :fn
-  [{variadic :variadic? :keys [name named? env methods max-fixed-arity recur-frames in-loop loop-lets]}]
+  [{variadic :variadic? :keys [name named? env methods max-fixed-arity recur-frames in-loop loop-lets] :as ast}]
   ;;fn statements get erased, serve no purpose and can pollute scope if named
   (when-not (= :statement (:context env))
     (let [;; Under ESM the name def gives a fn is the module binding of its var:
@@ -1319,6 +1344,7 @@
                  ;; need to capture locals only if in recur fn or loop
                  (when (or in-loop (seq recur-params))
                    (mapcat :params loop-lets)))
+               (captured-locals ast)
                (map munge)
                seq)
           async (:async env)]
