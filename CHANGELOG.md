@@ -16,6 +16,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 - Multimethods read their method cache and hierarchy atoms directly instead of through `deref`'s protocol dispatch, and look up the method cache with `get`: dispatch is faster.
 - `random-uuid` formats its hex digits from a table, about 2.5 times faster, with the same UUIDs for the same `Math.random` numbers.
 - `compare` of two strings skips the `IComparable` lookup when `IComparable` isn't extended to strings: sorted maps and sorts with string keys are faster.
+- The `goog.string` shim's `startsWith` and `endsWith` (`clojure.string/starts-with?`, `ends-with?`) use the native string methods for string arguments, about twice as fast.
 - `last` and `second` of a persistent vector read it by index instead of walking a seq: `last` of a vector is no longer linear.
 - `some`, `every?` and `get-in` walk persistent vectors by index instead of allocating a seq per element (about 5% faster on the Whimsical app's benchmarks).
 - `aclone` clones arrays with `.slice()`, about twice as fast for the 32 element nodes transients and hash maps clone, and `persistent!` of a transient vector trims its tail with it.
