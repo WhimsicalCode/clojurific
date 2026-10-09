@@ -469,11 +469,15 @@
 (defn aclone
   "Returns a javascript array, cloned from the passed in array"
   [arr]
-  (let [len (alength arr)
-        new-arr (make-array len)]
-    (dotimes [i len]
-      (aset new-arr i (aget arr i)))
-    new-arr))
+  (if (array? arr)
+    ;; natively, about twice as fast as copying the elements one by one
+    (.slice arr)
+    ;; array-likes, i.e. typed arrays, are cloned to an array
+    (let [len (alength arr)
+          new-arr (make-array len)]
+      (dotimes [i len]
+        (aset new-arr i (aget arr i)))
+      new-arr)))
 
 (defn ^array array
   "Creates a new javascript array.
@@ -6355,8 +6359,7 @@ reduces them without incurring seq initialization"
     (if ^boolean (.-edit root)
       (do (set! (.-edit root) nil)
           (let [len (- cnt (tail-off tcoll))
-                trimmed-tail (make-array len)]
-            (array-copy tail 0 trimmed-tail 0 len)
+                trimmed-tail (.slice tail 0 len)]
             (PersistentVector. nil cnt shift root trimmed-tail nil)))
       (throw (js/Error. "persistent! called twice"))))
 
