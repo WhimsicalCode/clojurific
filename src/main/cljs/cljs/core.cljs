@@ -11542,6 +11542,15 @@ reduces them without incurring seq initialization"
 (defn- throw-no-method-error [name dispatch-val]
   (throw (js/Error. (str_ "No method in multimethod '" name "' for dispatch value: " dispatch-val))))
 
+(defn- multi-ref-value
+  "The value of a reference of a multimethod, its own atoms or a hierarchy:
+  an atom's state without the deref protocol's dispatch, which every
+  multimethod call makes."
+  [r]
+  (if (instance? Atom r)
+    (.-state r)
+    (deref r)))
+
 (deftype MultiFn [name dispatch-fn default-dispatch-val hierarchy
                   method-table prefer-table method-cache cached-hierarchy]
   IFn
@@ -11697,9 +11706,9 @@ reduces them without incurring seq initialization"
     mf)
 
   (-get-method [mf dispatch-val]
-    (when-not (= @cached-hierarchy @hierarchy)
+    (when-not (= (multi-ref-value cached-hierarchy) (multi-ref-value hierarchy))
       (reset-cache method-cache method-table cached-hierarchy hierarchy))
-    (if-let [target-fn (@method-cache dispatch-val)]
+    (if-let [target-fn (get (multi-ref-value method-cache) dispatch-val)]
       target-fn
       (find-and-cache-best-method name dispatch-val hierarchy method-table
         prefer-table method-cache cached-hierarchy default-dispatch-val)))
