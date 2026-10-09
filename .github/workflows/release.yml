@@ -12,6 +12,8 @@ name: Release
 #   token, configured in each package's settings on npmjs.com for this
 #   workflow) and provenance, no npm token. A maintainer approves the staged
 #   versions with 2FA (npm stage approve <id>, or on npmjs.com) to publish them.
+#   When staging fails for one package, approve the staged versions, then re-run
+#   the failed job: it skips the versions already published.
 # - Clojars: deploys com.whimsical/clojurific in the release environment, whose
 #   required reviewer approves the deployment and which holds the
 #   CLOJARS_USERNAME and CLOJARS_DEPLOY_TOKEN secrets. Clojars has no staging,
@@ -146,10 +148,20 @@ jobs:
       - name: Pack
         run: script/package-npm
 
+      # stages each package even when the other fails, skipping versions already
+      # published (i.e. approved, when re-running the job). npm stage list would
+      # find the staged ones, but needs an npm login.
       - name: Stage
         run: |
-          npm stage publish "./builds/clojurific-$VERSION.tgz" --access public --provenance
-          npm stage publish "./builds/create-clojurific-$VERSION.tgz" --access public --provenance
+          status=0
+          for package in clojurific create-clojurific; do
+            if curl -fsS -o /dev/null "https://registry.npmjs.org/$package/$VERSION" 2>/dev/null; then
+              echo "$package@$VERSION is already published"
+            else
+              npm stage publish "./builds/$package-$VERSION.tgz" --access public --provenance || status=1
+            fi
+          done
+          exit $status
 
   clojars:
     needs: [check, test]

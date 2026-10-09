@@ -93,6 +93,8 @@ macOS, then:
   right away, Clojars has no staging.
 - stages the npm packages (`clojurific`, `create-clojurific`) with npm's trusted publishing (no
   token) and provenance. A maintainer approves the staged versions with 2FA (`npm stage list
-  clojurific`, `npm stage approve <id>`, or on npmjs.com) to publish them.
+  clojurific`, `npm stage approve <id>`, or on npmjs.com) to publish them. When staging fails for
+  one package, approve the staged versions, then re-run the failed `npm` job: it skips the versions
+  already published.
 
 Then start the next `[Next]` release and bump the version (both `package.json`s). Only release when the user asks.
