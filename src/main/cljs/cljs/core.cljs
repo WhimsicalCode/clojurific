@@ -2528,6 +2528,13 @@ reduces them without incurring seq initialization"
                  (garray/defaultCompare x y)
                  (throw (js/Error. (str_ "Cannot compare " x " to " y))))
 
+   ;; strings, before the costlier satisfies?, unless IComparable is
+   ;; extended to them (what native-satisfies? checks for a string)
+   (and (string? x) (string? y)
+        (not (unchecked-get IComparable "string"))
+        (not (unchecked-get IComparable "_")))
+   (garray/defaultCompare x y)
+
    (satisfies? IComparable x)
    (-compare x y)
 
