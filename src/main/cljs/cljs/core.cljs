@@ -1061,8 +1061,13 @@
    consistent with =."
   [o]
   (cond
+    ;; the most common keys, a call V8 inlines: a keyword caches its hash
+    (instance? Keyword o)
+    (bit-xor (-hash ^not-native o) 0)
+
+    ;; the method implements? found, without -hash's dispatch checking again
     (implements? IHash o)
-    (bit-xor (-hash o) 0)
+    (bit-xor (-hash ^not-native o) 0)
 
     (number? o)
     (if (js/isFinite o)
