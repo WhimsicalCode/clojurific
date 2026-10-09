@@ -8,6 +8,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 ### Changed
 
 - In fn bodies, `let`s in expression position (`or`, `and`, higher order calls binding their arguments, ...) assign their locals in a comma expression instead of binding them in an IIFE, and `do`s in expression position are comma expressions: their functions allocate less and V8 optimizes them better (about 4% faster on the Whimsical app's benchmarks).
+- A `let` binding initialized by a `loop`, `case`, `try` or `letfn` (or an `if`, `do` or `let` ending in one) is assigned from statements instead of an IIFE.
 
 ### Fixed
 

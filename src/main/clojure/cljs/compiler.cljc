@@ -1454,6 +1454,53 @@
       (when (contains? expr-ops (:op ast))
         (assoc ast :env env)))))
 
+(defn- statement-tail?
+  "Whether ast, in expression position, needs statements: a loop, case, try or
+  letfn, which emit an IIFE there, in a tail position of it."
+  [ast]
+  (case (:op ast)
+    (:loop :case :try :letfn) true
+    :if (or (statement-tail? (:then ast)) (statement-tail? (:else ast)))
+    :do (statement-tail? (:ret ast))
+    :let (statement-tail? (:body ast))
+    false))
+
+(defn- assign-tails
+  "Returns ast, analyzed in any context, as an AST of statements assigning its
+  value to the local named target (a munged name) in each of its tail
+  positions, nil if it can't."
+  [ast target]
+  (let [env  (assoc (:env ast) :context :statement)
+        tail #(assign-tails % target)]
+    (case (:op ast)
+      :if (let [then (tail (:then ast))
+                else (tail (:else ast))]
+            (when (and then else)
+              (assoc ast :env env :then then :else else)))
+      :do (when-let [ret (tail (:ret ast))]
+            (assoc ast :env env :ret ret))
+      (:let :loop :letfn) (when-let [body (tail (:body ast))]
+                            (assoc ast :env env :body body))
+      :case (let [nodes   (mapv #(when-let [then (tail (-> % :then :then))]
+                                   (assoc-in % [:then :then] then))
+                                (:nodes ast))
+                  default (some-> (:default ast) tail)]
+              (when (and (every? some? nodes)
+                         (or default (nil? (:default ast))))
+                (assoc ast :env env :nodes nodes :default default)))
+      :try (let [body  (tail (:body ast))
+                 catch (some-> (:catch ast) tail)]
+             (when (and body (or catch (nil? (:catch ast))))
+               (assoc ast :env env :body body :catch catch)))
+      :throw (assoc ast :env env)
+      :recur ast
+      (when-let [val (->expr ast)]
+        {:op ::assign :env env :target target :val val :children [:val]}))))
+
+(defmethod emit* ::assign
+  [{:keys [target val]}]
+  (emitln target " = " val ";"))
+
 (defmethod emit* :do
   [{:keys [statements ret env] :as ast}]
   (let [context (:context env)
@@ -1524,7 +1571,14 @@
       (doseq [{:keys [init] :as binding} bindings]
         (emits "var ")
         (emit binding) ; Binding will be treated as a var
-        (emitln " = " init ";"))
+        ;; an init needing statements assigns the binding from them, rather
+        ;; than from an IIFE
+        (if-let [assign (when (and (statement-tail? init)
+                                   (not (uses-fn-scope? init)))
+                          (assign-tails init (munge binding)))]
+          (do (emitln ";")
+              (emit assign))
+          (emitln " = " init ";")))
       (when is-loop (emitln "while(true){"))
       (emits expr)
       (when is-loop
