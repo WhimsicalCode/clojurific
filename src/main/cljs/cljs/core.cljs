@@ -2104,10 +2104,17 @@ reduces them without incurring seq initialization"
      (if-not (nil? coll)
        (-assoc coll k v)
        {k v})))
-  ([coll k v & kvs]
-     (let [ret (assoc coll k v)]
+  ;; two pairs, without the variadic arity's seq; a key without a value is
+  ;; associated with nil, as by the variadic arity
+  ([coll k v k2]
+   (assoc (assoc coll k v) k2 nil))
+  ([coll k v k2 v2]
+   (assoc (assoc coll k v) k2 v2))
+  ([coll k v k2 v2 & kvs]
+     (loop [ret (assoc (assoc coll k v) k2 v2)
+            kvs kvs]
        (if kvs
-         (recur ret (first kvs) (second kvs) (nnext kvs))
+         (recur (assoc ret (first kvs) (second kvs)) (nnext kvs))
          ret))))
 
 (defn dissoc
@@ -9349,9 +9356,16 @@ reduces them without incurring seq initialization"
   "Returns a map that consists of the rest of the maps conj-ed onto
   the first.  If a key occurs in more than one map, the mapping from
   the latter (left-to-right) will be the mapping in the result."
-  [& maps]
-  (when (some identity maps)
-    (reduce #(conj (or %1 {}) %2) maps)))
+  ;; the fixed arities are the variadic one's results, without its seq
+  ([] nil)
+  ([m] (when m m))
+  ([m1 m2]
+   (when (or m1 m2)
+     (conj (or m1 {}) m2)))
+  ([m1 m2 & more]
+   (let [maps (list* m1 m2 more)]
+     (when (some identity maps)
+       (reduce #(conj (or %1 {}) %2) maps)))))
 
 (defn merge-with
   "Returns a map that consists of the rest of the maps conj-ed onto

@@ -11,6 +11,8 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 - A `let` binding initialized by a `loop`, `case`, `try` or `letfn` (or an `if`, `do` or `let` ending in one) is assigned from statements instead of an IIFE.
 - `hash` of a keyword, and of other `IHash` values, calls their `-hash` method directly instead of through `-hash`'s dispatch: hash maps with keyword keys are faster.
 - `mapv`, `filterv`, `vec` and `into` a vector add to their transient vector through its method rather than `-conj!`, which dispatches on every kind of transient collection.
+- `merge` of up to two maps and `assoc` of two key/value pairs have fixed arities: their calls don't build a seq of their arguments.
+- A multimethod remembers the method of its last dispatch value, used while its method cache is unchanged and the next dispatch value is identical: repeated dispatch skips the cache lookup.
 - Multimethods read their method cache and hierarchy atoms directly instead of through `deref`'s protocol dispatch, and look up the method cache with `get`: dispatch is faster.
 - `random-uuid` formats its hex digits from a table, about 2.5 times faster, with the same UUIDs for the same `Math.random` numbers.
 - `compare` of two strings skips the `IComparable` lookup when `IComparable` isn't extended to strings: sorted maps and sorts with string keys are faster.
