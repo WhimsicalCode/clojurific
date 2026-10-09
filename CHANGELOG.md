@@ -5,6 +5,10 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.6 [Next]
 
+### Changed
+
+- In fn bodies, `let`s in expression position (`or`, `and`, higher order calls binding their arguments, ...) assign their locals in a comma expression instead of binding them in an IIFE, and `do`s in expression position are comma expressions: their functions allocate less and V8 optimizes them better (about 4% faster on the Whimsical app's benchmarks).
+
 ### Fixed
 
 - `cljf repl` waited forever when the nREPL server closed the connection before the REPL had switched to ClojureScript (the server stopping or restarting while it connects): it now fails, saying the server closed the connection.

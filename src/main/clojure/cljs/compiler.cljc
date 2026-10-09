@@ -57,6 +57,10 @@
 (def ^:dynamic *source-map-data* nil)
 (def ^:dynamic *source-map-data-gen-col* nil)
 (def ^:dynamic *lexical-renames* {})
+;; In a fn body, an atom of the locals declared at its end: a let in
+;; expression position assigns them in a comma expression instead of binding
+;; them in an IIFE, see emit-let.
+(def ^:dynamic *hoisted-locals* nil)
 
 ;; ES module output (:module-format :esm)
 ;;
@@ -1212,6 +1216,19 @@
     (when-not (= param (last params))
       (emits ","))))
 
+(defn emit-fn-body
+  "Emits the body of a fn method, declaring the locals its lets in expression
+  position hoisted (see emit-let) at its end."
+  [expr recurs]
+  (binding [*hoisted-locals* (atom [])]
+    (when recurs (emitln "while(true){"))
+    (emits expr)
+    (when recurs
+      (emitln "break;")
+      (emitln "}"))
+    (when-let [locals (seq @*hoisted-locals*)]
+      (emitln "var " (comma-sep locals) ";"))))
+
 (defn emit-fn-method
   [{expr :body :keys [type name params env recurs]}]
   (let [async (:async env)]
@@ -1221,11 +1238,7 @@
                (emitln "){")
                (when type
                  (emitln "var self__ = this;"))
-               (when recurs (emitln "while(true){"))
-               (emits expr)
-               (when recurs
-                 (emitln "break;")
-                 (emitln "}"))
+               (emit-fn-body expr recurs)
                (emits "})"))))
 
 (defn emit-arguments-to-array
@@ -1257,11 +1270,7 @@
       (emitln "){")
       (when type
         (emitln "var self__ = this;"))
-      (when recurs (emitln "while(true){"))
-      (emits expr)
-      (when recurs
-        (emitln "break;")
-        (emitln "}"))
+      (emit-fn-body expr recurs)
       (emitln "};")
 
       (emitln "var " mname " = " (when async "async ")  "function ("
@@ -1388,13 +1397,79 @@
       (when loop-locals
         (emitln ";})(" (comma-sep loop-locals) "))")))))
 
+(def ^:private expr-ops
+  "Ops analyzing their children in expression context whatever their own, they
+  emit as JavaScript expressions in any context."
+  #{:var :js-var :local :the-var :with-meta :map :vector :set :js-object
+    :js-array :const :invoke :new :set! :host-field :host-call})
+
+(defn- js-code [{:keys [code segs]}]
+  (or code (apply str segs)))
+
+(defn- js-expression?
+  "Whether the code of a js* form is an expression in a statement position too,
+  conservatively."
+  [ast]
+  (let [code (js-code ast)]
+    (and (not (string/blank? code))
+         (not (re-find #"[;{}]|/\*|//" code))
+         (not (re-find #"^\s*(?:debugger|if|for|while|do|var|let|const|return|throw|try|switch|break|continue|function|class|import|export)\b" code)))))
+
+(defn- ast-children [ast]
+  (mapcat #(let [c (get ast %)] (if (vector? c) c (when c [c]))) (:children ast)))
+
+(defn- uses-fn-scope?
+  "Whether ast reads this or arguments outside of the fns it contains: moving it
+  out of an IIFE changes what they refer to."
+  [ast]
+  (case (:op ast)
+    :fn false
+    :js (boolean (re-find #"\bthis\b|\barguments\b" (js-code ast)))
+    (:var :js-var) (contains? #{"this" "arguments"} (some-> ast :info :name name))
+    (boolean (some uses-fn-scope? (ast-children ast)))))
+
+(defn- ->expr
+  "Returns ast, analyzed in any context, as an AST emitting a JavaScript
+  expression of its value without wrapping it in an IIFE at its top, nil if it
+  can't. Lets keep emitting IIFEs where emit-let can't hoist their locals."
+  [ast]
+  (let [env (assoc (:env ast) :context :expr)]
+    (case (:op ast)
+      :if (let [then (->expr (:then ast))
+                else (->expr (:else ast))]
+            (when (and then else)
+              (assoc ast :env env :then then :else else)))
+      :do (let [statements (mapv ->expr (:statements ast))
+                ret        (->expr (:ret ast))]
+            (when (and ret (every? some? statements))
+              (assoc ast :env env :statements statements :ret ret ::expr true)))
+      (:let :throw) (assoc ast :env env)
+      ;; the quoted constant has the quote's context
+      :quote (assoc ast :env env :expr (assoc-in (:expr ast) [:env :context] :expr))
+      ;; the method of a single arity fn has the fn's context
+      :fn (assoc ast :env env :methods (mapv #(assoc-in % [:env :context] :expr) (:methods ast)))
+      :js (when (and (js-expression? ast)
+                     (not (re-find #"^\s*/\*" (js-code ast))))
+            (assoc ast :env env))
+      (when (contains? expr-ops (:op ast))
+        (assoc ast :env env)))))
+
 (defmethod emit* :do
-  [{:keys [statements ret env]}]
-  (let [context (:context env)]
-    (when (and (seq statements) (= :expr context)) (emitln (iife-open env)))
-    (doseq [s statements] (emitln s))
-    (emit ret)
-    (when (and (seq statements) (= :expr context)) (emitln (iife-close env)))))
+  [{:keys [statements ret env] :as ast}]
+  (let [context (:context env)
+        expr    (when (and (seq statements) (= :expr context))
+                  (if (::expr ast) ast (->expr ast)))]
+    (if expr
+      ;; a comma expression
+      (do (emits "(")
+          (doseq [s (:statements expr)]
+            (emits s ", "))
+          (emits (:ret expr) ")"))
+      (do
+        (when (and (seq statements) (= :expr context)) (emitln (iife-open env)))
+        (doseq [s statements] (emitln s))
+        (emit ret)
+        (when (and (seq statements) (= :expr context)) (emitln (iife-close env)))))))
 
 (defmethod emit* :try
   [{try :body :keys [env catch name finally]}]
@@ -1413,7 +1488,26 @@
           (emits (iife-close env))))
       (emits try))))
 
-(defn emit-let
+(defn- emit-hoisted-let
+  "Emits a let in expression position as a comma expression assigning its
+  locals, which the enclosing fn body declares. Like those of lets in statement
+  position, they're renamed apart from the fn's other locals; fns created in
+  loops capture them by value (loop-lets), as they do the locals of lets in
+  statement position."
+  [bindings expr]
+  (binding [*lexical-renames*
+            (into *lexical-renames*
+              (map (fn [binding]
+                     [(hash-scope binding) (gensym (str (:name binding) "-"))])
+                   bindings))]
+    (emits "(")
+    (doseq [{:keys [init] :as binding} bindings]
+      (swap! *hoisted-locals* conj (munge binding))
+      (emit binding)
+      (emits " = " init ", "))
+    (emits expr ")")))
+
+(defn- emit-let-scope
   [{expr :body :keys [bindings env]} is-loop]
   (let [context (:context env)]
     (when (= :expr context)
@@ -1437,6 +1531,16 @@
         (emitln "break;")
         (emitln "}")))
     (when (= :expr context) (emits (iife-close env)))))
+
+(defn emit-let
+  [{expr :body :keys [bindings env] :as ast} is-loop]
+  (let [context (:context env)
+        hoisted (when (and (= :expr context) (not is-loop) *hoisted-locals*
+                           (not (uses-fn-scope? ast)))
+                  (->expr expr))]
+    (if hoisted
+      (emit-hoisted-let bindings hoisted)
+      (emit-let-scope ast is-loop))))
 
 (defmethod emit* :let [ast]
   (emit-let ast false))
