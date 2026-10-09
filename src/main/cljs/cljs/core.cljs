@@ -3185,9 +3185,11 @@ reduces them without incurring seq initialization"
   x.toString().  (str nil) returns the empty string. With more than
   one arg, returns the concatenation of the str values of the args."
   ([] "")
-  ([x] (if (nil? x)
-         ""
-         (.toString x)))
+  ([x] (cond
+         ;; the most common, its own toString, without the call
+         (string? x) x
+         (nil? x) ""
+         :else (.toString x)))
   ([x & ys]
    (loop [sb (StringBuffer. (str x)) more ys]
      (if more

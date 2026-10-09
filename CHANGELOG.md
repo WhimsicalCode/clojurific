@@ -16,6 +16,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 - Multimethods read their method cache and hierarchy atoms directly instead of through `deref`'s protocol dispatch, and look up the method cache with `get`: dispatch is faster.
 - `random-uuid` formats its hex digits from a table, about 2.5 times faster, with the same UUIDs for the same `Math.random` numbers.
 - `compare` of two strings skips the `IComparable` lookup when `IComparable` isn't extended to strings: sorted maps and sorts with string keys are faster.
+- `str` of a single string returns it without calling its `toString` through a call site every type goes through: `str` with string arguments is faster (about 2% on the Whimsical app's benchmarks).
 - `key-test` (hash map key comparison) doesn't test `keyword-identical?` before `=`, which compares keywords the same way.
 - `=` of a keyword and another value compares them as the keyword's `-equiv` does without dispatching `-equiv` on every type.
 - A `defn` of one fixed arity calls itself directly in its body, as other code calls it once it's defined, rather than through the higher order invoke.
