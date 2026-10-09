@@ -2870,7 +2870,7 @@ x                          (not (contains? ret :info)))
              (if (contains? idx (name dep))
                (let [dep-name (name dep)]
                  ;; under ES module output Closure Library namespaces are
-                 ;; treated as untyped JavaScript, see cljs.esm
+                 ;; treated as untyped JavaScript, see cljf.esm
                  (when (and (string/starts-with? dep-name "goog.")
                             (not= :esm (:module-format opts)))
                    #?(:clj (let [js-lib (get idx dep-name)
@@ -3737,7 +3737,7 @@ x                          (not (contains? ret :info)))
   [_ env form _ _]
   (parse-type :defrecord env form) )
 
-;; (class* Name Base [this & params] & body), see cljs.core/defclass: a
+;; (class* Name Base [this & params] & body), see cljf.x/defclass: a
 ;; JavaScript class expression extending Base (nil for none), its constructor
 ;; evaluating body with this bound once (super* & args) returned. Without the
 ;; params vector (nil), the class has the default constructor.

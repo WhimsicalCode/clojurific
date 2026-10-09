@@ -6,14 +6,14 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm-repl-tests
-  "The REPL of cljs.esm builds: forms compiled in REPL mode, and evaluated
+(ns cljf.esm-repl-tests
+  "The REPL of cljf.esm builds: forms compiled in REPL mode, and evaluated
   by the REPL runtime under Node.js."
   (:require [cljs.analyzer :as ana]
             [cljs.compiler :as comp]
             [cljs.env :as env]
-            [cljs.esm :as esm]
-            [cljs.esm.repl :as repl]
+            [cljf.esm :as esm]
+            [cljf.esm.repl :as repl]
             [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as string]
@@ -78,15 +78,15 @@
       (let [out (slurp (io/file dir "out" "esm_repl" "app.js"))]
         (is (string/includes? out "import * as esm_repl$app from \"./app.js\";"))
         (is (string/includes? out "$$r.nses.set(\"esm-repl.app\", { mod: esm_repl$app,"))
-        (is (string/includes? out "import \"../cljs/esm/repl_runtime.js\";"))
+        (is (string/includes? out "import \"../cljf/esm/repl_runtime.js\";"))
         (testing "with the stamp of the compile, also in the analysis"
-          (is (string/includes? out (str "stamp: \"" (get-in @cenv [::ana/namespaces 'esm-repl.app :cljs.esm/repl-stamp]) "\""))))))))
+          (is (string/includes? out (str "stamp: \"" (get-in @cenv [::ana/namespaces 'esm-repl.app :cljf.esm/repl-stamp]) "\""))))))))
 
 ;; The REPL runtime under Node.js, messages are JSON lines on its stdin and
 ;; stdout.
 
 (def ^:private node-harness
-  "import * as runtime from './out/cljs/esm/repl_runtime.js';
+  "import * as runtime from './out/cljf/esm/repl_runtime.js';
    import './out/esm_repl/app.js';
    import readline from 'node:readline';
    // stdout is the REPL's
@@ -231,4 +231,4 @@
   (testing "#= isn't evaluated while reading"
     (is (string/starts-with? (:error (repl/cljs-eval "#=(+ 1 2)")) "Could not read")))
   (testing "no such runtime"
-    (is (= "No runtime 5, see (cljs.esm.repl/runtimes)" (:error (repl/cljs-eval "1" {:runtime-id 5}))))))
+    (is (= "No runtime 5, see (cljf.esm.repl/runtimes)" (:error (repl/cljs-eval "1" {:runtime-id 5}))))))

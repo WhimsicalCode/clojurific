@@ -6,8 +6,8 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm.repl-runtime
-  "Evaluates the REPL's forms (cljs.esm.repl) in a running build compiled
+(ns cljf.esm.repl-runtime
+  "Evaluates the REPL's forms (cljf.esm.repl) in a running build compiled
   with :esm-repl, which the main namespaces import first.
 
   Under :esm-repl modules register their namespace object, the setters of
@@ -242,7 +242,7 @@
 
 (defn- console-result
   "Settles the console evaluation id with the REPL's result (see
-  cljs.esm.repl/cljs-eval)."
+  cljf.esm.repl/cljs-eval)."
   [id {:strs [results warnings error stack] :as result}]
   (when-let [{:keys [resolve reject value opts]} (get @console-evals id)]
     (swap! console-evals dissoc id)

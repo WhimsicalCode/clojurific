@@ -6,8 +6,9 @@
 ;; the terms of this license.
 ;; You must not remove this notice, or any other, from this software.
 
-(ns cljs.defclass-test
-  (:require [cljs.test :refer-macros [deftest is testing]]))
+(ns cljf.x-test
+  (:require [cljf.x :refer [defclass]]
+            [cljs.test :refer-macros [deftest is testing]]))
 
 (defprotocol IGreet
   (greet [this]))

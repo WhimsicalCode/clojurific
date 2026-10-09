@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// cljf: builds and watches ClojureScript with the compiler (cljs.esm), on the
+// cljf: builds and watches ClojureScript with the compiler (cljf.esm), on the
 // project's classpath resolved from its deps.edn. See usage below.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -10,7 +10,7 @@ import { repl } from './repl.js';
 const usage = `Usage: cljf [options] <command> [arguments]
 
 Commands:
-  build [options...]     compile once, cljs.esm's options: EDN maps, @file.edn
+  build [options...]     compile once, cljf.esm's options: EDN maps, @file.edn
                          and :profile keywords (defaults to :release)
   watch [options...]     compile, then recompile on changes (defaults to :dev)
   classpath              print the project's classpath
@@ -69,7 +69,7 @@ async function main() {
     case 'build':
     case 'watch': {
       const cmd = await compilerCommand({ ...opts, interactive, log });
-      run(cmd.command, [...cmd.args, '-m', 'cljs.esm', command, ...args]);
+      run(cmd.command, [...cmd.args, '-m', 'cljf.esm', command, ...args]);
       break;
     }
     case 'classpath': {

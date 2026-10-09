@@ -15,4 +15,4 @@ later: `npx cljf setup-java` downloads one.
 
 Editors connect to the dev server's nREPL server, its port in `.nrepl-port`
 (i.e. Calva's "Connect to a running REPL", CIDER's `cider-connect-clj`), and
-evaluate `(cljs.esm.repl/repl)` to switch the session to ClojureScript.
+evaluate `(cljf.esm.repl/repl)` to switch the session to ClojureScript.

@@ -6,12 +6,12 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm.lazy
+(ns cljf.esm.lazy
   "Lazily loaded code under :module-format :esm. (loadable my.ns/var)
   references a var of a namespace loaded with a dynamic import(), bundlers
   split it and everything only it requires into separate chunks. The API
   follows shadow.lazy."
-  (:require-macros [cljs.esm.lazy]))
+  (:require-macros [cljf.esm.lazy]))
 
 (defprotocol ILoadable
   (ready? [x]))

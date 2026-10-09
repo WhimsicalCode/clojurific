@@ -6,12 +6,12 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm.repl.nrepl
-  "nREPL for cljs.esm.repl: the watcher's nREPL server (:repl
+(ns cljf.esm.repl.nrepl
+  "nREPL for cljf.esm.repl: the watcher's nREPL server (:repl
   {:nrepl-port 0}) and middleware evaluating ClojureScript in the sessions
-  (cljs.esm.repl/repl) switched. Needs nREPL on the classpath, the compiler
+  (cljf.esm.repl/repl) switched. Needs nREPL on the classpath, the compiler
   doesn't depend on it."
-  (:require [cljs.esm.repl :as repl]
+  (:require [cljf.esm.repl :as repl]
             [clojure.java.io :as io]
             [clojure.string :as string]
             [nrepl.middleware :refer [set-descriptor!]]
@@ -29,7 +29,7 @@
 
 (defn enter!
   "Switches the nREPL session evaluating it to ClojureScript, see
-  cljs.esm.repl/repl."
+  cljf.esm.repl/repl."
   [opts]
   (let [{:keys [session]} eval/*msg*]
     (swap! session assoc #'*cljs* {:ns 'cljs.user :opts opts})
@@ -46,8 +46,8 @@
   (let [text (repl/format-result r)]
     (when (seq text) (t/respond-to msg :err text)))
   (if error
-    (t/respond-to msg {:ex      "cljs.esm.repl/eval-error"
-                       :root-ex "cljs.esm.repl/eval-error"
+    (t/respond-to msg {:ex      "cljf.esm.repl/eval-error"
+                       :root-ex "cljf.esm.repl/eval-error"
                        :status  #{:eval-error}})
     (when value
       (t/respond-to msg {:value value :ns (str ns)}))))
@@ -135,7 +135,7 @@
 (defn start-server!
   "Starts the nREPL server of :repl options, {:nrepl-port 0 (random)
   :nrepl-host \"127.0.0.1\" :port-files [\".nrepl-port\"]}. Its sessions
-  evaluate Clojure in the watcher's JVM, (cljs.esm.repl/repl) switches one
+  evaluate Clojure in the watcher's JVM, (cljf.esm.repl/repl) switches one
   to ClojureScript."
   [{:keys [nrepl-port nrepl-host port-files] :or {nrepl-host "127.0.0.1" port-files [".nrepl-port"]}}]
   (let [server (server/start-server
@@ -144,8 +144,8 @@
                  :handler (server/default-handler #'wrap-cljs-repl))
         port   (:port server)
         files  (write-port-files! port port-files)]
-    (println (str "[cljs.esm.repl] nREPL server on " nrepl-host ":" port
+    (println (str "[cljf.esm.repl] nREPL server on " nrepl-host ":" port
                (when (seq files) (str " (" (string/join ", " files) ")"))
-               ", (cljs.esm.repl/repl) evaluates ClojureScript"))
+               ", (cljf.esm.repl/repl) evaluates ClojureScript"))
     (flush)
     server))

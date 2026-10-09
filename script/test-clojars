@@ -22,7 +22,7 @@ printf '(ns smoke.core)\n(println "smoke" (+ 1 2))\n' > "$dir/project/src/smoke/
   cd "$dir/project"
   # the installed jar, not the fork's sources
   clojure -Spath | tr ':' '\n' | grep -qx "$dir/m2/com/whimsical/clojurific/$version/clojurific-$version.jar"
-  clojure -M -m cljs.esm build '{:main smoke.core :output-dir "out"}'
+  clojure -M -m cljf.esm build '{:main smoke.core :output-dir "out"}'
   output=$(node out/smoke/core.js)
   test "$output" = "smoke 3"
 )

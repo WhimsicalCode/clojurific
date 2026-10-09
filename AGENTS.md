@@ -1,16 +1,19 @@
 # Clojurific
 
 Clojurific is a fork of ClojureScript: `:module-format :esm` compiles namespaces to ES modules
-bundled by Vite, without the Closure Compiler. Its coordinate is `com.whimsical/clojurific`; its
-namespaces stay `cljs.*`, so libraries written for ClojureScript work unchanged. Read
+bundled by Vite, without the Closure Compiler. Its coordinate is `com.whimsical/clojurific`;
+ClojureScript's namespaces stay `cljs.*`, so libraries written for ClojureScript work unchanged,
+and the fork's own are `cljf.*` (`cljf.esm`, `cljf.x`). Read
 [`ESM.md`](ESM.md) (usage, design, known gaps) before changing it.
 
 ## Where things are
 
-- `src/main/clojure/cljs/esm.clj` — the ES module build, watch and test runner generation
-- `src/main/clojure/cljs/esm/repl.clj`, `src/main/cljs/cljs/esm/repl_runtime.cljs` — the nREPL server
+- `src/main/clojure/cljf/esm.clj` — the ES module build, watch and test runner generation
+- `src/main/clojure/cljf/esm/repl.clj`, `src/main/cljs/cljf/esm/repl_runtime.cljs` — the nREPL server
   and its browser runtime
-- `src/main/cljs/cljs/esm/` — runtime support: `goog.js`, `lazy`, `node_test`, `karma`
+- `src/main/cljs/cljf/esm/` — runtime support: `goog.js`, `lazy`, `node_test`, `karma`
+- `src/main/cljs/cljf/x.clj` — extensions to ClojureScript (`defclass`, over the analyzer's `class*`
+  and `super*`)
 - `src/main/js/` — the npm package `clojurific` (its `package.json`); `script/package-npm` packs it
   with `no-clojurescript/`. It has no compiler: the launcher gets `com.whimsical/clojurific` of its
   version from Clojars, or the fork's sources when run from this repository
@@ -26,13 +29,13 @@ namespaces stay `cljs.*`, so libraries written for ClojureScript work unchanged.
   compiler's sources, with the version `script/stamp-version` sets in them, and a pom
 - `no-clojurescript/` — an empty project replacing stock ClojureScript (`org.clojure/clojurescript`)
   through `:override-deps`
-- `src/test/clojure/cljs/esm_build_tests.clj`, `esm_repl_tests.clj` — build and REPL tests
+- `src/test/clojure/cljf/esm_build_tests.clj`, `esm_repl_tests.clj` — build and REPL tests
 
 ## Testing
 
 `script/test-esm` runs the build and REPL tests, then the ClojureScript runtime test suite compiled
 to ES modules under Node.js. It must end with `0 failures, 0 errors.` It runs without the Closure
-Compiler on the classpath, which the ES module build doesn't need. Changes outside `cljs.esm` that
+Compiler on the classpath, which the ES module build doesn't need. Changes outside `cljf.esm` that
 can affect the classic compiler also need `script/test` (runtime tests, `:advanced`) and the
 compiler tests (`clojure -M:closure:compiler.test:compiler.test.run`). The classic compiler needs
 the Closure Compiler, which only the `:closure` alias adds: list it with the other aliases, e.g.

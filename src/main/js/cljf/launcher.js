@@ -141,8 +141,8 @@ export async function classpath({ cwd = process.cwd(), aliases = [], force = fal
 
 /**
  * The command starting clojure.main with the compiler on the project's
- * classpath: {command, args, java, classpath}, cljs.esm's arguments go after
- * args, i.e. [...args, '-m', 'cljs.esm', 'build']. Options: cwd (the
+ * classpath: {command, args, java, classpath}, cljf.esm's arguments go after
+ * args, i.e. [...args, '-m', 'cljf.esm', 'build']. Options: cwd (the
  * project, with its deps.edn), aliases, force (resolve the classpath again),
  * interactive (offer to install Java), env and log.
  */

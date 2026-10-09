@@ -6,10 +6,10 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm-build-tests
-  "cljs.esm builds reusing the output of a previous build."
+(ns cljf.esm-build-tests
+  "cljf.esm builds reusing the output of a previous build."
   (:require [cljs.compiler :as comp]
-            [cljs.esm :as esm]
+            [cljf.esm :as esm]
             [cljs.util :as util]
             [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]

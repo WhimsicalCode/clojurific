@@ -1,5 +1,5 @@
 (ns esm-repl.app
-  "The build of cljs.esm-repl-tests."
+  "The build of cljf.esm-repl-tests."
   (:require [goog.string :as gstr]))
 
 (def ^:dynamic *dyn* 1)

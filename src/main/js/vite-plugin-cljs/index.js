@@ -16,7 +16,7 @@ import { Worker } from 'node:worker_threads';
 import { compilerCommand } from '../cljf/launcher.js';
 import { pruneChunks, propertyRenames } from './prune.js';
 
-const EVENT_PREFIX = '[cljs.esm] ';
+const EVENT_PREFIX = '[cljf.esm] ';
 const NPM_AS = 'cljs-npm-as:';
 // a ClojureScript source loaded by a page or imported from JavaScript, which
 // the dev server serves as an import of its compiled module
@@ -227,11 +227,11 @@ export default module.exports;
  *   the compiler added and stock ClojureScript removed, see cljf/launcher.js.
  * @param {string[]} [options.command] starts Clojure with the compiler on the
  *   classpath instead of the launcher, i.e. ["clojure", "-M:cljs"],
- *   cljs.esm's arguments follow
+ *   cljf.esm's arguments follow
  * @param {string} [options.cwd] the compiler's working directory, with the
  *   project's deps.edn, defaults to Vite's root (the project's directory)
  * @param {string} [options.config] compiler options file (EDN, see
- *   cljs.esm/load-options), relative to cwd
+ *   cljf.esm/load-options), relative to cwd
  * @param {string} [options.profile] profile of the config file, defaults to
  *   dev when serving and release when building
  * @param {string} options.outputDir the compiler's output directory, relative
@@ -285,7 +285,7 @@ export default function cljs(options) {
 
   function run(args, onEvent) {
     const [cmd, ...cmdArgs] = compiler;
-    const child = spawn(cmd, [...cmdArgs, '-m', 'cljs.esm', ...args], {
+    const child = spawn(cmd, [...cmdArgs, '-m', 'cljf.esm', ...args], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -686,7 +686,7 @@ export default function cljs(options) {
         server.ws.send(problem);
       };
       server.ws.on('connection', socket => problem && socket.send(JSON.stringify(problem)));
-      // The REPL (cljs.esm.repl): pages running the build (cljs.esm.repl-runtime)
+      // The REPL (cljf.esm.repl): pages running the build (cljf.esm.repl-runtime)
       // say hello over Vite's websocket, each connection gets a runtime id. Their
       // cljs:repl messages go to the compiler as `repl <json>` lines, the
       // compiler's repl-send events to the page of their runtime id.

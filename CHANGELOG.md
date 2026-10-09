@@ -5,6 +5,11 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.5 [Next]
 
+### Changed
+
+- The fork's namespaces moved from `cljs.*` to `cljf.*`: `cljs.esm` is `cljf.esm` (`clojure -M -m cljf.esm`), and so are its REPL (`cljf.esm.repl`, `(cljf.esm.repl/repl)`), `cljf.esm.lazy` and the test runners `cljf.esm.node-test` and `cljf.esm.karma`.
+- `defclass` moved from `cljs.core` to `cljf.x`: require it with `[cljf.x :refer [defclass]]`.
+
 ## 0.12.4 [2026-10-08]
 
 ### Added

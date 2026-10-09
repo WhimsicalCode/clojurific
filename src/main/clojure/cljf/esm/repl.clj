@@ -6,12 +6,12 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm.repl
-  "A REPL into the pages running a build of cljs.esm/watch (:esm-repl).
+(ns cljf.esm.repl
+  "A REPL into the pages running a build of cljf.esm/watch (:esm-repl).
 
   Forms are analyzed against the watcher's compiler environment and
   compiled in REPL mode (see cljs.compiler/*esm-repl*), the runtime
-  (cljs.esm.repl-runtime) evaluates them. Messages go through the Vite
+  (cljf.esm.repl-runtime) evaluates them. Messages go through the Vite
   plugin: `repl-send` events on the watcher's stdout, `repl <json>` lines on
   its stdin, the plugin relays them over Vite's websocket.
 
@@ -27,7 +27,7 @@
             [cljs.analyzer.api :as ana-api]
             [cljs.compiler :as comp]
             [cljs.env :as env]
-            [cljs.esm :as esm]
+            [cljf.esm :as esm]
             [cljs.repl]
             [cljs.source-map :as sm]
             [cljs.util :as util]
@@ -41,7 +41,7 @@
            [java.util.concurrent.locks ReentrantLock]))
 
 (defonce ^:private build
-  ;; the watcher's build, see cljs.esm/watch
+  ;; the watcher's build, see cljf.esm/watch
   (atom nil))
 
 (defonce ^:private runtimes-
@@ -62,19 +62,19 @@
 
 (defn start!
   "Called by the watcher once it built, b is the build: :compiler-env,
-  :options, :lock, :compile! (see cljs.esm/watch), and :send!, sending
+  :options, :lock, :compile! (see cljf.esm/watch), and :send!, sending
   messages to runtimes, the Vite plugin's by default. Starts an nREPL server
-  under :repl {:nrepl-port 0}, see cljs.esm.repl.nrepl."
+  under :repl {:nrepl-port 0}, see cljf.esm.repl.nrepl."
   [b]
   (reset! build b)
   (let [{:keys [repl]} (:options b)]
     (when (and (map? repl) (contains? repl :nrepl-port) (:nrepl-port repl))
       (future
         (try
-          ((requiring-resolve 'cljs.esm.repl.nrepl/start-server!) repl)
+          ((requiring-resolve 'cljf.esm.repl.nrepl/start-server!) repl)
           (catch Throwable e
             (binding [*out* *err*]
-              (println "cljs.esm.repl: nREPL server not started:" (.getMessage e)))))))))
+              (println "cljf.esm.repl: nREPL server not started:" (.getMessage e)))))))))
 
 (defn stop!
   "Forgets the build and its runtimes."
@@ -152,8 +152,8 @@
         tag        (first (filter #(= tag (:tag %)) (vals @runtimes-)))
         :else      (default-runtime))
       (throw (ex-info (cond
-                        runtime-id (str "No runtime " runtime-id ", see (cljs.esm.repl/runtimes)")
-                        tag        (str "No runtime tagged " (pr-str tag) ", see (cljs.esm.repl/runtimes)")
+                        runtime-id (str "No runtime " runtime-id ", see (cljf.esm.repl/runtimes)")
+                        tag        (str "No runtime tagged " (pr-str tag) ", see (cljf.esm.repl/runtimes)")
                         :else      "No JavaScript runtime connected: open a page running the build")
                {:runtime-id runtime-id :tag tag :runtimes (runtimes)}))))
 
@@ -201,7 +201,7 @@
 
 (defn- the-build []
   (or @build
-      (throw (ex-info "No build, the REPL runs in the JVM of cljs.esm/watch with :esm-repl" {}))))
+      (throw (ex-info "No build, the REPL runs in the JVM of cljf.esm/watch with :esm-repl" {}))))
 
 (defn- locking* [^ReentrantLock lock f]
   (.lock lock)
@@ -255,14 +255,14 @@
     (contains? (::ana/namespaces @compiler-env) (symbol ns))))
 
 (defn- build-ns? [ns]
-  (contains? (:cljs.esm/namespaces @env/*compiler*) ns))
+  (contains? (:cljf.esm/namespaces @env/*compiler*) ns))
 
 (defn- goog-shim? [ns]
   (or (= "goog" (str ns)) (some? (comp/esm-goog-shim-exports (str ns)))))
 
 (defn- refs
   "The runtime's references of the namespaces of an emitted form,
-  [alias ns kind path]: see cljs.esm.repl-runtime/load-ref."
+  [alias ns kind path]: see cljf.esm.repl-runtime/load-ref."
   [{:keys [refs goog-lib-refs]}]
   (concat
     (for [ns (sort refs)
@@ -315,7 +315,7 @@
             ;; Closure Library namespaces run by the compatibility layer are
             ;; written for the namespaces using them
             (when (seq (:goog-lib-refs emitted))
-              (swap! env/*compiler* update-in [::ana/namespaces ns :cljs.esm/goog-libs]
+              (swap! env/*compiler* update-in [::ana/namespaces ns :cljf.esm/goog-libs]
                 (fnil into #{}) (map str (:goog-lib-refs emitted)))
               (esm/install-goog-libs env/*compiler* (:options @env/*compiler*)))
             (assoc analyzed
@@ -344,7 +344,7 @@
     (fn []
       (into {}
         (keep (fn [ns]
-                (when-let [stamp (:cljs.esm/repl-stamp (ana/get-namespace ns))]
+                (when-let [stamp (:cljf.esm/repl-stamp (ana/get-namespace ns))]
                   [(str ns) stamp])))
         nses))))
 
@@ -371,7 +371,7 @@
   :hot-reload-error :note}."
   [nses runtime opts]
   (let [{:keys [compile! options]} (the-build)]
-    (swap! (:cljs.esm/repl-mains options) into nses)
+    (swap! (:cljf.esm/repl-mains options) into nses)
     (let [{:keys [type warnings message] :as event} (compile! {:nses nses :force true})]
       (cond
         (= "error" type)
@@ -588,7 +588,7 @@
   [runtime-id stack]
   (when stack
     (let [lines (string/split-lines stack)
-          lines (take-while #(not (re-find #"/cljs/esm/repl_runtime\.js" %)) lines)]
+          lines (take-while #(not (re-find #"/cljf/esm/repl_runtime\.js" %)) lines)]
       (->> lines
            (map #(string/replace % #"((?:https?://|file://|cljs-repl/)[^\s()]+):(\d+):(\d+)"
                    (fn [[match url line column]]
@@ -735,7 +735,7 @@
       (let [{:keys [compile! options]} (the-build)
             runtime (try (target opts) (catch Exception _ nil))]
         (when-not (with-build #(build-ns? ns))
-          (swap! (:cljs.esm/repl-mains options) conj ns))
+          (swap! (:cljf.esm/repl-mains options) conj ns))
         ;; nil when the watcher compiled the file already (saved), the page may
         ;; not have applied the hot reload yet either way
         (let [{:keys [type warnings message] :as event} (compile! {:files [f]})]
@@ -773,7 +773,7 @@
   "Evaluates the forms of string code in the runtime, like shadow-cljs'
   cljs-eval. Returns {:results [printed value] :out :err :warnings :ns
   :runtime-id}, with :error (and :stack, :ex-data) when a form failed:
-  forms after it aren't evaluated, its result is :cljs.esm.repl/failed. A
+  forms after it aren't evaluated, its result is :cljf.esm.repl/failed. A
   form with warnings isn't evaluated, unless :warnings-ok.
 
   opts:
@@ -801,7 +801,7 @@
 
 (defn- console-eval!
   "Evaluates the forms of a page's cljs_eval (see
-  cljs.esm.repl-runtime/console-eval) in its runtime, in the namespace of
+  cljf.esm.repl-runtime/console-eval) in its runtime, in the namespace of
   its last in-ns unless given one, replies with the result."
   [runtime-id {:keys [rid code ns] :as msg}]
   (let [ns     (or (some-> ns symbol) (get-in @runtimes- [runtime-id :console-ns]) 'cljs.user)
@@ -857,7 +857,7 @@
    (the-build)
    (if-let [enter! (when-let [msg (some-> (resolve 'nrepl.middleware.interruptible-eval/*msg*) deref)]
                      (when (:session msg)
-                       (requiring-resolve 'cljs.esm.repl.nrepl/enter!)))]
+                       (requiring-resolve 'cljf.esm.repl.nrepl/enter!)))]
      (enter! opts)
      (loop [ns 'cljs.user last nil]
        (print (str ns "=> "))

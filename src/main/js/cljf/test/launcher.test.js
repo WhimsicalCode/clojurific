@@ -48,8 +48,8 @@ describe('resolution', { timeout: 300000 }, () => {
     assert.ok(cmd.classpath.includes(path.join(compilerDir, 'src', 'main', 'clojure')));
     assert.ok(cmd.classpath.some(p => /thi[/\\]ng[/\\]color/.test(p)));
     assert.deepEqual(cmd.classpath.filter(p => STOCK.test(p) || CLOSURE_COMPILER.test(p)), []);
-    // and builds, passing cljs.esm's check for a second compiler
-    const build = spawnSync(cmd.command, [...cmd.args, '-m', 'cljs.esm', 'build', '{:main demo.core :output-dir "out"}'],
+    // and builds, passing cljf.esm's check for a second compiler
+    const build = spawnSync(cmd.command, [...cmd.args, '-m', 'cljf.esm', 'build', '{:main demo.core :output-dir "out"}'],
       { cwd: dir, encoding: 'utf8' });
     assert.equal(build.status, 0, build.stderr);
     assert.equal(execFileSync('node', [path.join(dir, 'out', 'demo', 'core.js')], { encoding: 'utf8' }), 'hi\n');
@@ -122,7 +122,7 @@ describe('resolution', { timeout: 300000 }, () => {
       const cmd = await compilerCommand({ cwd: dir, log });
       assert.ok(lines.some(l => /downloading the dependency resolver, \d+ jars/.test(l)), lines.join('\n'));
       assert.ok(cmd.classpath.every(p => !p.endsWith('.jar') || p.startsWith(m2)));
-      const build = spawnSync(cmd.command, [...cmd.args, '-m', 'cljs.esm', 'build', '{:main demo.core :output-dir "out"}'],
+      const build = spawnSync(cmd.command, [...cmd.args, '-m', 'cljf.esm', 'build', '{:main demo.core :output-dir "out"}'],
         { cwd: dir, encoding: 'utf8' });
       assert.equal(build.status, 0, build.stderr);
     });

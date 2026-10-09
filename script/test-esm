@@ -1,14 +1,14 @@
 #!/bin/sh
 
 # Runs the runtime test suite compiled to ES modules (:module-format :esm,
-# see cljs.esm) with Node.js, unbundled, and the tests of cljs.esm builds and
+# see cljf.esm) with Node.js, unbundled, and the tests of cljf.esm builds and
 # their REPL.
 
 if ! clojure -Sdeps '{:aliases {:esm-build-test {:extra-paths ["src/test/clojure" "src/test/esm_repl"]}}}' \
-       -M:esm-build-test -e "(require 'cljs.esm-build-tests 'cljs.esm-repl-tests)
-                             (let [{:keys [fail error]} (clojure.test/run-tests 'cljs.esm-build-tests 'cljs.esm-repl-tests)]
+       -M:esm-build-test -e "(require 'cljf.esm-build-tests 'cljf.esm-repl-tests)
+                             (let [{:keys [fail error]} (clojure.test/run-tests 'cljf.esm-build-tests 'cljf.esm-repl-tests)]
                                (System/exit (if (zero? (+ fail error)) 0 1)))"; then
-  >&2 echo cljs.esm build tests failed
+  >&2 echo cljf.esm build tests failed
   exit 1
 fi
 
@@ -16,7 +16,7 @@ rm -rf builds/out-esm
 mkdir -p builds/out-esm
 
 if ! clojure -Sdeps '{:aliases {:esm-test {:extra-paths ["src/test/cljs" "src/test/esm"]}}}' \
-       -M:esm-test -m cljs.esm \
+       -M:esm-test -m cljf.esm \
        '{:main esm-test-runner :output-dir "builds/out-esm" :parallel-build true :verbose true}'; then
   >&2 echo ClojureScript compilation failed
   exit 1

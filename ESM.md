@@ -13,15 +13,15 @@ and development builds. See [Status](#status).
 ### Compiling
 
 ```sh
-clojure -M -m cljs.esm build '{:main my.app :output-dir "out"}'  # build
-clojure -M -m cljs.esm watch @cljs.edn                            # watch, hot reload
+clojure -M -m cljf.esm build '{:main my.app :output-dir "out"}'  # build
+clojure -M -m cljf.esm watch @cljs.edn                            # watch, hot reload
 ```
 
 or without the Clojure CLI, with the npm package's launcher (see
 [Launcher](#launcher)): `npx cljf build …`, `npx cljf watch …`.
 
 Options are EDN maps, `@file.edn` to read them from a file, and `:profile`
-keywords (`cljs.esm/load-options`). Profiles are maps under `:profiles`, deep
+keywords (`cljf.esm/load-options`). Profiles are maps under `:profiles`, deep
 merged over the rest; the profile names the build's `:mode`. `watch` defaults to
 the `:dev` profile, `build` to `:release`:
 
@@ -33,7 +33,7 @@ the `:dev` profile, `build` to `:release`:
             :release {:closure-defines {goog.DEBUG false}}}}
 ```
 
-`cljs.esm/build` and `cljs.esm/watch` take the usual compiler options plus:
+`cljf.esm/build` and `cljf.esm/watch` take the usual compiler options plus:
 
 | option | |
 |---|---|
@@ -67,14 +67,14 @@ vars, their arities) changed, which their output may depend on (`:static-fns`
 arity calls, `cljs.test`'s lists of tests). Changed macros aren't detected,
 remove the output directory after changing a macro library.
 
-Macros reading classpath resources call `cljs.esm/watch-resource!`, the watcher
+Macros reading classpath resources call `cljf.esm/watch-resource!`, the watcher
 then recompiles the namespace when the resource changes. `shadow.resource` is
 provided for code written for shadow-cljs.
 
 ### Dependencies
 
 `deps.edn` has the fork's dependencies, which don't include the Closure
-Compiler (`com.google.javascript/closure-compiler`): `cljs.esm`, its REPL and
+Compiler (`com.google.javascript/closure-compiler`): `cljf.esm`, its REPL and
 the analyzer (`cljs.analyzer.api`) don't need it. The classic compiler
 (`cljs.closure`, `cljs.build.api`, `cljs.main` and the classic REPLs) does, and
 fails with a `ClassNotFoundException` for `com.google.javascript.jscomp` classes
@@ -90,7 +90,7 @@ list the Closure Compiler.
 The fork's coordinate is `com.whimsical/clojurific`. Stock ClojureScript
 (`org.clojure/clojurescript`, which many libraries depend on) has the same
 namespaces, so the classpath order would decide whose namespaces load, and its
-jar's precompiled classes win over the fork's sources. `cljs.esm`'s `build` and
+jar's precompiled classes win over the fork's sources. `cljf.esm`'s `build` and
 `watch` fail when `cljs/analyzer.cljc` or `cljs/core.cljs` is on the classpath
 more than once, listing where. Exclude it from the library bringing it in
 (`:exclusions [org.clojure/clojurescript]`), or replace it in the whole tree
@@ -124,7 +124,7 @@ export default {
 
 The plugin starts the compiler with the launcher, on the classpath of the
 project's `deps.edn` with `aliases`. `command` starts it with another
-command instead, e.g. the Clojure CLI's `['clojure', '-M:cljs']`, cljs.esm's
+command instead, e.g. the Clojure CLI's `['clojure', '-M:cljs']`, cljf.esm's
 arguments follow it.
 
 The project's directory is Vite's root, and its `index.html` the dev server's
@@ -186,7 +186,7 @@ It resolves the project's `deps.edn` (and the user's, as the Clojure CLI does)
 with tools.deps, adding the compiler (`com.whimsical/clojurific` from Clojars,
 unless the project lists it itself, e.g. as a git dependency) and replacing every
 `org.clojure/clojurescript` with `no-clojurescript/`, then runs
-`clojure.main -m cljs.esm` with the aliases' `:jvm-opts`. Dependencies are
+`clojure.main -m cljf.esm` with the aliases' `:jvm-opts`. Dependencies are
 downloaded into the local Maven repository (`~/.m2/repository`, or
 `:mvn/local-repo`), shared with the Clojure CLI. The classpath is cached in the
 project's `.cljf/cpcache` until a `deps.edn` it was resolved from changes,
@@ -219,7 +219,7 @@ plugin's pipe to the compiler, nothing else listens on a port but the
 optional nREPL server (`:repl`), which runs in the watcher's JVM:
 
 ```clojure
-(require '[cljs.esm.repl :as repl])
+(require '[cljf.esm.repl :as repl])
 
 (repl/runtimes)            ;=> [{:runtime-id 3 :url "..." :title "..." :visible true ...}]
 (repl/cljs-eval "(+ 1 2)") ;=> {:results ["3"] :out "" :err "" :warnings [] :ns cljs.user :runtime-id 3}
@@ -254,7 +254,7 @@ server with `compilerOptions: { repl: { 'nrepl-port': 0 } }` and
   evaluated form by form instead.
 - A form with compiler warnings isn't evaluated, unless `:warnings-ok`: the
   result has `:error` and `:warnings`, `:results` ends with
-  `:cljs.esm.repl/failed`, and the forms after it aren't evaluated. The
+  `:cljf.esm.repl/failed`, and the forms after it aren't evaluated. The
   nREPL middleware replies with an `eval-error`.
 - In the browser's console `cljs_eval("(+ 1 2)")`, `cljs_eval("(foo)", {ns:
   "my.app", await: true, print: true})` evaluates in its page, compiled by the
@@ -300,11 +300,14 @@ describe(1, 2); // error TS2554: Expected 1 arguments, but got 2.
 
 ### Classes
 
-`defclass` (in `cljs.core`, like shadow-cljs' `shadow.cljs.modern/defclass`)
+`cljf.x/defclass` (like shadow-cljs' `shadow.cljs.modern/defclass`)
 defines a JavaScript class, for APIs constructing one with `new` or needing a
 subclass, i.e. a Cloudflare Durable Object:
 
 ```clojure
+(ns my.room
+  (:require [cljf.x :refer [defclass]]))
+
 (defclass Room
   (extends DurableObject)
   (constructor [this ctx env]
@@ -326,7 +329,7 @@ into the build.
 
 ### Lazy loading
 
-`cljs.esm.lazy` follows `shadow.lazy`'s API. `(lazy/loadable my.ns/var)` loads
+`cljf.esm.lazy` follows `shadow.lazy`'s API. `(lazy/loadable my.ns/var)` loads
 the namespace with a dynamic `import()`, bundlers split it and what only it
 requires into a separate chunk. Lazily loaded namespaces are additional `:main`
 entries.
@@ -340,9 +343,9 @@ namespace. It calls `(my.test/start run-tests)`, run-tests running the tests
 given a `cljs.test` env. `watch` regenerates it as test namespaces are added
 and removed. Two runners come with the compiler:
 
-- `cljs.esm.node-test/run`: runs the tests under Node.js, the process exits
+- `cljf.esm.node-test/run`: runs the tests under Node.js, the process exits
   with 1 when any failed.
-- `cljs.esm.karma/start`: reports to Karma, one result per test var. Karma
+- `cljf.esm.karma/start`: reports to Karma, one result per test var. Karma
   loads the bundle through `src/main/js/karma-esm/adapter.js`, which imports
   the entry module named by Karma's `client.args`.
 
@@ -381,7 +384,7 @@ export { my$app$greet as greet };
 
 ### Closure Library
 
-`cljs.core` uses little of the Closure Library. `src/main/cljs/cljs/esm/goog*`
+`cljs.core` uses little of the Closure Library. `src/main/cljs/cljf/esm/goog*`
 are ES module versions of what it uses (`goog.typeOf`, `goog.object`,
 `goog.string`, `goog.math.Long`, ...).
 
@@ -397,10 +400,10 @@ direct eval keeps minifiers from renaming the top level of the chunk it's in.
 ### Externs
 
 Externs aren't needed: `:externs` and `:infer-externs` aren't used by
-`cljs.esm`. The analyzer still reads the types of JavaScript's standard and
+`cljf.esm`. The analyzer still reads the types of JavaScript's standard and
 browser APIs from Closure's default externs, i.e. `isNaN` returns a boolean,
 so `(if (js/isNaN x) ...)` compiles to `if(isNaN(x))` rather than a
-`cljs.core.truth_` call. A build without `:externs-sources` (all `cljs.esm`
+`cljs.core.truth_` call. A build without `:externs-sources` (all `cljf.esm`
 builds) reads them from `cljs/externs/default.edn`, the map
 `cljs.externs/externs-map` parses, without docs and source locations
 (`cljs.analyzer.api/resolve-extern`'s `:info` has no `:doc`). Only builds with
@@ -432,7 +435,7 @@ macros.
 Under `:esm-repl` each module registers its namespace object, the setters of
 all its instances (hot reloads keep the earlier ones, see above) and the npm
 modules it imports with `globalThis.$CLJS_ESM`. The REPL compiles a form as
-the body of a function the runtime (`cljs.esm.repl-runtime`) calls with the
+the body of a function the runtime (`cljf.esm.repl-runtime`) calls with the
 namespaces it references: views reading the module's bindings, where
 assigning a var (`def`, `set!`, `binding`) calls the setters of all instances,
 or adds it to an overlay if the module doesn't define it. Closure Library shims
@@ -487,7 +490,7 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
 - REPL: no Node.js runtime transport yet (the runtime's tests use one), npm
   modules can't be required at the REPL.
 - FlowStorm: ClojureStorm instruments through its own build of the compiler,
-  which doesn't have `cljs.esm`.
+  which doesn't have `cljf.esm`.
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`,
   which keeps them in every bundle.
 - Closure Library files run whole: `goog.i18n`'s locale data (from

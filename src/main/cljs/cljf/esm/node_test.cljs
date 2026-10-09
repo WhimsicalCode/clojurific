@@ -6,8 +6,8 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm.node-test
-  "A cljs.esm :test-runner :runner for Node.js: runs the tests, the process
+(ns cljf.esm.node-test
+  "A cljf.esm :test-runner :runner for Node.js: runs the tests, the process
   exits with 1 when any failed."
   (:require [cljs.test :as test]))
 

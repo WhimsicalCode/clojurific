@@ -6,8 +6,8 @@
 ;   the terms of this license.
 ;   You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm.karma
-  "A cljs.esm :test-runner :runner for Karma: reports cljs.test results to
+(ns cljf.esm.karma
+  "A cljf.esm :test-runner :runner for Karma: reports cljs.test results to
   Karma, one result per test var. The generated test runner calls `start`
   with a fn running the test namespaces. Karma's start (the adapter,
   src/main/js/karma-esm/adapter.js) can come before or after the test

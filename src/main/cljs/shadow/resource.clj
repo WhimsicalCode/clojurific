@@ -8,10 +8,10 @@
 
 (ns shadow.resource
   "shadow-cljs' shadow.resource for code written for shadow-cljs compiled to
-  ES modules (cljs.esm): inlines classpath resources at compile time, the
+  ES modules (cljf.esm): inlines classpath resources at compile time, the
   watcher recompiles the namespace when the resource changes."
   (:require [cljs.analyzer :as ana]
-            [cljs.esm :as esm]
+            [cljf.esm :as esm]
             [cljs.util :as util]
             [clojure.java.io :as io]
             [clojure.string :as str])

@@ -1,7 +1,7 @@
 // cljf repl: a ClojureScript REPL in the terminal, evaluating in the pages
 // running a watched build. It's an nREPL client of the watcher's nREPL server
-// (:repl {:nrepl-port 0}, see cljs.esm.repl.nrepl), whose session it
-// switches to ClojureScript with (cljs.esm.repl/repl).
+// (:repl {:nrepl-port 0}, see cljf.esm.repl.nrepl), whose session it
+// switches to ClojureScript with (cljf.esm.repl/repl).
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
@@ -211,14 +211,14 @@ export async function repl({
   const write = (stream, text) => text && stream.write(text);
   const { 'new-session': session } = await conn.request({ op: 'clone' });
   let failed = false;
-  await conn.request({ op: 'eval', session, code: '(cljs.esm.repl/repl)' }, msg => {
+  await conn.request({ op: 'eval', session, code: '(cljf.esm.repl/repl)' }, msg => {
     write(output, msg.out);
     write(errorOutput, msg.err);
     if (msg.ex) failed = true;
   });
   if (failed) {
     conn.close();
-    throw new LauncherError('cljf repl: the nREPL server has no ClojureScript REPL (cljs.esm.repl), is it the dev server\'s?');
+    throw new LauncherError('cljf repl: the nREPL server has no ClojureScript REPL (cljf.esm.repl), is it the dev server\'s?');
   }
 
   const history = terminal ? await readHistory(historyFile) : [];

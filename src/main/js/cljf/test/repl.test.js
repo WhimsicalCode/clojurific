@@ -74,10 +74,10 @@ async function session(server, lines, opts = {}) {
 
 test('repl evaluates forms in the session switched to ClojureScript', async () => {
   const server = await fakeServer(code => {
-    if (code === '(cljs.esm.repl/repl)') return [{ out: '; ClojureScript REPL\n' }];
+    if (code === '(cljf.esm.repl/repl)') return [{ out: '; ClojureScript REPL\n' }];
     if (code.startsWith('(in-ns')) return [{ value: 'nil', ns: 'my.app' }];
     if (code.startsWith('(println')) return [{ out: 'hi\n' }, { value: 'nil', ns: 'cljs.user' }];
-    if (code.startsWith('(boom')) return [{ err: 'Error: boom\n' }, { ex: 'cljs.esm.repl/eval-error', status: ['eval-error'] }];
+    if (code.startsWith('(boom')) return [{ err: 'Error: boom\n' }, { ex: 'cljf.esm.repl/eval-error', status: ['eval-error'] }];
     return [{ value: `[${code.trim()}]`, ns: 'cljs.user' }];
   });
   try {
@@ -87,7 +87,7 @@ test('repl evaluates forms in the session switched to ClojureScript', async () =
     assert.equal(out, '; ClojureScript REPL\n[(+ 1\n2)]\nhi\nnil\nnil\n');
     assert.equal(err, 'Error: boom\n');
     const evals = server.requests.filter(r => r.op === 'eval');
-    assert.deepEqual(evals.map(r => r.code.trim()), ['(cljs.esm.repl/repl)', '(+ 1\n2)', '(println "hi")', '(in-ns (quote my.app))', '(boom)']);
+    assert.deepEqual(evals.map(r => r.code.trim()), ['(cljf.esm.repl/repl)', '(+ 1\n2)', '(println "hi")', '(in-ns (quote my.app))', '(boom)']);
     assert.ok(evals.slice(1).every(r => r.session === 's1'));
     // the namespace the last form left
     assert.equal(evals.at(-1).ns, 'my.app');
@@ -98,7 +98,7 @@ test('repl evaluates forms in the session switched to ClojureScript', async () =
 });
 
 test('repl fails when the server has no ClojureScript REPL', async () => {
-  const server = await fakeServer(() => [{ err: 'Could not resolve var: cljs.esm.repl/repl\n' }, { ex: 'class clojure.lang.Compiler$CompilerException' }]);
+  const server = await fakeServer(() => [{ err: 'Could not resolve var: cljf.esm.repl/repl\n' }, { ex: 'class clojure.lang.Compiler$CompilerException' }]);
   try {
     await assert.rejects(session(server, ['(+ 1 2)']), /has no ClojureScript REPL/);
   } finally {

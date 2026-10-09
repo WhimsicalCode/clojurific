@@ -6,10 +6,10 @@
 ;; the terms of this license.
 ;; You must not remove this notice, or any other, from this software.
 
-(ns cljs.esm-test
+(ns cljf.esm-test
   "Tests of behavior specific to :module-format :esm."
   (:require ["node:path" :as node-path]
-            [cljs.esm.lazy :as lazy]
+            [cljf.esm.lazy :as lazy]
             [cljs.test :refer-macros [async deftest is testing]]))
 
 (deftest test-hash-non-extensible-objects

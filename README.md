@@ -14,7 +14,8 @@ see [Dependencies](ESM.md#dependencies).
 It's based on ClojureScript's master after the 1.12.145 release; see
 [CHANGELOG.md](CHANGELOG.md) for where it forked and what it changed. It keeps ClojureScript's
 namespaces (`cljs.core`, `cljs.analyzer`, …), so libraries written for
-ClojureScript work unchanged.
+ClojureScript work unchanged. Its own are `cljf.*`: the ES module build
+(`cljf.esm`) and the extensions to ClojureScript (`cljf.x`).
 Status: experimental.
 
 Versions are `0.<minor>.<release>`: `<minor>` is the ClojureScript 1.x release
@@ -59,8 +60,8 @@ export default {
 ```
 
 In the code, `^:dev/before-load` / `^:dev/after-load`, `shadow.resource` and
-symbol requires of npm packages work as they are. `defclass` is in `cljs.core`
-(drop the `shadow.cljs.modern` require), `shadow.lazy` is `cljs.esm.lazy`, and
+symbol requires of npm packages work as they are. `shadow.cljs.modern`'s
+`defclass` is `cljf.x`'s, `shadow.lazy` is `cljf.esm.lazy`, and
 lazily loaded namespaces are `:main` entries split by the bundler instead of
 `:modules`. `:test` builds become a `:test-runner`. See [ESM.md](ESM.md) for
 the details and the [known gaps](ESM.md#known-gaps).
@@ -78,7 +79,7 @@ com.whimsical/clojurific {:mvn/version "0.12.4"}
 needs Java but not the Clojure CLI: `npm install clojurific`.
 
 Stock ClojureScript (`org.clojure/clojurescript`) has the same namespaces, so
-it mustn't be on the classpath too: `cljs.esm` fails at startup, naming both,
+it mustn't be on the classpath too: `cljf.esm` fails at startup, naming both,
 when it is. Exclude it from the library that brings it in with
 `:exclusions [org.clojure/clojurescript]`, or from the whole dependency tree
 with the empty project in `no-clojurescript/`:

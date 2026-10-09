@@ -81,7 +81,7 @@
   false)
 
 (def ^:dynamic *esm-repl*
-  "True while emitting a form evaluated at the REPL (cljs.esm.repl), the body
+  "True while emitting a form evaluated at the REPL (cljf.esm.repl), the body
   of a function the REPL runtime calls with the namespaces it references.
   The namespace being compiled is one of them: its vars are module bindings
   of a module already running, reached through the runtime's view of the
@@ -91,7 +91,7 @@
 (def esm-repl-runtime
   "The namespace evaluating REPL forms in a running build, imported first by
   the main namespaces under :esm-repl."
-  'cljs.esm.repl-runtime)
+  'cljf.esm.repl-runtime)
 
 (defn esm-mode?
   "Whether compiling to ES modules, :module-format :esm."
@@ -156,7 +156,7 @@
              (contains? (:js-dependency-index cenv) ns))
         (contains? (::ana/namespaces cenv) (symbol ns))
         ;; namespaces of the build not analyzed yet, i.e. under :parallel-build
-        (contains? (:cljs.esm/namespaces cenv) (symbol ns)))))
+        (contains? (:cljf.esm/namespaces cenv) (symbol ns)))))
 
 (defn esm-var-name
   "Munges the name of a var for ESM output, reserved words are munged like
@@ -179,7 +179,7 @@
                   (str member "." (munge (subs nm (inc idx)) #{})))
          ;; Closure Library members are taken from ES module shims if they
          ;; provide them, otherwise from the Closure Library itself run by
-         ;; the compatibility layer, see cljs.esm/install-goog-libs
+         ;; the compatibility layer, see cljf.esm/install-goog-libs
          lib?   (and (or (= "goog" ns) (string/starts-with? ns "goog."))
                      (not (contains? #?(:clj (esm-goog-shim-exports ns ana/*cljs-ns*) :cljs #{}) member)))]
      (cond
@@ -1751,7 +1751,7 @@
      (let [exports
            (memoize
              (fn [ns]
-               (when-let [res (io/resource (str "cljs/esm/" (util/ns->relpath ns :js)))]
+               (when-let [res (io/resource (str "cljf/esm/" (util/ns->relpath ns :js)))]
                  (let [src  (slurp res)
                        decl #"export\s+(/\*\s*stub\s*\*/\s*)?(?:async\s+)?(?:function\*?|class|const|let|var)\s+([\w$]+)"]
                    {:all   (into #{}
@@ -1772,7 +1772,7 @@
 #?(:clj
    (defn esm-goog-lib-path
      "The output path of the module exporting a Closure Library namespace run
-     by the compatibility layer, see cljs.esm/install-goog-libs."
+     by the compatibility layer, see cljf.esm/install-goog-libs."
      [ns]
      (str "goog-lib/ns/" ns ".js")))
 
@@ -1799,7 +1799,7 @@
      [ns-name ns]
      (when-not (deps/closure-lib (:js-dependency-index @env/*compiler*) ns)
        (ana/warning :esm-unsupported-goog-ns (ana/empty-env) {:ns ns}))
-     (swap! env/*compiler* update-in [::ana/namespaces ns-name :cljs.esm/goog-libs]
+     (swap! env/*compiler* update-in [::ana/namespaces ns-name :cljf.esm/goog-libs]
        (fnil conj #{}) (str ns))
      (esm-path ns-name (esm-goog-lib-path ns))))
 
@@ -1998,15 +1998,15 @@
      "Under :esm-repl modules register their namespace object, the setters
      of all their instances (see emit-esm-hmr-footer) and the npm modules
      they import, for the forms evaluated at the REPL, see
-     cljs.esm.repl-runtime. gen counts the instances, it changes once a
+     cljf.esm.repl-runtime. gen counts the instances, it changes once a
      hot reload ran the module again. stamp identifies the compile, also
-     recorded as :cljs.esm/repl-stamp of the namespace's analysis (which the
+     recorded as :cljf.esm/repl-stamp of the namespace's analysis (which the
      analysis cache keeps): the REPL waits for a page to run the module of a
      compile."
      [ns-name libs]
      (let [ns    (pr-str (str ns-name))
            stamp (str (System/currentTimeMillis) "-" (.incrementAndGet ^java.util.concurrent.atomic.AtomicLong esm-repl-stamps))]
-       (swap! env/*compiler* assoc-in [::ana/namespaces ns-name :cljs.esm/repl-stamp] stamp)
+       (swap! env/*compiler* assoc-in [::ana/namespaces ns-name :cljf.esm/repl-stamp] stamp)
        (emitln "{ const $$r = globalThis.$CLJS_ESM || (globalThis.$CLJS_ESM = { nses: new Map() }), $$e = $$r.nses.get(" ns ");")
        (emitln "$$r.nses.set(" ns ", { mod: " (esm-ns-alias ns-name) ", "
          "sets: import.meta.hot ? import.meta.hot.data.$$sets : [$$set], "
@@ -2129,7 +2129,7 @@
 (defmethod emit* :ns*
   [{:keys [name requires uses require-macros reloads env deps]}]
   (cond
-    ;; cljs.esm.repl loads the namespaces
+    ;; cljf.esm.repl loads the namespaces
     *esm-repl*
     (emit-wrap env (emits "null"))
 

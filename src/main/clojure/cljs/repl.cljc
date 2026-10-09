@@ -32,7 +32,7 @@
 
 (defn- cljsc
   "The var named sym of cljs.closure, loaded on first use: ES module builds
-  (cljs.esm) use this namespace's macros without the Closure Compiler on the
+  (cljf.esm) use this namespace's macros without the Closure Compiler on the
   classpath."
   [sym]
   (require 'cljs.closure)

@@ -10,8 +10,8 @@
 ;; cljs.npm-deps-test which exercises Closure's foreign lib processing.
 
 (ns esm-test-runner
-  (:require [cljs.esm-test]
-            [cljs.defclass-test]
+  (:require [cljf.esm-test]
+            [cljf.x-test]
             [cljs.async-await-test]
             [cljs.qualified-method-test]
             [cljs.proxy-test]
@@ -78,8 +78,8 @@
   (enable-console-print!))
 
 (run-tests
-  'cljs.esm-test
-  'cljs.defclass-test
+  'cljf.esm-test
+  'cljf.x-test
   'cljs.async-await-test
   'cljs.qualified-method-test
   'cljs.proxy-test
