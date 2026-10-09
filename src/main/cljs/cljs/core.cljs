@@ -5481,6 +5481,12 @@ reduces them without incurring seq initialization"
   (filter #(not (sequential? %))
           (rest (tree-seq sequential? seq x))))
 
+(defn- conj-tv!
+  "conj! onto a TransientVector, calling its method rather than -conj!,
+  which dispatches on every kind of transient collection."
+  [^not-native tv x]
+  (-conj! tv x))
+
 (defn into
   "Returns a new coll consisting of to with all of the items of
   from conjoined. A transducer may be supplied.
@@ -5490,7 +5496,9 @@ reduces them without incurring seq initialization"
   ([to from]
      (if-not (nil? to)
        (if (implements? IEditableCollection to)
-         (-with-meta (persistent! (reduce -conj! (transient to) from)) (meta to))
+         (-with-meta (persistent! (reduce (if (instance? PersistentVector to) conj-tv! -conj!)
+                                          (transient to) from))
+                     (meta to))
          (reduce -conj to from))
        (reduce conj to from)))
   ([to xform from]
@@ -5509,7 +5517,7 @@ reduces them without incurring seq initialization"
   exhausted.  Any remaining items in other colls are ignored. Function
   f should accept number-of-colls arguments."
   ([f coll]
-     (-> (reduce (fn [v o] (conj! v (f o))) (transient []) coll)
+     (-> (reduce (fn [v o] (conj-tv! v (f o))) (transient []) coll)
          persistent!))
   ([f c1 c2]
      (into [] (map f c1 c2)))
@@ -5522,7 +5530,7 @@ reduces them without incurring seq initialization"
   "Returns a vector of the items in coll for which
   (pred item) returns logical true. pred must be free of side-effects."
   [pred coll]
-  (-> (reduce (fn [v o] (if (pred o) (conj! v o) v))
+  (-> (reduce (fn [v o] (if (pred o) (conj-tv! v o) v))
               (transient [])
               coll)
       persistent!))
@@ -6023,7 +6031,7 @@ reduces them without incurring seq initialization"
 
     :else
     (-persistent!
-      (reduce -conj!
+      (reduce conj-tv!
         (-as-transient (.-EMPTY PersistentVector))
         coll))))
 
