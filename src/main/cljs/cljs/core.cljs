@@ -11721,10 +11721,19 @@ reduces them without incurring seq initialization"
   (-get-method [mf dispatch-val]
     (when-not (= (multi-ref-value cached-hierarchy) (multi-ref-value hierarchy))
       (reset-cache method-cache method-table cached-hierarchy hierarchy))
-    (if-let [target-fn (get (multi-ref-value method-cache) dispatch-val)]
-      target-fn
-      (find-and-cache-best-method name dispatch-val hierarchy method-table
-        prefer-table method-cache cached-hierarchy default-dispatch-val)))
+    (let [cache (multi-ref-value method-cache)]
+      ;; the method of the last dispatch value, while the method cache is the
+      ;; same: a call site keeps dispatching on the same (identical) value
+      (if (and (identical? cache (.-cljs_mf_cache mf))
+               (identical? dispatch-val (.-cljs_mf_dispatch mf)))
+        (.-cljs_mf_method mf)
+        (if-let [target-fn (get cache dispatch-val)]
+          (do (set! (.-cljs_mf_cache mf) cache)
+              (set! (.-cljs_mf_dispatch mf) dispatch-val)
+              (set! (.-cljs_mf_method mf) target-fn)
+              target-fn)
+          (find-and-cache-best-method name dispatch-val hierarchy method-table
+            prefer-table method-cache cached-hierarchy default-dispatch-val)))))
 
   (-prefer-method [mf dispatch-val-x dispatch-val-y]
     (when (prefers* dispatch-val-y dispatch-val-x  prefer-table)
