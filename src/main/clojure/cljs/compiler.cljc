@@ -1627,6 +1627,15 @@
                  (.replace \/ \$))
             "$")))
 
+(defn- emit-lookup-test
+  "Emits the test whether local m has the -lookup method lookup (its property),
+  shorter with optional chaining in ES module output (ES2020): methods are
+  functions, so it's truthy exactly when m != null and the method != null."
+  [m lookup]
+  (if *esm-emitting*
+    (emits "(" m "?" lookup ")")
+    (emits "((" m " != null) && (" m lookup " != null))")))
+
 (defmethod emit* :invoke
   [{f :fn :keys [args env] :as expr}]
   (let [info (:info f)
@@ -1735,16 +1744,18 @@
            ;; (:k m) of a local: its -lookup at this call site, as get would call
            ;; it, so each site's lookups are as polymorphic as its maps rather
            ;; than as all maps of the program; anything else as before
-           (emits "(((" m " != null) && (" m lookup " != null))?"
-                  m lookup "(null," f (when nf (list "," nf)) "):"
-                  f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) "))")
+           (do (emits "(")
+               (emit-lookup-test m lookup)
+               (emits "?" m lookup "(null," f (when nf (list "," nf)) "):"
+                      f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) "))"))
            (emits f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) ")")))
 
        get-lookup?
        (let [[m] args
              lookup (str ".cljs$core$ILookup$_lookup$arity$" (count args))]
-         (emits "(((" m " != null) && (" m lookup " != null))?"
-                m lookup "(" (comma-sep (cons "null" (rest args))) "):"
+         (emits "(")
+         (emit-lookup-test m lookup)
+         (emits "?" m lookup "(" (comma-sep (cons "null" (rest args))) "):"
                 f "(" (comma-sep args) "))"))
 
        variadic-invoke
