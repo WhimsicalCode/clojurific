@@ -1653,6 +1653,13 @@
         first-arg-tag (ana/infer-tag env (first (:args expr)))
         opt-not? (and (= (:name info) 'cljs.core/not)
                       (= first-arg-tag 'boolean))
+        ;; (get m k) of a local map and a constant or local key: m's -lookup at the
+        ;; call site when it has one, see the keyword? case below
+        get-lookup? (and fn?
+                         (= (:name info) 'cljs.core/get)
+                         (<= 2 (count args) 3)
+                         (= :local (:op (first args)))
+                         (#{:const :local} (:op (ana/unwrap-quote (second args)))))
         opt-count? (and (= (:name info) 'cljs.core/count)
                         (boolean ('#{string array} first-arg-tag)))
         ns (:ns info)
@@ -1732,6 +1739,13 @@
                   m lookup "(null," f (when nf (list "," nf)) "):"
                   f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) "))")
            (emits f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) ")")))
+
+       get-lookup?
+       (let [[m] args
+             lookup (str ".cljs$core$ILookup$_lookup$arity$" (count args))]
+         (emits "(((" m " != null) && (" m lookup " != null))?"
+                m lookup "(" (comma-sep (cons "null" (rest args))) "):"
+                f "(" (comma-sep args) "))"))
 
        variadic-invoke
        (let [mfa (:max-fixed-arity variadic-invoke)]
