@@ -16,6 +16,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 - Multimethods read their method cache and hierarchy atoms directly instead of through `deref`'s protocol dispatch, and look up the method cache with `get`: dispatch is faster.
 - `random-uuid` formats its hex digits from a table, about 2.5 times faster, with the same UUIDs for the same `Math.random` numbers.
 - `compare` of two strings skips the `IComparable` lookup when `IComparable` isn't extended to strings: sorted maps and sorts with string keys are faster.
+- A `defn` of one fixed arity calls itself directly in its body, as other code calls it once it's defined, rather than through the higher order invoke.
 - A fn created in a loop is wrapped to capture only the loop's locals it refers to, and not wrapped when it refers to none: less JavaScript.
 - In ES module output, the call site lookups of `get` and keyword invokes below test for the method with optional chaining (`m?.method`), about 2% less unminified JavaScript.
 - `(get m k)` and `(get m k not-found)` of a local `m` and a constant or local `k`, as map destructuring compiles to, call `m`'s `-lookup` method at the call site when it has one, like keyword invokes below (about 2% faster on the Whimsical app's benchmarks, about 1.5% more gzipped JavaScript).
