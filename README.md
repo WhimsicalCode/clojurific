@@ -31,20 +31,47 @@ scaffolds a Vite project (Vanilla, [Reagent](https://reagent-project.github.io) 
 [UIx](https://github.com/pitch-io/uix)), installs it and starts the dev server.
 It needs Node.js 20 and Java 17 or later, and offers to download Java when there's none.
 
+## Migrating from shadow-cljs ##
+
+Vite replaces shadow-cljs' build and dev server: `npm install -D clojurific vite`,
+then move `shadow-cljs.edn` over:
+
+- `:source-paths` and `:dependencies` go to `deps.edn`'s `:paths` and `:deps`.
+  The Vite plugin resolves it with the `cljf` launcher, the Clojure CLI isn't needed.
+- The build's `:compiler-options` (`:closure-defines`, `:warnings-as-errors`, …)
+  go to `cljs.edn`, the plugin's `config`, or its `compilerOptions`.
+  `:dev`/`:release` settings are the `:dev` and `:release` profiles.
+- `:modules`' `:init-fn` becomes a script in `index.html`
+  (`<script type="module" src="/src/my/app.cljs"></script>`), whose namespace
+  calls its init fn at the top level. `:output-dir` is the plugin's `outputDir`,
+  `:dev-http` is Vite's dev server.
+- Add `:npm-interop :shadow` to keep shadow-cljs' bindings of CommonJS packages
+  (`["pkg" :as x]` is `module.exports`).
+
+```js
+// vite.config.mjs
+import cljs from 'clojurific/vite';
+
+export default {
+  plugins: [cljs({ config: 'cljs.edn', outputDir: 'target/cljs',
+                   compilerOptions: { 'npm-interop': ':shadow' } })],
+};
+```
+
+In the code, `^:dev/before-load` / `^:dev/after-load`, `shadow.resource` and
+symbol requires of npm packages work as they are. `defclass` is in `cljs.core`
+(drop the `shadow.cljs.modern` require), `shadow.lazy` is `cljs.esm.lazy`, and
+lazily loaded namespaces are `:main` entries split by the bundler instead of
+`:modules`. `:test` builds become a `:test-runner`. See [ESM.md](ESM.md) for
+the details and the [known gaps](ESM.md#known-gaps).
+
 ## Dependency information ##
 
 [Clojure deps.edn](https://clojure.org/guides/deps_and_cli), from
 [Clojars](https://clojars.org/com.whimsical/clojurific):
 
 ```clojure
-com.whimsical/clojurific {:mvn/version "0.12.2"}
-```
-
-or as a git dependency:
-
-```clojure
-com.whimsical/clojurific {:git/url "https://github.com/WhimsicalCode/clojurific"
-                          :git/sha "…"}
+com.whimsical/clojurific {:mvn/version "0.12.4"}
 ```
 
 [npm](https://www.npmjs.com/package/clojurific), with the `cljf` launcher, which
@@ -62,61 +89,15 @@ with the empty project in `no-clojurescript/`:
                                            :deps/root "no-clojurescript"}}
 ```
 
-The rest of this README is upstream's, about ClojureScript itself. Report
-problems with the fork's additions (`cljs.esm`, the Vite plugin) to
-[WhimsicalCode/clojurific](https://github.com/WhimsicalCode/clojurific)
-instead.
-
-## Getting Started ##
-
-* Read the [Quick Start](https://clojurescript.org/guides/quick-start) guide.
-* Read the [Documentation](https://clojurescript.org).
-* Try a [tutorial](https://clojurescript.org/guides).
-* [Companies using ClojureScript](https://clojurescript.org/community/companies)
-
 ## Questions, Feedback? ##
 
-Please point all of your questions and feedback to the
-[Clojure mailing list](https://groups.google.com/group/clojure). There
-is a community run
-[ClojureScript user mailing list](https://groups.google.com/group/clojurescript) and
-the IRC channel, `#clojurescript` on [freenode.net](https://freenode.net/), is quite active.
-There is also a community run [Slack channel](https://clojurians.slack.com). The
-Jira bug/feature tracking application is located at
-<https://clojure.atlassian.net/browse/CLJS>. Before submitting issues
-please read the
-[Reporting Issues](https://github.com/clojure/clojurescript/wiki/Reporting-Issues)
-page first.
+Please point all of your questions and feedback to the [#clojurific](https://clojurians.slack.com/archives/C0C7W7LTA4D) Slack channel. 
 
-## Developers Welcome ##
-
-ClojureScript operates under the same license as Clojure. All
-contributors must have a signed CA (Contributor's Agreement) and
-submit their patch via the appropriate channels. If you're interested
-in contributing to the project, please see the
-[contributing](https://clojure.org/dev/contributing) page on
-[clojure.org](https://clojure.org). For more information about working
-on the compiler and testing check the
-[Developer section of the wiki](https://github.com/clojure/clojurescript/wiki/Developers).
-
-YourKit
-----
-
-<img src="https://www.yourkit.com/images/yklogo.png"></img>
-
-YourKit has given an open source license for their profiler, greatly simplifying the profiling of ClojureScript performance.
-
-YourKit supports open source projects with its full-featured Java Profiler.
-YourKit, LLC is the creator of <a href="https://www.yourkit.com/java/profiler/index.jsp">YourKit Java Profiler</a>
-and <a href="https://www.yourkit.com/.net/profiler/index.jsp">YourKit .NET Profiler</a>,
-innovative and intelligent tools for profiling Java and .NET applications.
+Bug and features requests can be opened as issues in [GitHub repo](https://github.com/WhimsicalCode/clojurific/issues).
 
 ## License ##
 
-    Copyright (c) Rich Hickey. All rights reserved. The use and
-    distribution terms for this software are covered by the Eclipse
-    Public License 1.0 (https://opensource.org/license/epl-1-0/)
-    which can be found in the file epl-v10.html at the root of this
-    distribution. By using this software in any fashion, you are
-    agreeing to be bound by the terms of this license. You must
-    not remove this notice, or any other, from this software.
+Clojurific is licensed under Eclipse Public License 1.0 (https://opensource.org/license/epl-1-0/), same as ClojureScript.
+
+Copyright © Whimsical, Inc.
+Copyright © Rich Hickey
