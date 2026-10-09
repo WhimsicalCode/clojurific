@@ -1720,7 +1720,18 @@
          (emits (first args) "." pimpl "(" (comma-sep (cons "null" (rest args))) ")"))
 
        keyword?
-       (emits f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) ")")
+       (let [[m nf] args
+             lookup (str ".cljs$core$ILookup$_lookup$arity$" (inc (count args)))]
+         (if (and (= :const (:op (ana/unwrap-quote f)))
+                  (<= 1 (count args) 2)
+                  (= :local (:op m)))
+           ;; (:k m) of a local: its -lookup at this call site, as get would call
+           ;; it, so each site's lookups are as polymorphic as its maps rather
+           ;; than as all maps of the program; anything else as before
+           (emits "(((" m " != null) && (" m lookup " != null))?"
+                  m lookup "(null," f (when nf (list "," nf)) "):"
+                  f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) "))")
+           (emits f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) ")")))
 
        variadic-invoke
        (let [mfa (:max-fixed-arity variadic-invoke)]
