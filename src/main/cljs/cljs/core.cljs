@@ -7228,10 +7228,9 @@ reduces them without incurring seq initialization"
         (PersistentArrayMap. nil cnt arr nil)))))
 
 (defn key-test [key other]
-  (cond
-    (identical? key other) true
-    (keyword-identical? key other) true
-    :else (= key other)))
+  ;; = compares keywords as keyword-identical? does
+  (or (identical? key other)
+      (= key other)))
 
 (defn- ^boolean pam-dupes? [arr]
   (loop [i 0]
