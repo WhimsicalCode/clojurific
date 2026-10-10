@@ -1695,6 +1695,15 @@
                          (<= 2 (count args) 3)
                          (= :local (:op (first args)))
                          (#{:const :local} (:op (ana/unwrap-quote (second args)))))
+        ;; (nth v i) and (nth v i not-found) of a local and a constant index, as
+        ;; sequential destructuring compiles to: v's -nth at the call site when it
+        ;; has one, as get-lookup? (a number index, nth's own check, holds)
+        nth-lookup? (and fn?
+                         (= (:name info) 'cljs.core/nth)
+                         (<= 2 (count args) 3)
+                         (= :local (:op (first args)))
+                         (let [i (ana/unwrap-quote (second args))]
+                           (and (= :const (:op i)) (number? (:form i)))))
         opt-count? (and (= (:name info) 'cljs.core/count)
                         (boolean ('#{string array} first-arg-tag)))
         ns (:ns info)
@@ -1782,6 +1791,14 @@
          (emits "(")
          (emit-lookup-test m lookup)
          (emits "?" m lookup "(" (comma-sep (cons "null" (rest args))) "):"
+                f "(" (comma-sep args) "))"))
+
+       nth-lookup?
+       (let [[v] args
+             nth (str ".cljs$core$IIndexed$_nth$arity$" (count args))]
+         (emits "(")
+         (emit-lookup-test v nth)
+         (emits "?" v nth "(" (comma-sep (cons "null" (rest args))) "):"
                 f "(" (comma-sep args) "))"))
 
        variadic-invoke
