@@ -1723,6 +1723,12 @@
                       (== 2 (count args))
                       (= :local (:op (first args)))
                       (#{:const :local} (:op (ana/unwrap-quote (second args)))))
+        ;; (--destructure-map m) of a local, as map destructuring compiles to:
+        ;; anything but a seq is m itself, only seqs (keyword arguments) call it
+        destructure-map? (and fn?
+                              (= (:name info) 'cljs.core/--destructure-map)
+                              (== 1 (count args))
+                              (= :local (:op (first args))))
         opt-count? (and (= (:name info) 'cljs.core/count)
                         (boolean ('#{string array} first-arg-tag)))
         ns (:ns info)
@@ -1818,6 +1824,13 @@
          (emits "((" x " === " y ") || (")
          (emit-lookup-test x equiv)
          (emits "?" x equiv "(null," y "):" f "(" x "," y ")))"))
+
+       destructure-map?
+       (let [[m] args
+             first ".cljs$core$ISeq$_first$arity$1"]
+         (emits "(")
+         (emit-lookup-test m first)
+         (emits "?" f "(" m "):" m ")"))
 
        site-method
        (let [[x] args]
