@@ -1698,12 +1698,14 @@
         ;; (nth v i) and (nth v i not-found) of a local and a constant index, as
         ;; sequential destructuring compiles to: v's -nth at the call site when it
         ;; has one, as get-lookup? (a number index, nth's own check, holds)
+        ;; a local index is tested to be a number at the call site
         nth-lookup? (and fn?
                          (= (:name info) 'cljs.core/nth)
                          (<= 2 (count args) 3)
                          (= :local (:op (first args)))
                          (let [i (ana/unwrap-quote (second args))]
-                           (and (= :const (:op i)) (number? (:form i)))))
+                           (or (and (= :const (:op i)) (number? (:form i)))
+                               (= :local (:op i)))))
         ;; (seq x), (first x), (next x) of a local: the protocol method these call
         ;; when x implements the protocol, at the call site when x has it, as
         ;; get-lookup?, anything else through the fn as before
@@ -1824,9 +1826,11 @@
          (emits "?" x site-method "(null):" f "(" x "))"))
 
        nth-lookup?
-       (let [[v] args
+       (let [[v i] args
              nth (str ".cljs$core$IIndexed$_nth$arity$" (count args))]
          (emits "(")
+         (when (= :local (:op i))
+           (emits "typeof " i " === \"number\" && "))
          (emit-lookup-test v nth)
          (emits "?" v nth "(" (comma-sep (cons "null" (rest args))) "):"
                 f "(" (comma-sep args) "))"))
