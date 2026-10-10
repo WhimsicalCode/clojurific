@@ -1730,6 +1730,18 @@
                               (= (:name info) 'cljs.core/--destructure-map)
                               (== 1 (count args))
                               (= :local (:op (first args))))
+        ;; predicates of a local through the protocol method their checks find, at
+        ;; the call site: (empty? x) as ICounted's (zero? (-count x)), (not-empty x)
+        ;; as (when (-seq x) x), (vector? x) and (map? x) true when x has the
+        ;; protocol's method; anything else (natively extended, nil) as before
+        site-pred (when (and fn?
+                             (== 1 (count args))
+                             (= :local (:op (first args))))
+                    ('{cljs.core/empty?    [".cljs$core$ICounted$_count$arity$1" :zero]
+                       cljs.core/not-empty [".cljs$core$ISeqable$_seq$arity$1" :seq]
+                       cljs.core/vector?   [".cljs$core$IVector$_assoc_n$arity$3" :true]
+                       cljs.core/map?      [".cljs$core$IMap$_dissoc$arity$2" :true]}
+                     (:name info)))
         opt-count? (and (= (:name info) 'cljs.core/count)
                         (boolean ('#{string array} first-arg-tag)))
         ns (:ns info)
@@ -1832,6 +1844,18 @@
          (emits "(")
          (emit-lookup-test m first)
          (emits "?" f "(" m "):" m ")"))
+
+       site-pred
+       (let [[x] args
+             [method kind] site-pred]
+         (emits "(")
+         (emit-lookup-test x method)
+         (emits "?")
+         (case kind
+           :zero (emits "(" x method "(null) === 0)")
+           :seq  (emits "(" x method "(null) != null ? " x " : null)")
+           :true (emits "true"))
+         (emits ":" f "(" x "))"))
 
        site-method
        (let [[x] args]
