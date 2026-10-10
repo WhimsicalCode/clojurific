@@ -57,6 +57,10 @@
 (def ^:dynamic *source-map-data* nil)
 (def ^:dynamic *source-map-data-gen-col* nil)
 (def ^:dynamic *lexical-renames* {})
+;; In a fn body, an atom of the locals declared at its end: a let in
+;; expression position assigns them in a comma expression instead of binding
+;; them in an IIFE, see emit-let.
+(def ^:dynamic *hoisted-locals* nil)
 
 ;; ES module output (:module-format :esm)
 ;;
@@ -565,7 +569,9 @@
                      name))
     (emits ",")
     (emit-constant (hash kw))
-    (emits ")")))
+    ;; _idx, see cljs.core/array-map-index-of: initialized in ES module output,
+    ;; classic builds' keywords start without (undefined, as before)
+    (emits (if *esm-emitting* ",-1)" ")"))))
 
 (defn emits-symbol [sym]
   (let [ns     (namespace sym)
@@ -1212,6 +1218,19 @@
     (when-not (= param (last params))
       (emits ","))))
 
+(defn emit-fn-body
+  "Emits the body of a fn method, declaring the locals its lets in expression
+  position hoisted (see emit-let) at its end."
+  [expr recurs]
+  (binding [*hoisted-locals* (atom [])]
+    (when recurs (emitln "while(true){"))
+    (emits expr)
+    (when recurs
+      (emitln "break;")
+      (emitln "}"))
+    (when-let [locals (seq @*hoisted-locals*)]
+      (emitln "var " (comma-sep locals) ";"))))
+
 (defn emit-fn-method
   [{expr :body :keys [type name params env recurs]}]
   (let [async (:async env)]
@@ -1221,11 +1240,7 @@
                (emitln "){")
                (when type
                  (emitln "var self__ = this;"))
-               (when recurs (emitln "while(true){"))
-               (emits expr)
-               (when recurs
-                 (emitln "break;")
-                 (emitln "}"))
+               (emit-fn-body expr recurs)
                (emits "})"))))
 
 (defn emit-arguments-to-array
@@ -1257,11 +1272,7 @@
       (emitln "){")
       (when type
         (emitln "var self__ = this;"))
-      (when recurs (emitln "while(true){"))
-      (emits expr)
-      (when recurs
-        (emitln "break;")
-        (emitln "}"))
+      (emit-fn-body expr recurs)
       (emitln "};")
 
       (emitln "var " mname " = " (when async "async ")  "function ("
@@ -1294,8 +1305,33 @@
       (emitln "return " mname ";")
       (emitln "})()"))))
 
+(declare ast-children)
+
+(defn- captured-locals
+  "The locals of bindings (loop locals, which a fn created in a loop captures
+  by value) that fn-ast may refer to: by name, over-approximated with every
+  symbol of its form and the js* code it contains."
+  [fn-ast bindings]
+  (when (seq bindings)
+    (let [codes (volatile! [])
+          names (loop [names (into #{} (filter symbol?) (tree-seq coll? seq (:form fn-ast)))
+                       nodes [fn-ast]]
+                  (if-let [node (first nodes)]
+                    (recur (case (:op node)
+                             :local (conj names (:name node))
+                             :js (do (vswap! codes conj (str (:code node) (apply str (:segs node))))
+                                     names)
+                             names)
+                           (into (rest nodes) (ast-children node)))
+                    names))]
+      (filter (fn [binding]
+                (or (contains? names (:name binding))
+                    (let [munged (str (munge binding))]
+                      (some #(string/includes? % munged) @codes))))
+              bindings))))
+
 (defmethod emit* :fn
-  [{variadic :variadic? :keys [name named? env methods max-fixed-arity recur-frames in-loop loop-lets]}]
+  [{variadic :variadic? :keys [name named? env methods max-fixed-arity recur-frames in-loop loop-lets] :as ast}]
   ;;fn statements get erased, serve no purpose and can pollute scope if named
   (when-not (= :statement (:context env))
     (let [;; Under ESM the name def gives a fn is the module binding of its var:
@@ -1310,6 +1346,7 @@
                  ;; need to capture locals only if in recur fn or loop
                  (when (or in-loop (seq recur-params))
                    (mapcat :params loop-lets)))
+               (captured-locals ast)
                (map munge)
                seq)
           async (:async env)]
@@ -1388,13 +1425,126 @@
       (when loop-locals
         (emitln ";})(" (comma-sep loop-locals) "))")))))
 
+(def ^:private expr-ops
+  "Ops analyzing their children in expression context whatever their own, they
+  emit as JavaScript expressions in any context."
+  #{:var :js-var :local :the-var :with-meta :map :vector :set :js-object
+    :js-array :const :invoke :new :set! :host-field :host-call})
+
+(defn- js-code [{:keys [code segs]}]
+  (or code (apply str segs)))
+
+(defn- js-expression?
+  "Whether the code of a js* form is an expression in a statement position too,
+  conservatively."
+  [ast]
+  (let [code (js-code ast)]
+    (and (not (string/blank? code))
+         (not (re-find #"[;{}]|/\*|//" code))
+         (not (re-find #"^\s*(?:debugger|if|for|while|do|var|let|const|return|throw|try|switch|break|continue|function|class|import|export)\b" code)))))
+
+(defn- ast-children [ast]
+  (mapcat #(let [c (get ast %)] (if (vector? c) c (when c [c]))) (:children ast)))
+
+(defn- uses-fn-scope?
+  "Whether ast reads this or arguments outside of the fns it contains: moving it
+  out of an IIFE changes what they refer to."
+  [ast]
+  (case (:op ast)
+    :fn false
+    :js (boolean (re-find #"\bthis\b|\barguments\b" (js-code ast)))
+    (:var :js-var) (contains? #{"this" "arguments"} (some-> ast :info :name name))
+    (boolean (some uses-fn-scope? (ast-children ast)))))
+
+(defn- ->expr
+  "Returns ast, analyzed in any context, as an AST emitting a JavaScript
+  expression of its value without wrapping it in an IIFE at its top, nil if it
+  can't. Lets keep emitting IIFEs where emit-let can't hoist their locals."
+  [ast]
+  (let [env (assoc (:env ast) :context :expr)]
+    (case (:op ast)
+      :if (let [then (->expr (:then ast))
+                else (->expr (:else ast))]
+            (when (and then else)
+              (assoc ast :env env :then then :else else)))
+      :do (let [statements (mapv ->expr (:statements ast))
+                ret        (->expr (:ret ast))]
+            (when (and ret (every? some? statements))
+              (assoc ast :env env :statements statements :ret ret ::expr true)))
+      (:let :throw) (assoc ast :env env)
+      ;; the quoted constant has the quote's context
+      :quote (assoc ast :env env :expr (assoc-in (:expr ast) [:env :context] :expr))
+      ;; the method of a single arity fn has the fn's context
+      :fn (assoc ast :env env :methods (mapv #(assoc-in % [:env :context] :expr) (:methods ast)))
+      :js (when (and (js-expression? ast)
+                     (not (re-find #"^\s*/\*" (js-code ast))))
+            (assoc ast :env env))
+      (when (contains? expr-ops (:op ast))
+        (assoc ast :env env)))))
+
+(defn- statement-tail?
+  "Whether ast, in expression position, needs statements: a loop, case, try or
+  letfn, which emit an IIFE there, in a tail position of it."
+  [ast]
+  (case (:op ast)
+    (:loop :case :try :letfn) true
+    :if (or (statement-tail? (:then ast)) (statement-tail? (:else ast)))
+    :do (statement-tail? (:ret ast))
+    :let (statement-tail? (:body ast))
+    false))
+
+(defn- assign-tails
+  "Returns ast, analyzed in any context, as an AST of statements assigning its
+  value to the local named target (a munged name) in each of its tail
+  positions, nil if it can't."
+  [ast target]
+  (let [env  (assoc (:env ast) :context :statement)
+        tail #(assign-tails % target)]
+    (case (:op ast)
+      :if (let [then (tail (:then ast))
+                else (tail (:else ast))]
+            (when (and then else)
+              (assoc ast :env env :then then :else else)))
+      :do (when-let [ret (tail (:ret ast))]
+            (assoc ast :env env :ret ret))
+      (:let :loop :letfn) (when-let [body (tail (:body ast))]
+                            (assoc ast :env env :body body))
+      :case (let [nodes   (mapv #(when-let [then (tail (-> % :then :then))]
+                                   (assoc-in % [:then :then] then))
+                                (:nodes ast))
+                  default (some-> (:default ast) tail)]
+              (when (and (every? some? nodes)
+                         (or default (nil? (:default ast))))
+                (assoc ast :env env :nodes nodes :default default)))
+      :try (let [body  (tail (:body ast))
+                 catch (some-> (:catch ast) tail)]
+             (when (and body (or catch (nil? (:catch ast))))
+               (assoc ast :env env :body body :catch catch)))
+      :throw (assoc ast :env env)
+      :recur ast
+      (when-let [val (->expr ast)]
+        {:op ::assign :env env :target target :val val :children [:val]}))))
+
+(defmethod emit* ::assign
+  [{:keys [target val]}]
+  (emitln target " = " val ";"))
+
 (defmethod emit* :do
-  [{:keys [statements ret env]}]
-  (let [context (:context env)]
-    (when (and (seq statements) (= :expr context)) (emitln (iife-open env)))
-    (doseq [s statements] (emitln s))
-    (emit ret)
-    (when (and (seq statements) (= :expr context)) (emitln (iife-close env)))))
+  [{:keys [statements ret env] :as ast}]
+  (let [context (:context env)
+        expr    (when (and (seq statements) (= :expr context))
+                  (if (::expr ast) ast (->expr ast)))]
+    (if expr
+      ;; a comma expression
+      (do (emits "(")
+          (doseq [s (:statements expr)]
+            (emits s ", "))
+          (emits (:ret expr) ")"))
+      (do
+        (when (and (seq statements) (= :expr context)) (emitln (iife-open env)))
+        (doseq [s statements] (emitln s))
+        (emit ret)
+        (when (and (seq statements) (= :expr context)) (emitln (iife-close env)))))))
 
 (defmethod emit* :try
   [{try :body :keys [env catch name finally]}]
@@ -1413,7 +1563,26 @@
           (emits (iife-close env))))
       (emits try))))
 
-(defn emit-let
+(defn- emit-hoisted-let
+  "Emits a let in expression position as a comma expression assigning its
+  locals, which the enclosing fn body declares. Like those of lets in statement
+  position, they're renamed apart from the fn's other locals; fns created in
+  loops capture them by value (loop-lets), as they do the locals of lets in
+  statement position."
+  [bindings expr]
+  (binding [*lexical-renames*
+            (into *lexical-renames*
+              (map (fn [binding]
+                     [(hash-scope binding) (gensym (str (:name binding) "-"))])
+                   bindings))]
+    (emits "(")
+    (doseq [{:keys [init] :as binding} bindings]
+      (swap! *hoisted-locals* conj (munge binding))
+      (emit binding)
+      (emits " = " init ", "))
+    (emits expr ")")))
+
+(defn- emit-let-scope
   [{expr :body :keys [bindings env]} is-loop]
   (let [context (:context env)]
     (when (= :expr context)
@@ -1430,13 +1599,30 @@
       (doseq [{:keys [init] :as binding} bindings]
         (emits "var ")
         (emit binding) ; Binding will be treated as a var
-        (emitln " = " init ";"))
+        ;; an init needing statements assigns the binding from them, rather
+        ;; than from an IIFE
+        (if-let [assign (when (and (statement-tail? init)
+                                   (not (uses-fn-scope? init)))
+                          (assign-tails init (munge binding)))]
+          (do (emitln ";")
+              (emit assign))
+          (emitln " = " init ";")))
       (when is-loop (emitln "while(true){"))
       (emits expr)
       (when is-loop
         (emitln "break;")
         (emitln "}")))
     (when (= :expr context) (emits (iife-close env)))))
+
+(defn emit-let
+  [{expr :body :keys [bindings env] :as ast} is-loop]
+  (let [context (:context env)
+        hoisted (when (and (= :expr context) (not is-loop) *hoisted-locals*
+                           (not (uses-fn-scope? ast)))
+                  (->expr expr))]
+    (if hoisted
+      (emit-hoisted-let bindings hoisted)
+      (emit-let-scope ast is-loop))))
 
 (defmethod emit* :let [ast]
   (emit-let ast false))
@@ -1469,6 +1655,15 @@
                  (.replace \/ \$))
             "$")))
 
+(defn- emit-lookup-test
+  "Emits the test whether local m has the -lookup method lookup (its property),
+  shorter with optional chaining in ES module output (ES2020): methods are
+  functions, so it's truthy exactly when m != null and the method != null."
+  [m lookup]
+  (if *esm-emitting*
+    (emits "(" m "?" lookup ")")
+    (emits "((" m " != null) && (" m lookup " != null))")))
+
 (defmethod emit* :invoke
   [{f :fn :keys [args env] :as expr}]
   (let [info (:info f)
@@ -1495,6 +1690,64 @@
         first-arg-tag (ana/infer-tag env (first (:args expr)))
         opt-not? (and (= (:name info) 'cljs.core/not)
                       (= first-arg-tag 'boolean))
+        ;; the call site dispatch below (protocol methods called at the call site
+        ;; rather than through the shared fn) in ES module output only: it adds
+        ;; code, classic builds keep their size
+        site? (and fn? *esm-emitting*)
+        ;; (get m k) of a local map and a constant or local key: m's -lookup at the
+        ;; call site when it has one, see the keyword? case below
+        get-lookup? (and site?
+                         (= (:name info) 'cljs.core/get)
+                         (<= 2 (count args) 3)
+                         (= :local (:op (first args)))
+                         (#{:const :local} (:op (ana/unwrap-quote (second args)))))
+        ;; (nth v i) and (nth v i not-found) of a local and a constant index, as
+        ;; sequential destructuring compiles to: v's -nth at the call site when it
+        ;; has one, as get-lookup? (a number index, nth's own check, holds)
+        ;; a local index is tested to be a number at the call site
+        nth-lookup? (and site?
+                         (= (:name info) 'cljs.core/nth)
+                         (<= 2 (count args) 3)
+                         (= :local (:op (first args)))
+                         (let [i (ana/unwrap-quote (second args))]
+                           (or (and (= :const (:op i)) (number? (:form i)))
+                               (= :local (:op i)))))
+        ;; (seq x), (first x), (next x), (count x) of a local: the protocol method these call
+        ;; when x implements the protocol, at the call site when x has it, as
+        ;; get-lookup?, anything else through the fn as before
+        site-method (when (and site?
+                               (== 1 (count args))
+                               (= :local (:op (first args))))
+                      ('{cljs.core/seq   ".cljs$core$ISeqable$_seq$arity$1"
+                         cljs.core/first ".cljs$core$ISeq$_first$arity$1"
+                         cljs.core/next  ".cljs$core$INext$_next$arity$1"
+                         cljs.core/count ".cljs$core$ICounted$_count$arity$1"}
+                       (:name info)))
+        ;; (= x y) of a local x and a local or constant y: identical, else x's
+        ;; -equiv at the call site when it has one (as = calls it), else = as before
+        eq-site? (and site?
+                      (= (:name info) 'cljs.core/=)
+                      (== 2 (count args))
+                      (= :local (:op (first args)))
+                      (#{:const :local} (:op (ana/unwrap-quote (second args)))))
+        ;; (--destructure-map m) of a local, as map destructuring compiles to:
+        ;; anything but a seq is m itself, only seqs (keyword arguments) call it
+        destructure-map? (and site?
+                              (= (:name info) 'cljs.core/--destructure-map)
+                              (== 1 (count args))
+                              (= :local (:op (first args))))
+        ;; predicates of a local through the protocol method their checks find, at
+        ;; the call site: (empty? x) as ICounted's (zero? (-count x)), (not-empty x)
+        ;; as (when (-seq x) x), (vector? x) and (map? x) true when x has the
+        ;; protocol's method; anything else (natively extended, nil) as before
+        site-pred (when (and site?
+                             (== 1 (count args))
+                             (= :local (:op (first args))))
+                    ('{cljs.core/empty?    [".cljs$core$ICounted$_count$arity$1" :zero]
+                       cljs.core/not-empty [".cljs$core$ISeqable$_seq$arity$1" :seq]
+                       cljs.core/vector?   [".cljs$core$IVector$_assoc_n$arity$3" :true]
+                       cljs.core/map?      [".cljs$core$IMap$_dissoc$arity$2" :true]}
+                     (:name info)))
         opt-count? (and (= (:name info) 'cljs.core/count)
                         (boolean ('#{string array} first-arg-tag)))
         ns (:ns info)
@@ -1562,7 +1815,70 @@
          (emits (first args) "." pimpl "(" (comma-sep (cons "null" (rest args))) ")"))
 
        keyword?
-       (emits f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) ")")
+       (let [[m nf] args
+             lookup (str ".cljs$core$ILookup$_lookup$arity$" (inc (count args)))]
+         (if (and *esm-emitting*
+                  (= :const (:op (ana/unwrap-quote f)))
+                  (<= 1 (count args) 2)
+                  (= :local (:op m)))
+           ;; (:k m) of a local: its -lookup at this call site, as get would call
+           ;; it, so each site's lookups are as polymorphic as its maps rather
+           ;; than as all maps of the program; anything else as before
+           (do (emits "(")
+               (emit-lookup-test m lookup)
+               (emits "?" m lookup "(null," f (when nf (list "," nf)) "):"
+                      f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) "))"))
+           (emits f ".cljs$core$IFn$_invoke$arity$" (count args) "(" (comma-sep args) ")")))
+
+       get-lookup?
+       (let [[m] args
+             lookup (str ".cljs$core$ILookup$_lookup$arity$" (count args))]
+         (emits "(")
+         (emit-lookup-test m lookup)
+         (emits "?" m lookup "(" (comma-sep (cons "null" (rest args))) "):"
+                f "(" (comma-sep args) "))"))
+
+       eq-site?
+       (let [[x y] args
+             equiv ".cljs$core$IEquiv$_equiv$arity$2"]
+         (emits "((" x " === " y ") || (")
+         (emit-lookup-test x equiv)
+         (emits "?" x equiv "(null," y "):" f "(" x "," y ")))"))
+
+       destructure-map?
+       (let [[m] args
+             first ".cljs$core$ISeq$_first$arity$1"]
+         (emits "(")
+         (emit-lookup-test m first)
+         (emits "?" f "(" m "):" m ")"))
+
+       site-pred
+       (let [[x] args
+             [method kind] site-pred]
+         (emits "(")
+         (emit-lookup-test x method)
+         (emits "?")
+         (case kind
+           :zero (emits "(" x method "(null) === 0)")
+           :seq  (emits "(" x method "(null) != null ? " x " : null)")
+           :true (emits "true"))
+         (emits ":" f "(" x "))"))
+
+       site-method
+       (let [[x] args]
+         (emits "(")
+         (emit-lookup-test x site-method)
+         (emits "?" x site-method "(null):" f "(" x "))"))
+
+       nth-lookup?
+       (let [[v i] args
+             nth (str ".cljs$core$IIndexed$_nth$arity$" (count args))]
+         (emits "(")
+         (when (= :local (:op i))
+           (emits "typeof " i " === \"number\" && "))
+         (emit-lookup-test v nth)
+         (emits "?" v nth "(" (comma-sep (cons "null" (rest args))) "):"
+                f "(" (comma-sep args) "))"))
 
        variadic-invoke
        (let [mfa (:max-fixed-arity variadic-invoke)]

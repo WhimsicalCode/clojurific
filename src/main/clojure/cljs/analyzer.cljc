@@ -2044,6 +2044,23 @@ x                          (not (contains? ret :info)))
          (or (string/starts-with? s "cljs.")
              (string/starts-with? s "clojure.")))))
 
+(defn- fixed-arity-fn-info
+  "The var info of a fn of one fixed arity, given a def's init form, i.e.
+  (fn [x y] ...) from defn, for calls of the var in its own body to invoke it
+  directly like they do once it's defined. nil for other forms."
+  [init]
+  (when (and (seq? init) ('#{fn* cljs.core/fn} (first init)))
+    (let [decl   (next init)
+          params (cond
+                   (vector? (first decl)) (first decl)
+                   (and (nil? (next decl)) (seq? (first decl)) (vector? (ffirst decl)))
+                   (ffirst decl))]
+      (when (and params (not-any? '#{&} params))
+        {:fn-var          true
+         :variadic?       false
+         :max-fixed-arity (count params)
+         :method-params   [(vec (repeat (count params) '_))]}))))
+
 (defmethod parse 'def
   [op env form _ _]
   (when (> (count form) 4)
@@ -2120,6 +2137,8 @@ x                          (not (contains? ret :info)))
                           {:name var-name}
                           sym-meta
                           (when (true? dynamic) {:dynamic true})
+                          (when-not (or dynamic (:macro sym-meta))
+                            (fixed-arity-fn-info (:init args)))
                           (source-info var-name env)))
                       (disallowing-recur
                         (disallowing-ns*

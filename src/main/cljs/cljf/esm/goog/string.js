@@ -3,11 +3,14 @@
 //
 // The subset of goog.string used by ClojureScript, as an ES module.
 
+// Natively for string arguments, about twice as fast; others are coerced as
+// goog.string's do.
 export function startsWith(str, prefix) {
-  return str.lastIndexOf(prefix, 0) == 0;
+  return typeof prefix === 'string' ? str.startsWith(prefix) : str.lastIndexOf(prefix, 0) == 0;
 }
 
 export function endsWith(str, suffix) {
+  if (typeof suffix === 'string') return str.endsWith(suffix);
   const l = str.length - suffix.length;
   return l >= 0 && str.indexOf(suffix, l) == l;
 }

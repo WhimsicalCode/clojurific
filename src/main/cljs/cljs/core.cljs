@@ -466,14 +466,18 @@
         (aset dimarray i (apply make-array nil dims)))
       dimarray)))
 
-(defn aclone
+(defn ^array aclone
   "Returns a javascript array, cloned from the passed in array"
   [arr]
-  (let [len (alength arr)
-        new-arr (make-array len)]
-    (dotimes [i len]
-      (aset new-arr i (aget arr i)))
-    new-arr))
+  (if (array? arr)
+    ;; natively, about twice as fast as copying the elements one by one
+    (.slice arr)
+    ;; array-likes, i.e. typed arrays, are cloned to an array
+    (let [len (alength arr)
+          new-arr (make-array len)]
+      (dotimes [i len]
+        (aset new-arr i (aget arr i)))
+      new-arr)))
 
 (defn ^array array
   "Creates a new javascript array.
@@ -1057,8 +1061,17 @@
    consistent with =."
   [o]
   (cond
+    ;; the most common keys: a keyword caches its hash, read here rather
+    ;; than through its -hash (caching-hash), which computes it when nil
+    (instance? Keyword o)
+    (let [h (.-_hash o)]
+      (if (nil? h)
+        (bit-xor (-hash ^not-native o) 0)
+        (bit-xor h 0)))
+
+    ;; the method implements? found, without -hash's dispatch checking again
     (implements? IHash o)
-    (bit-xor (-hash o) 0)
+    (bit-xor (-hash ^not-native o) 0)
 
     (number? o)
     (if (js/isFinite o)
@@ -1350,7 +1363,11 @@
     (if (nil? x)
       (nil? y)
       (or (identical? x y)
-        ^boolean (-equiv x y))))
+        (if (instance? Keyword x)
+          ;; Keyword's -equiv, without -equiv's dispatch on every type
+          (and (instance? Keyword y)
+               (identical? (.-fqn x) (.-fqn y)))
+          ^boolean (-equiv x y)))))
   ([x y & more]
      (if (= x y)
        (if (next more)
@@ -1831,10 +1848,16 @@ reduces them without incurring seq initialization"
 
 (es6-iterable RSeq)
 
+(declare PersistentVector)
+
 (defn second
   "Same as (first (next x))"
   [coll]
-  (first (next coll)))
+  (if (instance? PersistentVector coll)
+    ;; by index, without the seqs of next
+    (when (< 1 (.-cnt coll))
+      (-nth ^not-native coll 1))
+    (first (next coll))))
 
 (defn ffirst
   "Same as (first (first x))"
@@ -1859,10 +1882,16 @@ reduces them without incurring seq initialization"
 (defn last
   "Return the last item in coll, in linear time"
   [s]
-  (let [sn (next s)]
-    (if-not (nil? sn)
-      (recur sn)
-      (first s))))
+  (if (instance? PersistentVector s)
+    ;; by index, rather than walking a seq to the end
+    (let [cnt (.-cnt s)]
+      (when (pos? cnt)
+        (-nth ^not-native s (dec cnt))))
+    (loop [s s]
+      (let [sn (next s)]
+        (if-not (nil? sn)
+          (recur sn)
+          (first s))))))
 
 (extend-type default
   IEquiv
@@ -2095,11 +2124,28 @@ reduces them without incurring seq initialization"
      (if-not (nil? coll)
        (-assoc coll k v)
        {k v})))
-  ([coll k v & kvs]
-     (let [ret (assoc coll k v)]
-       (if kvs
-         (recur ret (first kvs) (second kvs) (nnext kvs))
-         ret))))
+  ;; two pairs, without the variadic arity's seq; a key without a value is
+  ;; associated with nil, as by the variadic arity
+  ([coll k v k2]
+   (assoc (assoc coll k v) k2 nil))
+  ([coll k v k2 v2]
+   (assoc (assoc coll k v) k2 v2))
+  ([coll k v k2 v2 & kvs]
+   (let [ret (assoc (assoc coll k v) k2 v2)]
+     (if (instance? IndexedSeq kvs)
+       ;; by index, the arguments of a call are an IndexedSeq of an array
+       (let [arr (.-arr kvs)
+             len (alength arr)]
+         (loop [ret ret i (.-i kvs)]
+           (if (< i len)
+             (recur (assoc ret (aget arr i) (when (< (inc i) len) (aget arr (inc i))))
+                    (+ i 2))
+             ret)))
+       (loop [ret ret
+              kvs kvs]
+         (if kvs
+           (recur (assoc ret (first kvs) (second kvs)) (nnext kvs))
+           ret))))))
 
 (defn dissoc
   "dissoc[iate]. Returns a new map of the same (hashed/sorted) type,
@@ -2523,6 +2569,13 @@ reduces them without incurring seq initialization"
    (number? x) (if (number? y)
                  (garray/defaultCompare x y)
                  (throw (js/Error. (str_ "Cannot compare " x " to " y))))
+
+   ;; strings, before the costlier satisfies?, unless IComparable is
+   ;; extended to them (what native-satisfies? checks for a string)
+   (and (string? x) (string? y)
+        (not (unchecked-get IComparable "string"))
+        (not (unchecked-get IComparable "_")))
+   (garray/defaultCompare x y)
 
    (satisfies? IComparable x)
    (-compare x y)
@@ -3142,9 +3195,11 @@ reduces them without incurring seq initialization"
   x.toString().  (str nil) returns the empty string. With more than
   one arg, returns the concatenation of the str values of the args."
   ([] "")
-  ([x] (if (nil? x)
-         ""
-         (.toString x)))
+  ([x] (cond
+         ;; the most common, its own toString, without the call
+         (string? x) x
+         (nil? x) ""
+         :else (.toString x)))
   ([x & ys]
    (loop [sb (StringBuffer. (str x)) more ys]
      (if more
@@ -3482,7 +3537,7 @@ reduces them without incurring seq initialization"
                   nsc)))
    :default (garray/defaultCompare (.-name a) (.-name b))))
 
-(deftype Keyword [ns name fqn ^:mutable _hash]
+(deftype Keyword [ns name fqn ^:mutable _hash ^:mutable _idx]
   Object
   (toString [_] (str_ ":" fqn))
   (equiv [this other]
@@ -3575,12 +3630,12 @@ reduces them without incurring seq initialization"
             (keyword? name) name
             (symbol? name) (Keyword.
                              (cljs.core/namespace name)
-                             (cljs.core/name name) (.-str name) nil)
-            (= "/" name) (Keyword. nil name name nil)
+                             (cljs.core/name name) (.-str name) nil -1)
+            (= "/" name) (Keyword. nil name name nil -1)
             (string? name) (let [parts (.split name "/")]
                              (if (== (alength parts) 2)
-                               (Keyword. (aget parts 0) (aget parts 1) name nil)
-                               (Keyword. nil (aget parts 0) name nil)))))
+                               (Keyword. (aget parts 0) (aget parts 1) name nil -1)
+                               (Keyword. nil (aget parts 0) name nil -1)))))
   ([ns name]
    (let [ns   (cond
                 (keyword? ns) (cljs.core/name ns)
@@ -3590,7 +3645,7 @@ reduces them without incurring seq initialization"
                 (keyword? name) (cljs.core/name name)
                 (symbol? name) (cljs.core/name name)
                 :else name)]
-     (Keyword. ns name (str_ (when ns (str_ ns "/")) name) nil))))
+     (Keyword. ns name (str_ (when ns (str_ ns "/")) name) nil -1))))
 
 (deftype LazySeq [meta ^:mutable fn ^:mutable s ^:mutable __hash]
   Object
@@ -4424,14 +4479,25 @@ reduces them without incurring seq initialization"
          (.createMulti TransformerIterator xform (map iter (cons coll colls))))
        ())))
 
+(declare PersistentVector)
+
 (defn every?
   "Returns true if (pred x) is logical true for every x in coll, else
   false."
   [pred coll]
-  (cond
-   (nil? (seq coll)) true
-   (pred (first coll)) (recur pred (next coll))
-   :else false))
+  (if (instance? PersistentVector coll)
+    ;; by index, without a seq per element
+    (let [cnt (.-cnt coll)]
+      (loop [i 0]
+        (cond
+          (== i cnt) true
+          (pred (-nth ^not-native coll i)) (recur (inc i))
+          :else false)))
+    (loop [coll coll]
+      (cond
+        (nil? (seq coll)) true
+        (pred (first coll)) (recur (next coll))
+        :else false))))
 
 (defn not-every?
   "Returns false if (pred x) is logical true for every x in
@@ -4444,8 +4510,15 @@ reduces them without incurring seq initialization"
   this will return :fred if :fred is in the sequence, otherwise nil:
   (some #{:fred} coll)"
   [pred coll]
-  (when-let [s (seq coll)]
-    (or (pred (first s)) (recur pred (next s)))))
+  (if (instance? PersistentVector coll)
+    ;; by index, without a seq per element
+    (let [cnt (.-cnt coll)]
+      (loop [i 0]
+        (when (< i cnt)
+          (or (pred (-nth ^not-native coll i)) (recur (inc i))))))
+    (loop [s (seq coll)]
+      (when s
+        (or (pred (first s)) (recur (next s)))))))
 
 (defn not-any?
   "Returns false if (pred x) is logical true for any x in coll,
@@ -5452,6 +5525,12 @@ reduces them without incurring seq initialization"
   (filter #(not (sequential? %))
           (rest (tree-seq sequential? seq x))))
 
+(defn- conj-tv!
+  "conj! onto a TransientVector, calling its method rather than -conj!,
+  which dispatches on every kind of transient collection."
+  [^not-native tv x]
+  (-conj! tv x))
+
 (defn into
   "Returns a new coll consisting of to with all of the items of
   from conjoined. A transducer may be supplied.
@@ -5461,7 +5540,9 @@ reduces them without incurring seq initialization"
   ([to from]
      (if-not (nil? to)
        (if (implements? IEditableCollection to)
-         (-with-meta (persistent! (reduce -conj! (transient to) from)) (meta to))
+         (-with-meta (persistent! (reduce (if (instance? PersistentVector to) conj-tv! -conj!)
+                                          (transient to) from))
+                     (meta to))
          (reduce -conj to from))
        (reduce conj to from)))
   ([to xform from]
@@ -5480,7 +5561,7 @@ reduces them without incurring seq initialization"
   exhausted.  Any remaining items in other colls are ignored. Function
   f should accept number-of-colls arguments."
   ([f coll]
-     (-> (reduce (fn [v o] (conj! v (f o))) (transient []) coll)
+     (-> (reduce (fn [v o] (conj-tv! v (f o))) (transient []) coll)
          persistent!))
   ([f c1 c2]
      (into [] (map f c1 c2)))
@@ -5493,7 +5574,7 @@ reduces them without incurring seq initialization"
   "Returns a vector of the items in coll for which
   (pred item) returns logical true. pred must be free of side-effects."
   [pred coll]
-  (-> (reduce (fn [v o] (if (pred o) (conj! v o) v))
+  (-> (reduce (fn [v o] (if (pred o) (conj-tv! v o) v))
               (transient [])
               coll)
       persistent!))
@@ -5527,13 +5608,29 @@ reduces them without incurring seq initialization"
   {:added "1.2"
    :static true}
   ([m ks]
-   (loop [m m
-          ks (seq ks)]
-     (if (nil? ks)
-       m
-       (recur (get m (first ks))
-         (next ks)))))
+   (if (instance? PersistentVector ks)
+     ;; by index, without a seq per key
+     (let [cnt (.-cnt ks)]
+       (loop [m m i 0]
+         (if (< i cnt)
+           (recur (get m (-nth ^not-native ks i)) (inc i))
+           m)))
+     (loop [m m
+            ks (seq ks)]
+       (if (nil? ks)
+         m
+         (recur (get m (first ks))
+           (next ks))))))
   ([m ks not-found]
+   (if (instance? PersistentVector ks)
+     (let [cnt (.-cnt ks)]
+       (loop [m m i 0]
+         (if (< i cnt)
+           (let [m (get m (-nth ^not-native ks i) lookup-sentinel)]
+             (if (identical? lookup-sentinel m)
+               not-found
+               (recur m (inc i))))
+           m)))
      (loop [sentinel lookup-sentinel
             m m
             ks (seq ks)]
@@ -5542,7 +5639,7 @@ reduces them without incurring seq initialization"
            (if (identical? sentinel m)
              not-found
              (recur sentinel m (next ks))))
-         m))))
+         m)))))
 
 (defn assoc-in
   "Associates a value in a nested associative structure, where ks is a
@@ -5978,7 +6075,7 @@ reduces them without incurring seq initialization"
 
     :else
     (-persistent!
-      (reduce -conj!
+      (reduce conj-tv!
         (-as-transient (.-EMPTY PersistentVector))
         coll))))
 
@@ -6355,8 +6452,7 @@ reduces them without incurring seq initialization"
     (if ^boolean (.-edit root)
       (do (set! (.-edit root) nil)
           (let [len (- cnt (tail-off tcoll))
-                trimmed-tail (make-array len)]
-            (array-copy tail 0 trimmed-tail 0 len)
+                trimmed-tail (.slice tail 0 len)]
             (PersistentVector. nil cnt shift root trimmed-tail nil)))
       (throw (js/Error. "persistent! called twice"))))
 
@@ -6727,7 +6823,19 @@ reduces them without incurring seq initialization"
     :else (array-index-of-equiv? arr k)))
 
 (defn- array-map-index-of [m k]
-  (array-index-of (.-arr m) k))
+  (let [arr (.-arr m)]
+    (if (keyword? k)
+      ;; the index k was last found at (its _idx), when it holds k: maps made by
+      ;; the same code share the order of their keys; else the scan, remembering
+      ;; where it found k. Array maps' keys are unique, keys at even indexes.
+      (let [i (.-_idx k)]
+        (if (and (<= 0 i) (< i (alength arr)) (identical? k (aget arr i)))
+          i
+          (let [j (array-index-of-keyword? arr k)]
+            (when-not (== j -1)
+              (set! (.-_idx k) j))
+            j)))
+      (array-index-of arr k))))
 
 (defn- array-extend-kv [arr k v]
   (let [l (alength arr)
@@ -7144,10 +7252,9 @@ reduces them without incurring seq initialization"
         (PersistentArrayMap. nil cnt arr nil)))))
 
 (defn key-test [key other]
-  (cond
-    (identical? key other) true
-    (keyword-identical? key other) true
-    :else (= key other)))
+  ;; = compares keywords as keyword-identical? does
+  (or (identical? key other)
+      (= key other)))
 
 (defn- ^boolean pam-dupes? [arr]
   (loop [i 0]
@@ -9292,9 +9399,16 @@ reduces them without incurring seq initialization"
   "Returns a map that consists of the rest of the maps conj-ed onto
   the first.  If a key occurs in more than one map, the mapping from
   the latter (left-to-right) will be the mapping in the result."
-  [& maps]
-  (when (some identity maps)
-    (reduce #(conj (or %1 {}) %2) maps)))
+  ;; the fixed arities are the variadic one's results, without its seq
+  ([] nil)
+  ([m] (when m m))
+  ([m1 m2]
+   (when (or m1 m2)
+     (conj (or m1 {}) m2)))
+  ([m1 m2 & more]
+   (let [maps (list* m1 m2 more)]
+     (when (some identity maps)
+       (reduce #(conj (or %1 {}) %2) maps)))))
 
 (defn merge-with
   "Returns a map that consists of the rest of the maps conj-ed onto
@@ -11498,6 +11612,15 @@ reduces them without incurring seq initialization"
 (defn- throw-no-method-error [name dispatch-val]
   (throw (js/Error. (str_ "No method in multimethod '" name "' for dispatch value: " dispatch-val))))
 
+(defn- multi-ref-value
+  "The value of a reference of a multimethod, its own atoms or a hierarchy:
+  an atom's state without the deref protocol's dispatch, which every
+  multimethod call makes."
+  [r]
+  (if (instance? Atom r)
+    (.-state r)
+    (deref r)))
+
 (deftype MultiFn [name dispatch-fn default-dispatch-val hierarchy
                   method-table prefer-table method-cache cached-hierarchy]
   IFn
@@ -11653,12 +11776,21 @@ reduces them without incurring seq initialization"
     mf)
 
   (-get-method [mf dispatch-val]
-    (when-not (= @cached-hierarchy @hierarchy)
+    (when-not (= (multi-ref-value cached-hierarchy) (multi-ref-value hierarchy))
       (reset-cache method-cache method-table cached-hierarchy hierarchy))
-    (if-let [target-fn (@method-cache dispatch-val)]
-      target-fn
-      (find-and-cache-best-method name dispatch-val hierarchy method-table
-        prefer-table method-cache cached-hierarchy default-dispatch-val)))
+    (let [cache (multi-ref-value method-cache)]
+      ;; the method of the last dispatch value, while the method cache is the
+      ;; same: a call site keeps dispatching on the same (identical) value
+      (if (and (identical? cache (.-cljs_mf_cache mf))
+               (identical? dispatch-val (.-cljs_mf_dispatch mf)))
+        (.-cljs_mf_method mf)
+        (if-let [target-fn (get cache dispatch-val)]
+          (do (set! (.-cljs_mf_cache mf) cache)
+              (set! (.-cljs_mf_dispatch mf) dispatch-val)
+              (set! (.-cljs_mf_method mf) target-fn)
+              target-fn)
+          (find-and-cache-best-method name dispatch-val hierarchy method-table
+            prefer-table method-cache cached-hierarchy default-dispatch-val)))))
 
   (-prefer-method [mf dispatch-val-x dispatch-val-y]
     (when (prefers* dispatch-val-y dispatch-val-x  prefer-table)
@@ -11757,22 +11889,34 @@ reduces them without incurring seq initialization"
   (assert (string? s))
   (UUID. (.toLowerCase s) nil))
 
+(def ^:private uuid-hex-bytes nil)
+
+(defn- uuid-hex4
+  "n, a 16 bit number, as 4 lower case hex digits."
+  [n]
+  (let [t (or uuid-hex-bytes
+              ;; two lower case hex digits per byte, built on first use
+              (let [t (make-array 256)]
+                (dotimes [i 256]
+                  (aset t i (.slice (.toString (+ 256 i) 16) 1)))
+                (set! uuid-hex-bytes t)
+                t))]
+    (js* "(~{} + ~{})" (aget t (bit-shift-right n 8)) (aget t (bit-and n 255)))))
+
 (defn random-uuid
   "Returns a pseudo-randomly generated UUID instance (i.e. type 4)."
   []
-  (letfn [(^string quad-hex []
-            (let [unpadded-hex ^string (.toString (rand-int 65536) 16)]
-              (case (count unpadded-hex)
-                1 (str_ "000" unpadded-hex)
-                2 (str_ "00" unpadded-hex)
-                3 (str_ "0" unpadded-hex)
-                unpadded-hex)))]
-    (let [ver-tripple-hex ^string (.toString (bit-or 0x4000 (bit-and 0x0fff (rand-int 65536))) 16)
-          res-tripple-hex ^string (.toString (bit-or 0x8000 (bit-and 0x3fff (rand-int 65536))) 16)]
-      (uuid
-        (str_ (quad-hex) (quad-hex) "-" (quad-hex) "-"
-             ver-tripple-hex "-" res-tripple-hex "-"
-             (quad-hex) (quad-hex) (quad-hex))))))
+  ;; hex digits from a table rather than formatted and padded per number,
+  ;; from the same random numbers in the same order as before
+  (let [ver-tripple-hex (uuid-hex4 (bit-or 0x4000 (bit-and 0x0fff (rand-int 65536))))
+        res-tripple-hex (uuid-hex4 (bit-or 0x8000 (bit-and 0x3fff (rand-int 65536))))]
+    (UUID. (js* "(~{} + ~{} + '-' + ~{} + '-' + ~{} + '-' + ~{} + '-' + ~{} + ~{} + ~{})"
+                (uuid-hex4 (rand-int 65536)) (uuid-hex4 (rand-int 65536))
+                (uuid-hex4 (rand-int 65536))
+                ver-tripple-hex res-tripple-hex
+                (uuid-hex4 (rand-int 65536)) (uuid-hex4 (rand-int 65536))
+                (uuid-hex4 (rand-int 65536)))
+           nil)))
 
 (defn uuid?
   "Return true if x is a UUID."

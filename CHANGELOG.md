@@ -5,6 +5,40 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.6 [Next]
 
+### Changed
+
+- Array map lookups of a keyword first check the index the keyword was last found at (a new `_idx` field of `Keyword`), and scan the keys only when it doesn't hold that keyword: maps made by the same code share the order of their keys (about 4% faster on the Whimsical app's benchmarks). Keyword constants are emitted with the field initialized in ES module output; classic builds' emitted code is as before.
+- The call site dispatch below (protocol methods called at the call site of `get`, keyword invokes, `nth`, `seq`, `first`, `next`, `count`, `=`, `empty?`, `not-empty`, `vector?`, `map?` and map destructuring) is in ES module output only: classic builds' code size is as before.
+- In fn bodies, `let`s in expression position (`or`, `and`, higher order calls binding their arguments, ...) assign their locals in a comma expression instead of binding them in an IIFE, and `do`s in expression position are comma expressions: their functions allocate less and V8 optimizes them better (about 4% faster on the Whimsical app's benchmarks).
+- A `let` binding initialized by a `loop`, `case`, `try` or `letfn` (or an `if`, `do` or `let` ending in one) is assigned from statements instead of an IIFE.
+- `hash` of a keyword reads the hash the keyword caches (computing it once through its `-hash` method when it isn't cached yet), and of other `IHash` values calls their `-hash` method directly instead of through `-hash`'s dispatch: hash maps with keyword keys are faster.
+- `mapv`, `filterv`, `vec` and `into` a vector add to their transient vector through its method rather than `-conj!`, which dispatches on every kind of transient collection.
+- `merge` of up to two maps and `assoc` of two key/value pairs have fixed arities: their calls don't build a seq of their arguments.
+- `assoc` of more than two key/value pairs reads the remaining pairs from its arguments' array by index instead of walking them with `first`, `second` and `nnext` (about 1.4% faster on the Whimsical app's benchmarks).
+- A multimethod remembers the method of its last dispatch value, used while its method cache is unchanged and the next dispatch value is identical: repeated dispatch skips the cache lookup.
+- Multimethods read their method cache and hierarchy atoms directly instead of through `deref`'s protocol dispatch, and look up the method cache with `get`: dispatch is faster.
+- `random-uuid` formats its hex digits from a table, about 2.5 times faster, with the same UUIDs for the same `Math.random` numbers.
+- `compare` of two strings skips the `IComparable` lookup when `IComparable` isn't extended to strings: sorted maps and sorts with string keys are faster.
+- Map destructuring of a local tests at the call site whether it's a seq (keyword arguments) and only then calls `--destructure-map`, anything else is the value itself (about 0.7% faster on the Whimsical app's benchmarks, about 0.15% more compressed JavaScript).
+- `(= x y)` of a local `x` and a local or constant `y` is true when they're identical, else calls `x`'s `-equiv` method at the call site when it has one, anything else through `=` as before (about 0.8% faster on the Whimsical app's benchmarks, about 0.1% more JavaScript).
+- `(empty? x)`, `(not-empty x)`, `(vector? x)` and `(map? x)` of a local `x` call the protocol method their checks use at the call site when `x` has it: `empty?` is `(zero? (-count x))`, `not-empty` is `x` when `(-seq x)` isn't nil, `vector?` and `map?` are true; anything else through the function as before (about 1% faster on the Whimsical app's benchmarks, about 0.1% more JavaScript).
+- `(count x)` of a local `x` calls `x`'s `-count` method at the call site when it has one, as `seq` below (about 1.4% faster on the Whimsical app's benchmarks, about 0.2% more JavaScript).
+- `(seq x)`, `(first x)` and `(next x)` of a local `x` call `x`'s `-seq`, `-first` or `-next` method at the call site when it has one, as `get` below, anything else through the function as before (about 1.4% faster on the Whimsical app's benchmarks, about 0.5% more gzipped JavaScript, slightly less with brotli).
+- `(nth v i)` and `(nth v i not-found)` of a local `v` and a constant number `i` (as sequential destructuring compiles to) or a local `i` that is a number, call `v`'s `-nth` method at the call site when it has one, as `get` below (about 0.8% faster on the Whimsical app's benchmarks, about 0.3% more gzipped JavaScript).
+- `(get-in m [k1 k2 ...])` with a literal path of constant keys compiles to the `get`s it makes, each a call site lookup of a local as `get`'s below, without building the path vector (about 1% faster on the Whimsical app's benchmarks, +0.15% unminified JavaScript). Other `get-in` calls are unchanged.
+- `str` of a single string returns it without calling its `toString` through a call site every type goes through: `str` with string arguments is faster (about 2% on the Whimsical app's benchmarks).
+- `key-test` (hash map key comparison) doesn't test `keyword-identical?` before `=`, which compares keywords the same way.
+- `=` of a keyword and another value compares them as the keyword's `-equiv` does without dispatching `-equiv` on every type.
+- A `defn` of one fixed arity calls itself directly in its body, as other code calls it once it's defined, rather than through the higher order invoke.
+- A fn created in a loop is wrapped to capture only the loop's locals it refers to, and not wrapped when it refers to none: less JavaScript.
+- In ES module output, the call site lookups of `get` and keyword invokes below test for the method with optional chaining (`m?.method`), about 2% less unminified JavaScript.
+- `(get m k)` and `(get m k not-found)` of a local `m` and a constant or local `k`, as map destructuring compiles to, call `m`'s `-lookup` method at the call site when it has one, like keyword invokes below (about 2% faster on the Whimsical app's benchmarks, about 1.5% more gzipped JavaScript).
+- A keyword invoked on a local, `(:k m)` and `(:k m not-found)`, calls the local's `-lookup` method at the call site when it has one, as `get` would, so each call site's lookups are only as polymorphic as its maps (about 2% faster on the Whimsical app's benchmarks, about 1% more gzipped JavaScript).
+- The `goog.string` shim's `startsWith` and `endsWith` (`clojure.string/starts-with?`, `ends-with?`) use the native string methods for string arguments, about twice as fast.
+- `last` and `second` of a persistent vector read it by index instead of walking a seq: `last` of a vector is no longer linear.
+- `some`, `every?` and `get-in` walk persistent vectors by index instead of allocating a seq per element (about 5% faster on the Whimsical app's benchmarks).
+- `aclone` clones arrays with `.slice()`, about twice as fast for the 32 element nodes transients and hash maps clone, and `persistent!` of a transient vector trims its tail with it. Its result is still inferred as an array.
+
 ### Fixed
 
 - `cljf repl` waited forever when the nREPL server closed the connection before the REPL had switched to ClojureScript (the server stopping or restarting while it connects): it now fails, saying the server closed the connection.
