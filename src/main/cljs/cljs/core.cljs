@@ -466,7 +466,7 @@
         (aset dimarray i (apply make-array nil dims)))
       dimarray)))
 
-(defn aclone
+(defn ^array aclone
   "Returns a javascript array, cloned from the passed in array"
   [arr]
   (if (array? arr)

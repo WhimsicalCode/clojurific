@@ -7,6 +7,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ### Changed
 
+- The call site dispatch below (protocol methods called at the call site of `get`, keyword invokes, `nth`, `seq`, `first`, `next`, `count`, `=`, `empty?`, `not-empty`, `vector?`, `map?` and map destructuring) is in ES module output only: classic builds' code size is as before.
 - In fn bodies, `let`s in expression position (`or`, `and`, higher order calls binding their arguments, ...) assign their locals in a comma expression instead of binding them in an IIFE, and `do`s in expression position are comma expressions: their functions allocate less and V8 optimizes them better (about 4% faster on the Whimsical app's benchmarks).
 - A `let` binding initialized by a `loop`, `case`, `try` or `letfn` (or an `if`, `do` or `let` ending in one) is assigned from statements instead of an IIFE.
 - `hash` of a keyword reads the hash the keyword caches (computing it once through its `-hash` method when it isn't cached yet), and of other `IHash` values calls their `-hash` method directly instead of through `-hash`'s dispatch: hash maps with keyword keys are faster.
@@ -35,7 +36,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 - The `goog.string` shim's `startsWith` and `endsWith` (`clojure.string/starts-with?`, `ends-with?`) use the native string methods for string arguments, about twice as fast.
 - `last` and `second` of a persistent vector read it by index instead of walking a seq: `last` of a vector is no longer linear.
 - `some`, `every?` and `get-in` walk persistent vectors by index instead of allocating a seq per element (about 5% faster on the Whimsical app's benchmarks).
-- `aclone` clones arrays with `.slice()`, about twice as fast for the 32 element nodes transients and hash maps clone, and `persistent!` of a transient vector trims its tail with it.
+- `aclone` clones arrays with `.slice()`, about twice as fast for the 32 element nodes transients and hash maps clone, and `persistent!` of a transient vector trims its tail with it. Its result is still inferred as an array.
 
 ### Fixed
 

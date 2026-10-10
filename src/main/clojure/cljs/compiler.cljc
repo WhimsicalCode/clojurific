@@ -1688,9 +1688,13 @@
         first-arg-tag (ana/infer-tag env (first (:args expr)))
         opt-not? (and (= (:name info) 'cljs.core/not)
                       (= first-arg-tag 'boolean))
+        ;; the call site dispatch below (protocol methods called at the call site
+        ;; rather than through the shared fn) in ES module output only: it adds
+        ;; code, classic builds keep their size
+        site? (and fn? *esm-emitting*)
         ;; (get m k) of a local map and a constant or local key: m's -lookup at the
         ;; call site when it has one, see the keyword? case below
-        get-lookup? (and fn?
+        get-lookup? (and site?
                          (= (:name info) 'cljs.core/get)
                          (<= 2 (count args) 3)
                          (= :local (:op (first args)))
@@ -1699,7 +1703,7 @@
         ;; sequential destructuring compiles to: v's -nth at the call site when it
         ;; has one, as get-lookup? (a number index, nth's own check, holds)
         ;; a local index is tested to be a number at the call site
-        nth-lookup? (and fn?
+        nth-lookup? (and site?
                          (= (:name info) 'cljs.core/nth)
                          (<= 2 (count args) 3)
                          (= :local (:op (first args)))
@@ -1709,7 +1713,7 @@
         ;; (seq x), (first x), (next x), (count x) of a local: the protocol method these call
         ;; when x implements the protocol, at the call site when x has it, as
         ;; get-lookup?, anything else through the fn as before
-        site-method (when (and fn?
+        site-method (when (and site?
                                (== 1 (count args))
                                (= :local (:op (first args))))
                       ('{cljs.core/seq   ".cljs$core$ISeqable$_seq$arity$1"
@@ -1719,14 +1723,14 @@
                        (:name info)))
         ;; (= x y) of a local x and a local or constant y: identical, else x's
         ;; -equiv at the call site when it has one (as = calls it), else = as before
-        eq-site? (and fn?
+        eq-site? (and site?
                       (= (:name info) 'cljs.core/=)
                       (== 2 (count args))
                       (= :local (:op (first args)))
                       (#{:const :local} (:op (ana/unwrap-quote (second args)))))
         ;; (--destructure-map m) of a local, as map destructuring compiles to:
         ;; anything but a seq is m itself, only seqs (keyword arguments) call it
-        destructure-map? (and fn?
+        destructure-map? (and site?
                               (= (:name info) 'cljs.core/--destructure-map)
                               (== 1 (count args))
                               (= :local (:op (first args))))
@@ -1734,7 +1738,7 @@
         ;; the call site: (empty? x) as ICounted's (zero? (-count x)), (not-empty x)
         ;; as (when (-seq x) x), (vector? x) and (map? x) true when x has the
         ;; protocol's method; anything else (natively extended, nil) as before
-        site-pred (when (and fn?
+        site-pred (when (and site?
                              (== 1 (count args))
                              (= :local (:op (first args))))
                     ('{cljs.core/empty?    [".cljs$core$ICounted$_count$arity$1" :zero]
@@ -1811,7 +1815,8 @@
        keyword?
        (let [[m nf] args
              lookup (str ".cljs$core$ILookup$_lookup$arity$" (inc (count args)))]
-         (if (and (= :const (:op (ana/unwrap-quote f)))
+         (if (and *esm-emitting*
+                  (= :const (:op (ana/unwrap-quote f)))
                   (<= 1 (count args) 2)
                   (= :local (:op m)))
            ;; (:k m) of a local: its -lookup at this call site, as get would call

@@ -340,8 +340,9 @@
                (prn (fn inner [] foo)))))]
 
     ;; FIXME: not exactly a clean way to test if function wrappers are created or not
-    ;; captures foo,x
-    (is (str/includes? snippet1 "(function (foo,x){"))
+    ;; captures foo, the only loop local inner refers to (not x)
+    (is (str/includes? snippet1 "(function (foo){"))
+    (is (not (str/includes? snippet1 "(function (foo,x){")))
     ;; captures x
     (is (str/includes? snippet2 "(function (x){"))
     ;; no capture, no loop or recur
