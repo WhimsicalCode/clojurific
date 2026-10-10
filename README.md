@@ -72,7 +72,7 @@ the details and the [known gaps](ESM.md#known-gaps).
 [Clojars](https://clojars.org/com.whimsical/clojurific):
 
 ```clojure
-com.whimsical/clojurific {:mvn/version "0.12.5"}
+com.whimsical/clojurific {:mvn/version "0.12.6"}
 ```
 
 [npm](https://www.npmjs.com/package/clojurific), with the `cljf` launcher, which
