@@ -117,3 +117,53 @@ test('repl connects to the port in .nrepl-port', async () => {
     server.close();
   }
 });
+
+// An nREPL server that answers clone, and closes the connection on the request
+// for which closeOn(msg) is true
+async function closingServer(closeOn) {
+  const server = net.createServer(socket => {
+    const decoder = new Decoder();
+    socket.on('data', chunk => {
+      for (const msg of decoder.push(chunk)) {
+        if (closeOn(msg)) {
+          socket.destroy();
+          return;
+        }
+        const reply = r => socket.write(bencode({ id: msg.id, session: msg.session, ...r }));
+        if (msg.op === 'clone') reply({ 'new-session': 's1', status: ['done'] });
+        else reply({ status: ['done'] });
+      }
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { port: server.address().port, close: () => server.close() };
+}
+
+// session's result, or a rejection when it doesn't settle within ms
+function within(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`didn't settle within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+test('repl fails when the server closes the connection before switching to ClojureScript', async () => {
+  const server = await closingServer(msg => msg.op === 'clone');
+  try {
+    await assert.rejects(within(session(server, ['(+ 1 2)']), 5000), /the nREPL server closed the connection/);
+  } finally {
+    server.close();
+  }
+});
+
+test('repl reports a connection the server closes during an evaluation', async () => {
+  const server = await closingServer(msg => msg.op === 'eval' && msg.code === '(+ 1 2)\n');
+  try {
+    const { code, err } = await within(session(server, ['(+ 1 2)', '(never)']), 5000);
+    assert.equal(code, 1);
+    assert.match(err, /the nREPL server closed the connection/);
+  } finally {
+    server.close();
+  }
+});
