@@ -5,6 +5,10 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.6 [Next]
 
+### Fixed
+
+- `cljf repl` waited forever when the nREPL server closed the connection before the REPL had switched to ClojureScript (the server stopping or restarting while it connects): it now fails, saying the server closed the connection.
+
 ## 0.12.5 [2026-10-09]
 
 ### Changed

@@ -99,14 +99,27 @@ export function complete(code) {
   return depth <= 0;
 }
 
-/** An nREPL connection: requests whose responses end with status done. */
+/**
+ * An nREPL connection: requests whose responses end with status done. Once the
+ * socket closes, pending and later requests reject.
+ */
 export class Connection {
   #socket;
   #ids = 0;
   #pending = new Map();
+  #closed = null;
 
   constructor(socket) {
     this.#socket = socket;
+    const fail = e => {
+      if (this.#closed) return;
+      this.#closed = new LauncherError(`cljf repl: the nREPL server closed the connection${e ? `: ${e.message}` : ''}`);
+      for (const { reject } of this.#pending.values()) reject(this.#closed);
+      this.#pending.clear();
+    };
+    // an error is followed by close
+    socket.on('error', fail);
+    socket.on('close', () => fail());
     const decoder = new Decoder();
     socket.on('data', chunk => {
       for (const msg of decoder.push(chunk)) {
@@ -132,8 +145,12 @@ export class Connection {
    */
   request(msg, onResponse = () => {}) {
     const id = msg.id ?? this.newId();
-    return new Promise(resolve => {
-      this.#pending.set(id, { onResponse, resolve });
+    return new Promise((resolve, reject) => {
+      if (this.#closed) {
+        reject(this.#closed);
+        return;
+      }
+      this.#pending.set(id, { onResponse, resolve, reject });
       this.#socket.write(bencode({ ...msg, id }));
     });
   }
@@ -247,7 +264,7 @@ export async function repl({
       rl.close();
       // the server forgets the session, unless it doesn't answer
       const timeout = new Promise(r => setTimeout(r, 1000).unref());
-      Promise.race([conn.request({ op: 'close', session }), timeout]).finally(() => {
+      Promise.race([conn.request({ op: 'close', session }), timeout]).catch(() => {}).finally(() => {
         conn.close();
         resolve(code);
       });
@@ -262,7 +279,7 @@ export async function repl({
 
     rl.on('SIGINT', () => {
       if (evaluating) {
-        conn.request({ op: 'interrupt', session, 'interrupt-id': evaluating });
+        conn.request({ op: 'interrupt', session, 'interrupt-id': evaluating }).catch(() => {});
       } else if (pending || rl.line) {
         pending = '';
         interrupted = false;
@@ -307,12 +324,13 @@ export async function repl({
           return;
         }
         evaluating = conn.newId();
+        // a lost connection rejects, closed (above) reports it
         await conn.request({ op: 'eval', session, code, ns, id: evaluating }, msg => {
           write(output, msg.out);
           write(errorOutput, msg.err);
           if (msg.value !== undefined) output.write(`${msg.value}\n`);
           if (msg.ns) ns = msg.ns;
-        });
+        }).catch(() => {});
         evaluating = null;
         if (closing) return;
         prompt();
