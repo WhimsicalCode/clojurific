@@ -2131,11 +2131,21 @@ reduces them without incurring seq initialization"
   ([coll k v k2 v2]
    (assoc (assoc coll k v) k2 v2))
   ([coll k v k2 v2 & kvs]
-     (loop [ret (assoc (assoc coll k v) k2 v2)
-            kvs kvs]
-       (if kvs
-         (recur (assoc ret (first kvs) (second kvs)) (nnext kvs))
-         ret))))
+   (let [ret (assoc (assoc coll k v) k2 v2)]
+     (if (instance? IndexedSeq kvs)
+       ;; by index, the arguments of a call are an IndexedSeq of an array
+       (let [arr (.-arr kvs)
+             len (alength arr)]
+         (loop [ret ret i (.-i kvs)]
+           (if (< i len)
+             (recur (assoc ret (aget arr i) (when (< (inc i) len) (aget arr (inc i))))
+                    (+ i 2))
+             ret)))
+       (loop [ret ret
+              kvs kvs]
+         (if kvs
+           (recur (assoc ret (first kvs) (second kvs)) (nnext kvs))
+           ret))))))
 
 (defn dissoc
   "dissoc[iate]. Returns a new map of the same (hashed/sorted) type,

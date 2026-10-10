@@ -12,6 +12,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 - `hash` of a keyword reads the hash the keyword caches (computing it once through its `-hash` method when it isn't cached yet), and of other `IHash` values calls their `-hash` method directly instead of through `-hash`'s dispatch: hash maps with keyword keys are faster.
 - `mapv`, `filterv`, `vec` and `into` a vector add to their transient vector through its method rather than `-conj!`, which dispatches on every kind of transient collection.
 - `merge` of up to two maps and `assoc` of two key/value pairs have fixed arities: their calls don't build a seq of their arguments.
+- `assoc` of more than two key/value pairs reads the remaining pairs from its arguments' array by index instead of walking them with `first`, `second` and `nnext` (about 1.4% faster on the Whimsical app's benchmarks).
 - A multimethod remembers the method of its last dispatch value, used while its method cache is unchanged and the next dispatch value is identical: repeated dispatch skips the cache lookup.
 - Multimethods read their method cache and hierarchy atoms directly instead of through `deref`'s protocol dispatch, and look up the method cache with `get`: dispatch is faster.
 - `random-uuid` formats its hex digits from a table, about 2.5 times faster, with the same UUIDs for the same `Math.random` numbers.
