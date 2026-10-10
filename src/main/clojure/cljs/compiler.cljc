@@ -1706,7 +1706,7 @@
                          (let [i (ana/unwrap-quote (second args))]
                            (or (and (= :const (:op i)) (number? (:form i)))
                                (= :local (:op i)))))
-        ;; (seq x), (first x), (next x) of a local: the protocol method these call
+        ;; (seq x), (first x), (next x), (count x) of a local: the protocol method these call
         ;; when x implements the protocol, at the call site when x has it, as
         ;; get-lookup?, anything else through the fn as before
         site-method (when (and fn?
@@ -1714,7 +1714,8 @@
                                (= :local (:op (first args))))
                       ('{cljs.core/seq   ".cljs$core$ISeqable$_seq$arity$1"
                          cljs.core/first ".cljs$core$ISeq$_first$arity$1"
-                         cljs.core/next  ".cljs$core$INext$_next$arity$1"}
+                         cljs.core/next  ".cljs$core$INext$_next$arity$1"
+                         cljs.core/count ".cljs$core$ICounted$_count$arity$1"}
                        (:name info)))
         ;; (= x y) of a local x and a local or constant y: identical, else x's
         ;; -equiv at the call site when it has one (as = calls it), else = as before
