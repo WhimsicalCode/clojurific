@@ -3,7 +3,7 @@
 Changes since Clojurific was forked from ClojureScript. For ClojureScript's own
 releases, see its [changelog](https://github.com/clojure/clojurescript/blob/master/changes.md).
 
-## 0.12.6 [Next]
+## 0.12.6 [2026-10-10]
 
 ### Changed
 
