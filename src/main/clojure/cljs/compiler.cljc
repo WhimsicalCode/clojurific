@@ -569,7 +569,9 @@
                      name))
     (emits ",")
     (emit-constant (hash kw))
-    (emits ")")))
+    ;; _idx, see cljs.core/array-map-index-of: initialized in ES module output,
+    ;; classic builds' keywords start without (undefined, as before)
+    (emits (if *esm-emitting* ",-1)" ")"))))
 
 (defn emits-symbol [sym]
   (let [ns     (namespace sym)

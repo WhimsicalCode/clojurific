@@ -7,6 +7,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ### Changed
 
+- Array map lookups of a keyword first check the index the keyword was last found at (a new `_idx` field of `Keyword`), and scan the keys only when it doesn't hold that keyword: maps made by the same code share the order of their keys (about 4% faster on the Whimsical app's benchmarks). Keyword constants are emitted with the field initialized in ES module output; classic builds' emitted code is as before.
 - The call site dispatch below (protocol methods called at the call site of `get`, keyword invokes, `nth`, `seq`, `first`, `next`, `count`, `=`, `empty?`, `not-empty`, `vector?`, `map?` and map destructuring) is in ES module output only: classic builds' code size is as before.
 - In fn bodies, `let`s in expression position (`or`, `and`, higher order calls binding their arguments, ...) assign their locals in a comma expression instead of binding them in an IIFE, and `do`s in expression position are comma expressions: their functions allocate less and V8 optimizes them better (about 4% faster on the Whimsical app's benchmarks).
 - A `let` binding initialized by a `loop`, `case`, `try` or `letfn` (or an `if`, `do` or `let` ending in one) is assigned from statements instead of an IIFE.

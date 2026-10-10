@@ -3537,7 +3537,7 @@ reduces them without incurring seq initialization"
                   nsc)))
    :default (garray/defaultCompare (.-name a) (.-name b))))
 
-(deftype Keyword [ns name fqn ^:mutable _hash]
+(deftype Keyword [ns name fqn ^:mutable _hash ^:mutable _idx]
   Object
   (toString [_] (str_ ":" fqn))
   (equiv [this other]
@@ -3630,12 +3630,12 @@ reduces them without incurring seq initialization"
             (keyword? name) name
             (symbol? name) (Keyword.
                              (cljs.core/namespace name)
-                             (cljs.core/name name) (.-str name) nil)
-            (= "/" name) (Keyword. nil name name nil)
+                             (cljs.core/name name) (.-str name) nil -1)
+            (= "/" name) (Keyword. nil name name nil -1)
             (string? name) (let [parts (.split name "/")]
                              (if (== (alength parts) 2)
-                               (Keyword. (aget parts 0) (aget parts 1) name nil)
-                               (Keyword. nil (aget parts 0) name nil)))))
+                               (Keyword. (aget parts 0) (aget parts 1) name nil -1)
+                               (Keyword. nil (aget parts 0) name nil -1)))))
   ([ns name]
    (let [ns   (cond
                 (keyword? ns) (cljs.core/name ns)
@@ -3645,7 +3645,7 @@ reduces them without incurring seq initialization"
                 (keyword? name) (cljs.core/name name)
                 (symbol? name) (cljs.core/name name)
                 :else name)]
-     (Keyword. ns name (str_ (when ns (str_ ns "/")) name) nil))))
+     (Keyword. ns name (str_ (when ns (str_ ns "/")) name) nil -1))))
 
 (deftype LazySeq [meta ^:mutable fn ^:mutable s ^:mutable __hash]
   Object
@@ -6823,7 +6823,19 @@ reduces them without incurring seq initialization"
     :else (array-index-of-equiv? arr k)))
 
 (defn- array-map-index-of [m k]
-  (array-index-of (.-arr m) k))
+  (let [arr (.-arr m)]
+    (if (keyword? k)
+      ;; the index k was last found at (its _idx), when it holds k: maps made by
+      ;; the same code share the order of their keys; else the scan, remembering
+      ;; where it found k. Array maps' keys are unique, keys at even indexes.
+      (let [i (.-_idx k)]
+        (if (and (<= 0 i) (< i (alength arr)) (identical? k (aget arr i)))
+          i
+          (let [j (array-index-of-keyword? arr k)]
+            (when-not (== j -1)
+              (set! (.-_idx k) j))
+            j)))
+      (array-index-of arr k))))
 
 (defn- array-extend-kv [arr k v]
   (let [l (alength arr)
