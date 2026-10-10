@@ -8,6 +8,7 @@
 
 (ns cljs.core
   (:refer-clojure :exclude [-> ->> .. amap and areduce alength aclone assert await binding bound-fn case comment
+                            get-in
                             cond condp declare definline definterface defmethod defmulti defn defn- defonce
                             defprotocol defrecord defstruct deftype delay destructure doseq dosync dotimes doto
                             extend-protocol extend-type fn for future gen-class gen-interface
@@ -1198,6 +1199,22 @@
 
 (core/defmacro symbol? [x]
   (bool-expr `(instance? Symbol ~x)))
+
+(core/defmacro get-in
+  "A literal path of constant keys, (get-in m [:a :b]), as the gets get-in makes,
+  each a get of a local and a constant (see the compiler's call site lookups),
+  without the path vector. Anything else calls get-in."
+  ([m ks]
+   (if (core/and (core/vector? ks)
+                      (core/seq ks)
+                      (core/every? #(core/or (core/keyword? %) (core/string? %) (core/number? %)) ks))
+     (core/let [syms (core/vec (core/repeatedly (core/inc (core/count ks)) #(gensym "m__")))]
+       `(let [~(syms 0) ~m
+              ~@(core/mapcat (core/fn [i k] [(syms (core/inc i)) `(get ~(syms i) ~k)])
+                             (core/range) ks)]
+          ~(core/peek syms)))
+     &form))
+  ([m ks not-found] &form))
 
 (core/defmacro keyword? [x]
   (bool-expr `(instance? Keyword ~x)))
@@ -3141,7 +3158,7 @@
               `[(symbol ~(name sym)) (var ~(symbol (name ns) (name sym)))])
             (filter (core/fn [[_ info]]
                       (not (core/-> info :meta :private)))
-              (get-in @env/*compiler* [:cljs.analyzer/namespaces ns :defs])))])))
+              (core/get-in @env/*compiler* [:cljs.analyzer/namespaces ns :defs])))])))
 
 (core/defmacro ns-imports
   "Returns a map of the import mappings for the namespace."
@@ -3155,7 +3172,7 @@
        [~@(map
             (core/fn [[ctor qualified-ctor]]
               `[(symbol ~(name ctor)) ~(symbol qualified-ctor)])
-            (get-in @env/*compiler* [:cljs.analyzer/namespaces ns :imports]))])))
+            (core/get-in @env/*compiler* [:cljs.analyzer/namespaces ns :imports]))])))
 
 (core/defmacro ns-interns
   "Returns a map of the intern mappings for the namespace."
@@ -3169,7 +3186,7 @@
        [~@(map
             (core/fn [[sym _]]
               `[(symbol ~(name sym)) (var ~(symbol (name ns) (name sym)))])
-            (get-in @env/*compiler* [:cljs.analyzer/namespaces ns :defs]))])))
+            (core/get-in @env/*compiler* [:cljs.analyzer/namespaces ns :defs]))])))
 
 (core/defmacro ns-unmap
   "Removes the mappings for the symbol from the namespace."
