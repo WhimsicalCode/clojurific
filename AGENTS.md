@@ -97,4 +97,6 @@ macOS, then:
   one package, approve the staged versions, then re-run the failed `npm` job: it skips the versions
   already published.
 
-Then start the next `[Next]` release and bump the version (both `package.json`s). Only release when the user asks.
+Then start the next `[Next]` release, bump the version (both `package.json`s) and point
+[`README.md`](README.md)'s `deps.edn` coordinate at the released version. Only release when the
+user asks.
