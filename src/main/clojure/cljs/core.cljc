@@ -1206,11 +1206,12 @@
   without the path vector. Anything else calls get-in."
   ([m ks]
    (if (core/and (core/vector? ks)
-                      (core/seq ks)
-                      (core/every? #(core/or (core/keyword? %) (core/string? %) (core/number? %)) ks))
+                 (core/seq ks)
+                 (core/every? #(core/or (core/keyword? %) (core/string? %) (core/number? %)) ks))
      (core/let [syms (core/vec (core/repeatedly (core/inc (core/count ks)) #(gensym "m__")))]
+       ;; cljs.core/get qualified: self-hosted, get would resolve to cljs.core$macros
        `(let [~(syms 0) ~m
-              ~@(core/mapcat (core/fn [i k] [(syms (core/inc i)) `(get ~(syms i) ~k)])
+              ~@(core/mapcat (core/fn [i k] [(syms (core/inc i)) `(cljs.core/get ~(syms i) ~k)])
                              (core/range) ks)]
           ~(core/peek syms)))
      &form))
