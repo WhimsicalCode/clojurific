@@ -1714,6 +1714,13 @@
                          cljs.core/first ".cljs$core$ISeq$_first$arity$1"
                          cljs.core/next  ".cljs$core$INext$_next$arity$1"}
                        (:name info)))
+        ;; (= x y) of a local x and a local or constant y: identical, else x's
+        ;; -equiv at the call site when it has one (as = calls it), else = as before
+        eq-site? (and fn?
+                      (= (:name info) 'cljs.core/=)
+                      (== 2 (count args))
+                      (= :local (:op (first args)))
+                      (#{:const :local} (:op (ana/unwrap-quote (second args)))))
         opt-count? (and (= (:name info) 'cljs.core/count)
                         (boolean ('#{string array} first-arg-tag)))
         ns (:ns info)
@@ -1802,6 +1809,13 @@
          (emit-lookup-test m lookup)
          (emits "?" m lookup "(" (comma-sep (cons "null" (rest args))) "):"
                 f "(" (comma-sep args) "))"))
+
+       eq-site?
+       (let [[x y] args
+             equiv ".cljs$core$IEquiv$_equiv$arity$2"]
+         (emits "((" x " === " y ") || (")
+         (emit-lookup-test x equiv)
+         (emits "?" x equiv "(null," y "):" f "(" x "," y ")))"))
 
        site-method
        (let [[x] args]
