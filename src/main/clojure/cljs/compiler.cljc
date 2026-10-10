@@ -1600,8 +1600,11 @@
         (emits "var ")
         (emit binding) ; Binding will be treated as a var
         ;; an init needing statements assigns the binding from them, rather
-        ;; than from an IIFE
-        (if-let [assign (when (and (statement-tail? init)
+        ;; than from an IIFE, in a fn body: at a namespace's top level the
+        ;; statements would run in module scope, its locals module variables
+        ;; (a loop over them is much slower than over an IIFE's locals)
+        (if-let [assign (when (and *hoisted-locals*
+                                   (statement-tail? init)
                                    (not (uses-fn-scope? init)))
                           (assign-tails init (munge binding)))]
           (do (emitln ";")
