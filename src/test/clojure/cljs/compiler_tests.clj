@@ -305,6 +305,18 @@
       (is (str/includes? content "cljs.invoke_test.foo_record.foo_field_a;")))))
 #_(test-vars [#'test-optimized-invoke-emit])
 
+(deftest let-without-iife
+  (testing "in a fn body, a let in expression position and a let local a loop initializes need no IIFE"
+    (let [loop-init (compile-simple-form
+                      '(defn f [n] (let [x (loop [i 0] (if (< i n) (recur (inc i)) i))] x)))
+          expr-let  (compile-simple-form '(defn g [a] (+ 1 (let [b (inc a)] (* b b)))))]
+      (is (not (str/includes? loop-init "(function (){")))
+      (is (str/includes? loop-init "x = i_"))
+      (is (not (str/includes? expr-let "(function (){")))))
+  (testing "at the top level, a let local a loop initializes is assigned from an IIFE: its locals stay a fn's"
+    (let [top (compile-simple-form '(let [x (loop [i 0] (if (< i 3) (recur (inc i)) i))] (println x)))]
+      (is (re-find #"var x_\d+ = \(function \(\)\{var i = " top)))))
+
 (deftest test-cljs-3077
   (let [opts {}
         cenv (env/default-compiler-env opts)
