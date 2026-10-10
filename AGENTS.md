@@ -41,6 +41,17 @@ compiler tests (`clojure -M:closure:compiler.test:compiler.test.run`). The class
 the Closure Compiler, which only the `:closure` alias adds: list it with the other aliases, e.g.
 `clojure -M:closure:runtime.test.build`.
 
+Without `script/bootstrap`'s jars and JS engine homes, `script/test` can't run: build the suites
+with `clojure -M:closure:runtime.test.build` (and `lite.test.build`, `selfhost.test.build`), run
+`builds/out-adv/core-advanced-test.js` and `builds/out-lite/lite-test.js` under Node with
+`globalThis.print = console.log` preloaded (`node -r`), and `builds/out-self/core-self-test.js` from
+the repository root (it reads `src/test/self/...` relative to the working directory).
+
+Gate code generation changes meant for ES module output on `*esm-emitting*` (in `core.cljc`
+macros, `(:module-format (cljs.analyzer/compiler-options))`): the compiler tests ratchet
+`:advanced` output size (`build_api_tests.clj`) and assert the emitted classic code
+(`test-optimized-invoke-emit`), which `script/test-esm` doesn't cover.
+
 `script/test-clojars` installs the Clojars artifact into an empty local Maven repository and builds
 with it from the Clojure CLI. `script/test-launcher` tests the launcher and `create-clojurific`
 (`node --test`) and the npm packages: it packs them, installs `clojurific` into an empty project and
