@@ -1704,6 +1704,16 @@
                          (= :local (:op (first args)))
                          (let [i (ana/unwrap-quote (second args))]
                            (and (= :const (:op i)) (number? (:form i)))))
+        ;; (seq x), (first x), (next x) of a local: the protocol method these call
+        ;; when x implements the protocol, at the call site when x has it, as
+        ;; get-lookup?, anything else through the fn as before
+        site-method (when (and fn?
+                               (== 1 (count args))
+                               (= :local (:op (first args))))
+                      ('{cljs.core/seq   ".cljs$core$ISeqable$_seq$arity$1"
+                         cljs.core/first ".cljs$core$ISeq$_first$arity$1"
+                         cljs.core/next  ".cljs$core$INext$_next$arity$1"}
+                       (:name info)))
         opt-count? (and (= (:name info) 'cljs.core/count)
                         (boolean ('#{string array} first-arg-tag)))
         ns (:ns info)
@@ -1792,6 +1802,12 @@
          (emit-lookup-test m lookup)
          (emits "?" m lookup "(" (comma-sep (cons "null" (rest args))) "):"
                 f "(" (comma-sep args) "))"))
+
+       site-method
+       (let [[x] args]
+         (emits "(")
+         (emit-lookup-test x site-method)
+         (emits "?" x site-method "(null):" f "(" x "))"))
 
        nth-lookup?
        (let [[v] args
