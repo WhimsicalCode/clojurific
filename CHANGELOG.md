@@ -5,9 +5,17 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.8 [Next]
 
+### Added
+
+- The nREPL server takes middleware from `:repl`'s `:middleware` and from nREPL's configuration files (`.nrepl.edn`, `~/.nrepl/nrepl.edn`), i.e. `cider.nrepl/cider-middleware`. With cider-nrepl, sessions switched to ClojureScript complete and look up the build's namespaces and vars, and complete JavaScript properties in the runtime, through clj-suitable.
+
 ### Changed
 
 - The Vite plugin is named `cljf` instead of `cljs`: its log lines start with `[cljf]`, and `create-clojurific`'s projects and the docs import it as `cljf` (`import cljf from 'clojurific/vite'`).
+
+### Fixed
+
+- `(cljf.esm.repl/repl)` switches an nREPL session to ClojureScript again after `:cljs/quit` in it. The session kept evaluating Clojure.
 
 ## 0.12.7 [2026-10-11]
 
