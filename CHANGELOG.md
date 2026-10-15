@@ -9,6 +9,10 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 - The Vite plugin is named `cljf` instead of `cljs`: its log lines start with `[cljf]`, and `create-clojurific`'s projects and the docs import it as `cljf` (`import cljf from 'clojurific/vite'`).
 
+### Fixed
+
+- `(cljf.esm.repl/repl)` switches an nREPL session to ClojureScript again after `:cljs/quit` in it. The session kept evaluating Clojure.
+
 ## 0.12.7 [2026-10-11]
 
 ### Added
