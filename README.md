@@ -136,7 +136,7 @@ Options are EDN maps, `@file.edn` to read them from a file, and `:profile` keywo
 | `:checked-set-literals false` | set literals of runtime values collapse duplicates instead of throwing (before CLJS-3415) |
 | `:esm-hmr` | hot reloading code, enabled by `watch` |
 | `:esm-repl` | modules register themselves for the REPL, which main namespaces load first, enabled by `watch` with `:esm-hmr` |
-| `:repl` | `{:nrepl-port 0 :nrepl-host "127.0.0.1" :port-files [".nrepl-port"]}`, `watch` starts an nREPL server (`0` picks a port), writes its port to the port files no other live server's port is in, and deletes them on exit; needs nREPL on the classpath |
+| `:repl` | `{:nrepl-port 0 :nrepl-host "127.0.0.1" :port-files [".nrepl-port"] :middleware []}`, `watch` starts an nREPL server (`0` picks a port), writes its port to the port files no other live server's port is in, and deletes them on exit; needs nREPL on the classpath. `:middleware` adds nREPL middleware, as does the `:middleware` of nREPL's configuration files, the project's `.nrepl.edn` and the user's `~/.nrepl/nrepl.edn` (see [Editors](#editors)) |
 | `:esm-dts false` | don't write `.d.ts` files |
 | `:esm-after-load` / `:esm-before-load` | fns run around hot reloads, like `^:dev/after-load` |
 | `:watch-dirs` | source directories, defaults to the classpath directories without the compiler's own |
@@ -276,6 +276,21 @@ Class data sharing (CDS) archives would load Clojure's classes faster, but the J
 - A form with compiler warnings isn't evaluated, unless `:warnings-ok`: the result has `:error` and `:warnings`, `:results` ends with `:cljf.esm.repl/failed`, and the forms after it aren't evaluated. The nREPL middleware replies with an `eval-error`.
 - In the browser's console, `cljs_eval("(+ 1 2)")` and `cljs_eval("(foo)", {ns: "my.app", await: true, print: true})` evaluate in its page, compiled by the REPL. They return a promise of the last form's value (printed with `print`), rejected for an error or warnings. The console keeps the namespace of its last `in-ns`. Compiling forms runs their macros in the compiler's JVM, so the Vite plugin accepts `cljs_eval` only from pages on the dev server's machine, unless its `replRemoteConsole` option is set. A proxy in front of the dev server has to set `X-Real-IP` to the client's address.
 - The interactive REPL has `*1`, `*2`, `*3` and `*e`, and `doc`, `source`, `dir` and `apropos` are answered from the compiler environment. Output printed during a form is its `:out` / `:err`, and still goes to the console. `:await true` waits for a promise's value. Errors' `:stack` is mapped to the ClojureScript sources (`my/app.cljs:12:3`, `<cljs repl>:1:2` for the forms evaluated) with the output's source maps.
+
+#### Editors
+
+Editors connect to the nREPL server in `.nrepl-port`, then evaluate `(cljf.esm.repl/repl)` in a session to switch it to ClojureScript. For CIDER, add `cider/cider-nrepl` to `deps.edn` and its middleware to the server, in the Vite plugin's options, in `cljs.edn`, or in nREPL's `.nrepl.edn` (`{:middleware [cider.nrepl/cider-middleware]}`, whose keys replace those of `~/.nrepl/nrepl.edn`):
+
+```js
+compilerOptions: { repl: { 'nrepl-port': 0, middleware: ['cider.nrepl/cider-middleware'] } }
+```
+
+```clojure
+;; cljs.edn
+{:repl {:nrepl-port 0 :middleware [cider.nrepl/cider-middleware]}}
+```
+
+Middleware that doesn't load is left out with a warning. With cider-nrepl 0.61 or later, a session switched to ClojureScript completes and looks up (`info`, `eldoc`) ClojureScript namespaces and vars from the build's compiler environment, through clj-suitable. Completions of JavaScript properties (`js/document.getE…`, CIDER's `cider-enhanced-cljs-completion-p`) are clj-suitable's too: its piggieback and shadow-cljs support doesn't cover these sessions, so they evaluate its completion forms with `cljf.esm.repl/cljs-eval`, after requiring `suitable.js-introspection` in the runtime.
 
 ### Migrating from shadow-cljs
 
