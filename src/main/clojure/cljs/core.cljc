@@ -1204,6 +1204,13 @@
 (core/defmacro symbol? [x]
   (bool-expr `(instance? Symbol ~x)))
 
+(core/defmacro ^:private esm-or
+  "esm in ES module output, else classic: for cljs.core's support of what
+  only ES module output supports, i.e. reading plain JavaScript objects (see
+  get), which classic output leaves out."
+  [esm classic]
+  (if (= :esm (:module-format (cljs.analyzer/compiler-options))) esm classic))
+
 (core/defmacro get-in
   "A literal path of constant keys, (get-in m [:a :b]), as the gets get-in makes,
   each a get of a local and a constant (see the compiler's call site lookups),

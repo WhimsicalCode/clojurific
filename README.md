@@ -350,6 +350,17 @@ import { describe } from '../out/app/state.js';
 describe(1, 2); // error TS2554: Expected 1 arguments, but got 2.
 ```
 
+### JavaScript objects
+
+Keywords, `get`, `get-in`, `contains?`, `find`, `select-keys` and map destructuring read the own properties of plain JavaScript objects (whose prototype is `Object.prototype` or `null`: `#js {}`, `JSON.parse`'s, object literals of JavaScript code, React's props), a keyword key as its namespace/name (`:x/y` as `"x/y"`), a string key as it is:
+
+```clojure
+(let [{:keys [user]} (js/JSON.parse s)]
+  (get-in user [:address :city]))
+```
+
+Other objects (class instances) aren't read, nor inherited properties (`(:toString #js {})` is `nil`). Writes (`assoc`, `update`) and `keys`, `vals` and `seq` don't take JavaScript objects. The classic compiler's output reads none, see [Known gaps](#known-gaps).
+
 ### Classes
 
 `cljf.x/defclass` (like shadow-cljs' `shadow.cljs.modern/defclass`) defines a JavaScript class, for APIs constructing one with `new` or needing a subclass, e.g. a Cloudflare Durable Object:
@@ -377,10 +388,10 @@ describe(1, 2); // error TS2554: Expected 1 arguments, but got 2.
 (ns my.app
   (:require ["react" :as react]))
 
-(defn Counter [^js props]
+(defn Counter [{:keys [label]}]
   (let [[n set-n!] (react/useState 0)]
-    #x [:div.counter {:style {:font-size 14}}
-        [:button {:on-click #(set-n! inc)} (.-label props) " " n]
+    #x [:div.counter {:style {:fontSize 14}}
+        [:button {:onClick #(set-n! inc)} label " " n]
         (when (pos? n)
           #x [:ul (for [i (range n)] #x [:li {:key i} i])])]))
 
@@ -388,14 +399,14 @@ describe(1, 2); // error TS2554: Expected 1 arguments, but got 2.
 ```
 
 ```js
-jsxs("div", {className: "counter", style: {fontSize: 14}, children: [jsxs("button", {onClick: ..., children: [props.label, " ", n]}), ...]})
+jsxs("div", {className: "counter", style: {fontSize: 14}, children: [jsxs("button", {onClick: ..., children: [label, " ", n]}), ...]})
 ```
 
-- A props map literal is a JavaScript object built where the element is, its keys renamed when compiling: `:class` to `className`, `:for` to `htmlFor`, kebab-case camelCased (`:on-click` to `onClick`), `data-*` and `aria-*` and strings as they are. A `:style` map literal is a JavaScript object too, with camelCased CSS names (custom properties as they are). Only the values are evaluated at runtime.
-- `:class` takes a string, keyword or collection: a vector literal of strings is joined when compiling, other collections at runtime (nested ones too, `nil` and `false` left out), joined after the tag's classes. Keyword values (`{:type :submit}`) are their names.
+- A props map literal is a JavaScript object built where the element is, its keys the JavaScript names as written, never renamed: `:className`, `:htmlFor`, `:onClick`, `:data-x`, `:aria-label`; a qualified keyword's is its namespace/name (`:ui/variant` as `"ui/variant"`). A `:style` map literal is a JavaScript object too, its keys the DOM's names (`:fontSize`, custom properties `:--gap`). A component gets the props under the names it was passed, the same keys its destructuring reads. Only the values are evaluated at runtime.
+- `:className` (or `:class`, Preact's and Hono's name) takes a string, keyword or collection: a vector literal of strings is joined when compiling, other collections at runtime (nested ones too, `nil` and `false` left out), joined after the tag's classes. A DOM element's keyword values (`{:type :submit}`) are their names; a component gets keywords as they are (`[Button {:variant :primary}]`).
 - Values the compiler can't see into are converted at runtime: `{:& props}` spreads `props` (a map converted once per map and cached, or a JavaScript object), with the map's other props overriding it, and a `:style` that isn't a literal is converted the same way. A `#js` literal, or a value tagged `^js`, isn't converted.
 - Children vectors are elements. Other forms are ClojureScript, whose elements need `#x` again, as in squint: `(for [i xs] #x [:li i])`. Strings, numbers, elements and JavaScript values are children as they are; other values are checked at runtime, sequences and vectors of elements (of `for`, `map`, `mapv`) becoming arrays. Hiccup vectors and maps reaching a child at runtime throw: the props are a map literal after the tag, or `{:& m}`.
-- `:key` is the runtime's key argument, from the props or a map they spread (`{:& m}`), never a prop; a `nil` key is no key, as in Reagent. `[:<> ...]` is a fragment, `[:div#id.a.b]` sets `id` and `className`, `[Component {...}]` passes the props object to a component, which reads it with `.-` (it's a JavaScript object).
+- `:key` is the runtime's key argument, from the props or a map they spread (`{:& m}`), never a prop; a `nil` key is no key, as in Reagent. `[:<> ...]` is a fragment, `[:div#id.a.b]` sets `id` and `className`, `[Component {...}]` passes the props object to a component. It's a JavaScript object, which keywords, `get`, `get-in` and map destructuring read (see [JavaScript objects](#javascript-objects)), as does `.-`.
 - A namespace whose source file has `#x` literals requires `cljf.jsx` implicitly, and the REPL requires it in the namespace of a form with `#x` literals (i.e. from an editor's unsaved buffer, or a namespace only defined at the REPL).
 - The elements are the JSX runtime's of `:jsx-import-source`, as TypeScript's `jsxImportSource`: `<source>/jsx-runtime`, `react/jsx-runtime` by default. Preact (`"preact"`), Hono (`"hono/jsx"`, which `c.html` renders on the server) and other runtimes exporting `jsx`, `jsxs` and `Fragment` work the same way. A namespace's metadata overrides it, i.e. a server's pages in a build of a React app:
 
@@ -403,7 +414,7 @@ jsxs("div", {className: "counter", style: {fontSize: 14}, children: [jsxs("butto
   (ns ^{:jsx-import-source "hono/jsx"} my.server)
   ```
 
-  Props get React's names (`className`, `htmlFor`), which Preact and Hono accept too.
+  Props are written with the runtime's names: React's `className` and `htmlFor` work in Preact and Hono too.
 - Source maps point the elements, their props and children to their place in the literal.
 
 ### `^:export`
@@ -480,6 +491,7 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
 - Closure Library files run whole: `goog.i18n`'s locale data (from `goog.date`, e.g. cljs-time) has every locale, which Closure's advanced compilation reduces to `goog.LOCALE`'s, about 340 KB of a bundle.
 - Closure's `:modules` aren't supported; lazy loading uses `import()`.
 - Self-hosted ClojureScript (`cljs.js`) doesn't emit ES modules.
+- Keywords, `get` and map destructuring read plain JavaScript objects ([JavaScript objects](#javascript-objects)) only in ES module output: a library relying on `(:k js-obj)` being `nil` sees the property there, and `nil` in classic output.
 
 ## Design
 

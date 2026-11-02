@@ -10,7 +10,7 @@ and bundled by [Vite](https://vite.dev).
 - `npm run preview` serves the bundle
 
 The app is `src/{{nsDir}}/core.cljs`, React components rendering `#x`
-literals: `#x [:div {:class "a" :on-click f} child]` is a React element,
+literals: `#x [:div {:className "a" :onClick f} child]` is a React element,
 hiccup compiled to `react/jsx-runtime` calls with its props map literals
 as JavaScript objects (see Clojurific's README, JSX literals). ClojureScript dependencies go in
 `deps.edn`, npm packages in `package.json`. The compiler needs Java 17 or

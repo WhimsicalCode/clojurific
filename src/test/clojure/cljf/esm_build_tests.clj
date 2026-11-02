@@ -469,13 +469,13 @@
                              (defn Item [^js p] #x [:li (.-label p)])
                              (defn view [{:keys [items extra style n]}]
                                #jsx [:<>
-                                     [:div#main.a {:class \"b\" :on-click identity :data-x 1
-                                                   :style {:font-size 12 :--gap \"1px\"} :key \"k\"}
+                                     [:div#main.a {:className \"b\" :onClick identity :data-x 1
+                                                   :style {:fontSize 12 :--gap \"1px\"} :key \"k\"}
                                       (if (seq items) #x [:ul (for [i items] #x [Item {:label i :key i}])] \"none\")
                                       n]
                                      [:p {:& extra :title \"t\" :style style}]])
                              (js/console.log (js/JSON.stringify
-                               (view {:items [1 2] :n 3 :extra {:tab-index 2 :aria-label \"l\"} :style {:z-index 1}})))"
+                               (view {:items [1 2] :n 3 :extra {:tabIndex 2 :aria-label \"l\"} :style {:zIndex 1}})))"
                             ms)])]
     (io/make-parents runtime)
     (spit runtime "const el = (type, props, key) => ({type: typeof type === 'function' ? type.name : type, key: key ?? null, props});
@@ -487,7 +487,7 @@
     (let [out (output dir 'test.jsx)]
       (testing "a namespace with #x literals requires cljf.jsx implicitly"
         (is (string/includes? out "import * as cljf$jsx from \"../cljf/jsx.js\";")))
-      (testing "literal props are JavaScript objects, with JavaScript names"
+      (testing "literal props are JavaScript objects, their keys as written"
         (is (string/includes? out "{\"className\": \"a b\", \"onClick\": cljs$core.identity, \"data-x\": (1), \"style\": {\"fontSize\": (12), \"--gap\": \"1px\"}, \"id\": \"main\""))
         (is (string/includes? out "}, \"k\")")))
       (testing "only the values the compiler can't see into are converted"
@@ -540,7 +540,7 @@
                             ms)
                           (write-source! dir 'test.jsxsrv
                             "(ns ^{:jsx-import-source \"hono/jsx\"} test.jsxsrv)
-                             (defn page [] #x [:<> [:h1 {:class \"t\"} \"Hi\"]])"
+                             (defn page [] #x [:<> [:h1 {:className \"t\"} \"Hi\"]])"
                             ms)])]
     (stub-jsx-runtime! dir "preact")
     (stub-jsx-runtime! dir "hono/jsx")
@@ -585,14 +585,21 @@
                                       :spread-js      (k #x [:li {:& (js-obj \"title\" \"t\")}])
                                       :spread-props   (props #x [:li {:& m}])
                                       :outer-key-wins (k #x [:li {:& m :key \"o\"}])
-                                      :class-vector   (.-className (props #x [:div.a {:class [\"b\" (when on? \"c\") nil]}]))
-                                      :class-runtime  (.-className (props #x [:div {:class (if on? [:x [\"y\"]] \"z\")}]))
+                                      :class-vector   (.-className (props #x [:div.a {:className [\"b\" (when on? \"c\") nil]}]))
+                                      :class-runtime  (.-className (props #x [:div {:className (if on? [:x [\"y\"]] \"z\")}]))
                                       :keyword-value  (.-type (props #x [:button {:type :submit}]))
+                                      :component-kw   (keyword? (.-variant (props #x [k {:variant :primary}])))
+                                      :spread-comp-kw (keyword? (.-variant (props #x [k {:& (assoc m :variant :primary)}])))
+                                      :spread-dom-kw  (.-type (props #x [:button {:& (assoc m :type :submit)}]))
+                                      :qualified      (js/Object.keys (props #x [k {:ui/variant 1 :& {:ui/size 2}}]))
+                                      :spread-qual    (unchecked-get (props #x [k {:& (assoc m :ui/variant 3)}]) \"ui/variant\")
+                                      :class-merged   (props #x [:div.a {:class [\"b\" (when on? \"c\")]}])
+                                      :class-spread   (.-class (props #x [:div {:& (assoc m :class [:s :t])}]))
                                       :vector-child   (.-children (props #x [:ul (mapv (fn [i] #x [:li i]) [1 2])]))
                                       :shadowed-local (.-children (props #x [:ul (let [items (for [i items] i)] items)]))
                                       :hiccup-child   (try (props #x [:ul [:li] (identity [:li])]) nil (catch :default e (.-message e)))
                                       :map-child      (try (props #x [:div attrs]) nil (catch :default e (.-message e)))})))
-                             (run #js [1 2] {:key \"m\" :tab-index 1 :class [:p :q]} true {:class \"x\"})"
+                             (run #js [1 2] {:key \"m\" :tabIndex 1 :className [:p :q]} true {:className \"x\"})"
                             ms)])]
     (stub-jsx-runtime! dir "react")
     (binding [esm/*generated-sources* sources]
@@ -609,10 +616,20 @@
           (is (nil? (get r "spread-js"))))
         (is (= {"tabIndex" 1 "className" "p q"} (get r "spread-props")))
         (is (= "o" (get r "outer-key-wins"))))
-      (testing ":class collections are joined, keyword values are their names"
+      (testing ":className collections are joined, keyword values are their names"
         (is (= "a b c" (get r "class-vector")))
         (is (= "x y" (get r "class-runtime")))
         (is (= "submit" (get r "keyword-value"))))
+      (testing "components get keyword values as keywords, DOM elements their names"
+        (is (true? (get r "component-kw")))
+        (is (true? (get r "spread-comp-kw")))
+        (is (= "submit" (get r "spread-dom-kw"))))
+      (testing "qualified keys are their namespace/name, as get reads them"
+        (is (= ["ui/size" "ui/variant"] (get r "qualified")))
+        (is (= 3 (get r "spread-qual"))))
+      (testing ":class, Preact's and Hono's name, is joined and has the tag's classes, without a className"
+        (is (= {"class" "a b c"} (get r "class-merged")))
+        (is (= "s t" (get r "class-spread"))))
       (testing "vectors of elements are children, the locals let binds aren't the outer ones"
         (is (= 2 (count (get r "vector-child"))))
         (is (= [1 2] (get r "shadowed-local"))))

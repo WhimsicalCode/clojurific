@@ -17,32 +17,12 @@
 (def jsxs cljf-jsx-runtime/jsxs)
 (def Fragment cljf-jsx-runtime/Fragment)
 
-(defn- camel [s]
-  (.replace s (js/RegExp. "-([a-z])" "g") (fn [_ c] (.toUpperCase c))))
-
-(defn- prop-name* [n]
-  (cond
-    (identical? "class" n) "className"
-    (identical? "for" n) "htmlFor"
-    (or (.startsWith n "data-") (.startsWith n "aria-")) n
-    :else (camel n)))
-
-(def ^:private prop-names (js/Map.))
-
 (defn prop-name
-  "The JavaScript name of prop key k, as cljf.jsx/x names literal props."
+  "The JavaScript name of prop (or style) key k, as cljf.jsx/x names literal
+  props and get reads it: a keyword's namespace/name, anything else as a
+  string, never renamed."
   [k]
-  (if (keyword? k)
-    (let [fqn (.-fqn k)]
-      (or (.get prop-names fqn)
-          (let [n (prop-name* (name k))]
-            (.set prop-names fqn n)
-            n)))
-    (str k)))
-
-(defn- style-name [k]
-  (let [n (if (keyword? k) (name k) (str k))]
-    (if (.startsWith n "--") n (camel n))))
+  (if (keyword? k) (.-fqn k) (str k)))
 
 (def ^:private styles (js/WeakMap.))
 
@@ -53,7 +33,7 @@
   (if (map? s)
     (or (.get styles s)
         (let [o #js {}]
-          (reduce-kv (fn [_ k v] (unchecked-set o (style-name k) (if (keyword? v) (name v) v))) nil s)
+          (reduce-kv (fn [_ k v] (unchecked-set o (prop-name k) (if (keyword? v) (name v) v))) nil s)
           (.set styles s o)
           o))
     s))
@@ -66,7 +46,7 @@
     :else (.push a (str c))))
 
 (defn class-name
-  "A :class value: a collection's classes (nested collections' too) joined,
+  "A :className value: a collection's classes (nested collections' too) joined,
   nil and false left out, keywords as their names, a string as it is."
   [c]
   (cond
@@ -75,26 +55,37 @@
     (coll? c) (let [a #js []] (push-classes a c) (.join a " "))
     :else c))
 
-(def ^:private props-objs (js/WeakMap.))
-
-(defn props
-  "Spread props ({:& p}): a map as a JavaScript object (once per map, then
-  spread into the element's own), anything else as it is."
-  [p]
+(defn- props-obj [cache dom? p]
   (if (map? p)
-    (or (.get props-objs p)
+    (or (.get cache p)
         (let [o #js {}]
           (reduce-kv (fn [_ k v]
                        (cond
                          ;; the element's key argument, see spread-key
                          (keyword-identical? :key k) nil
                          (keyword-identical? :style k) (unchecked-set o "style" (style v))
-                         (keyword-identical? :class k) (unchecked-set o "className" (class-name v))
-                         :else (unchecked-set o (prop-name k) (if (keyword? v) (name v) v))))
+                         (or (keyword-identical? :className k) (keyword-identical? :class k))
+                         (unchecked-set o (name k) (class-name v))
+                         :else (unchecked-set o (prop-name k) (if (and dom? (keyword? v)) (name v) v))))
             nil p)
-          (.set props-objs p o)
+          (.set cache p o)
           o))
     p))
+
+(def ^:private props-objs (js/WeakMap.))
+(def ^:private component-props-objs (js/WeakMap.))
+
+(defn props
+  "A DOM element's spread props ({:& p}): a map as a JavaScript object (once
+  per map, then spread into the element's own), keyword values as their
+  names, anything else as it is."
+  [p]
+  (props-obj props-objs true p))
+
+(defn component-props
+  "A component's spread props, as props, keyword values as they are."
+  [p]
+  (props-obj component-props-objs false p))
 
 (defn spread-key
   "The :key of a map spread at runtime ({:& m}), the element's key argument:

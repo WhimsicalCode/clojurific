@@ -224,7 +224,7 @@
 
 (deftest evaluates-jsx-literals
   (testing "#x needs cljf.jsx, which the REPL compiles and loads"
-    (let [r (repl/cljs-eval "(ns scratch.jsx (:require [cljf.jsx])) (js/JSON.stringify #x [:div.a {:on-click identity :data-n 1} (for [i [1 2]] #x [:i {:key i} i])])")]
+    (let [r (repl/cljs-eval "(ns scratch.jsx (:require [cljf.jsx])) (js/JSON.stringify #x [:div.a {:onClick identity :data-n 1} (for [i [1 2]] #x [:i {:key i} i])])")]
       (is (= ["nil" (pr-str "{\"type\":\"div\",\"key\":null,\"props\":{\"data-n\":1,\"className\":\"a\",\"children\":[{\"type\":\"i\",\"key\":1,\"props\":{\"children\":1}},{\"type\":\"i\",\"key\":2,\"props\":{\"children\":2}}]}}")]
              (:results r))
           (pr-str r))))

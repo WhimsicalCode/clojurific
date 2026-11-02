@@ -2058,6 +2058,22 @@ reduces them without incurring seq initialization"
           (recur (dec n) (rest xs))
           xs))))
 
+(defn- js-object-lookup
+  "In ES module output (see get), the own property of plain JavaScript object
+  o (its prototype Object.prototype or null: #js {}, JSON.parse's, React's
+  props) named by keyword k (its namespace/name, :x/y \"x/y\") or string k;
+  not-found for anything else."
+  [o k not-found]
+  (let [p (cond (keyword? k) (.-fqn k)
+                (string? k) k
+                :else nil)]
+    (if (and (some? p)
+             (let [proto (js/Object.getPrototypeOf o)]
+               (or (identical? proto (.-prototype js/Object)) (nil? proto)))
+             ^boolean (.call (.. js/Object -prototype -hasOwnProperty) o p))
+      (unchecked-get o p)
+      not-found)))
+
 (defn get
   "Returns the value mapped to key, not-found or nil if key not present
   in associative collection, set, string, array, or ILookup instance."
@@ -2078,7 +2094,7 @@ reduces them without incurring seq initialization"
         (native-satisfies? ILookup o)
         (-lookup o k)
 
-        :else nil)))
+        :else (esm-or (js-object-lookup o k nil) nil))))
   ([o k not-found]
     (if-not (nil? o)
       (cond
@@ -2098,7 +2114,7 @@ reduces them without incurring seq initialization"
         (native-satisfies? ILookup o)
         (-lookup o k not-found)
 
-        :else not-found)
+        :else (esm-or (js-object-lookup o k not-found) not-found))
       not-found)))
 
 (def ^:private REQ_NOT_FOUND #js {})
@@ -2530,10 +2546,16 @@ reduces them without incurring seq initialization"
   [coll k]
   (if (ifind? coll)
     (-find coll k)
-    (when (and (not (nil? coll))
-            (associative? coll)
-            (contains? coll k))
-      (MapEntry. k (get coll k) nil))))
+    (when-not (nil? coll)
+      (if (associative? coll)
+        (when (contains? coll k)
+          (MapEntry. k (get coll k) nil))
+        (esm-or
+          ;; a plain JavaScript object's own property, see get
+          (let [v (get coll k lookup-sentinel)]
+            (when-not (identical? v lookup-sentinel)
+              (MapEntry. k v nil)))
+          nil)))))
 
 (defn distinct?
   "Returns true if no two of the arguments are ="

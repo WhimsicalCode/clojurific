@@ -71,3 +71,48 @@
                      (is (lazy/ready? loadable))))
             (.catch (fn [e] (is false (str e))))
             (.finally done))))))
+
+(defn- destructure-js [{:keys [a b] :strs [c] :or {b 9} :as m}]
+  [a b c (:x/y m) (identical? m m)])
+
+(deftest test-plain-javascript-objects-lookup
+  (testing "keywords, get, get-in, contains? and destructuring read plain objects' own properties"
+    (let [o  #js {:a 1 "c" 3 "x/y" 4 :n #js {:deep 42} :nil nil}
+          j  (js/JSON.parse "{\"a\":{\"b\":[10,20]}}")
+          ks [:n :deep]
+          k  :a]
+      (is (= 1 (:a o) (get o :a) (get o "a") (k o) (get o k)))
+      (is (= :nf (:missing o :nf) (get o :missing :nf) (get o "missing" :nf)))
+      (is (nil? (:missing o)))
+      (testing "a property that is nil is found"
+        (is (nil? (get o :nil :nf)))
+        (is (contains? o :nil)))
+      (is (= 4 (:x/y o)))
+      (is (= 42 (get-in o [:n :deep]) (get-in o ks)))
+      (is (= 20 (get-in j [:a :b 1])))
+      (is (= :nf (get-in j [:a :q] :nf)))
+      (is (= [1 9 3 4 true] (destructure-js o)))
+      (let [{{:keys [deep]} :n} o] (is (= 42 deep)))
+      (is (= [1 2 nil] (map :a [#js {:a 1} {:a 2} nil])))
+      (is (= {:a 1} (select-keys o [:a :zz])))
+      (is (contains? o :a))
+      (is (not (contains? o :zz)))
+      (is (= [:a 1] (find o :a)))
+      (is (= [:nil nil] (find o :nil)))
+      (is (nil? (find o :zz)))))
+  (testing "objects with an own constructor property, and without a prototype"
+    (let [o (js/JSON.parse "{\"constructor\":\"x\",\"a\":1}")]
+      (is (= 1 (:a o)))
+      (is (= "x" (:constructor o))))
+    (let [nul (js/Object.create nil)]
+      (unchecked-set nul "a" 1)
+      (is (= 1 (:a nul)))
+      (is (contains? nul :a))))
+  (testing "not inherited properties, other keys, nor objects that aren't plain"
+    (is (nil? (:toString #js {})))
+    (is (not (contains? #js {} :toString)))
+    (is (nil? (get #js {"1" :one} 1)))
+    (is (nil? (get #js {"sym" 1} 'sym)))
+    (is (nil? (:x (js/Date.))))
+    (is (nil? (find (js/Date.) :x)))
+    (is (nil? (:a (js/Object.create #js {:a 1}))))))

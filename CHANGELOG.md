@@ -5,6 +5,14 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.14 [Next]
 
+### Added
+
+- Keywords, `get`, `get-in`, `contains?`, `find` and map destructuring read the own properties of plain JavaScript objects (`#js {}`, `JSON.parse`'s, React's props) in ES module output, a keyword key as its namespace/name.
+
+### Changed
+
+- **BREAKING CHANGE:** `#x` props aren't renamed, their keys are the JavaScript names as written (`:className`, `:onClick`, `:style {:fontSize 12}`), so components destructure the keys they're passed, and keyword values reach components as keywords: rename `:class`, `:for` and kebab-case keys to React's names.
+
 ### Fixed
 
 - A cold build with `cljs.core`'s output restored from the per-user cache lacked the Closure Library modules only `cljs.core` imports (`goog-lib/ns/goog.math.Integer.js`, `goog.Uri`), so the output failed to load with `ERR_MODULE_NOT_FOUND`: the build analyzed `cljs.core`'s source from the compiler's jar, whose entry is modified at another time than the restored analysis cache, instead of reading the cache, and lost what compiling had recorded in it. It reads the cache of the copy it compiles, as for every other namespace; a build whose `cljs.core` output is up to date no longer analyzes its source again either.

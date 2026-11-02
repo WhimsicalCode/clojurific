@@ -11,36 +11,19 @@
   (:require [clojure.string :as string])
   (:import [cljs.tagged_literals JSValue]))
 
-;; prop names, as cljf.jsx (cljs) converts them at runtime
-
-(defn- camel [^String s]
-  (string/replace s #"-([a-z])" (fn [[_ c]] (string/upper-case c))))
+;; prop names, as cljf.jsx (cljs) names them at runtime: as written, the
+;; JavaScript names (:className, :onClick, :fontSize), never renamed
 
 (defn prop-name
-  "The JavaScript name of prop key k: strings as they are, :class className,
-  :for htmlFor, data-* and aria-* as they are, kebab-case camelCased."
+  "The JavaScript name of prop (or style) key k, as get reads it: a string as
+  it is, a keyword's namespace/name (:ui/variant \"ui/variant\")."
   [k]
   (cond
     (string? k) k
-
-    (simple-keyword? k)
-    (let [n (name k)]
-      (cond
-        (= "class" n) "className"
-        (= "for" n) "htmlFor"
-        (or (string/starts-with? n "data-") (string/starts-with? n "aria-")) n
-        :else (camel n)))
-
+    (keyword? k) (subs (str k) 1)
     :else
-    (throw (ex-info (str "#x props' keys are strings or unqualified keywords, not " (pr-str k))
+    (throw (ex-info (str "#x props' keys are strings or keywords, not " (pr-str k))
                     {:key k}))))
-
-(defn style-name
-  "The JavaScript name of style key k: custom properties (--x) as they are,
-  kebab-case camelCased."
-  [k]
-  (let [n (if (string? k) k (name k))]
-    (if (string/starts-with? n "--") n (camel n))))
 
 ;; code: [template args], a js* template and the forms of its ~{}
 
@@ -142,19 +125,25 @@
   [env v]
   (cond
     (map? v)
-    (js-obj-code (map (fn [[k v]] [(style-name k) (arg (if (keyword? v) (name v) v))]) v))
+    (js-obj-code (map (fn [[k v]] [(prop-name k) (arg (if (keyword? v) (name v) v))]) v))
 
     (or (nil? v) (string? v) (js-tagged? env v)) (arg v)
     :else (arg (wrap 'cljf.jsx/style v))))
 
 (defn- prop-value
-  "A prop's value: a keyword literal as its name, other forms as they are
-  (a keyword they evaluate to isn't converted)."
-  [v]
-  (if (keyword? v) (name v) v))
+  "A prop's value: a DOM element's (dom?) keyword literal as its name, other
+  forms as they are (a keyword they evaluate to isn't converted). Components
+  get keywords, as ClojureScript compares them."
+  [dom? v]
+  (if (and dom? (keyword? v)) (name v) v))
+
+(def ^:private class-keys
+  "The keys of classes, joined when they're collections: React's className,
+  the class of Preact, Hono and the DOM."
+  #{:className :class})
 
 (defn- class-code
-  "A :class value: a string, a vector literal of classes joined (nil and
+  "A :className (or :class) value: a string, a vector literal of classes joined (nil and
   false left out) when compiling, others joined at runtime when they're
   collections, see cljf.jsx/class-name."
   [env v]
@@ -172,19 +161,20 @@
     :else (arg (wrap 'cljf.jsx/class-name v))))
 
 (defn- prop-entries
-  "The entries of a props map literal's JavaScript object, without :key."
-  [env props]
+  "The entries of a props map literal's JavaScript object, without :key, of
+  a DOM element (dom?) or a component."
+  [env dom? props]
   (mapcat
     (fn [[k v]]
-      (case k
-        :& (cond
-             (map? v) (prop-entries env v)
-             (or (nil? v) (js-tagged? env v)) [[:spread (arg v)]]
-             :else [[:spread (arg (wrap 'cljf.jsx/props v))]])
-        :key nil
-        :style [["style" (style-code env v)]]
-        :class [["className" (class-code env v)]]
-        [[(prop-name k) (arg (prop-value v))]]))
+      (cond
+        (= :& k) (cond
+                   (map? v) (prop-entries env dom? v)
+                   (or (nil? v) (js-tagged? env v)) [[:spread (arg v)]]
+                   :else [[:spread (arg (wrap (if dom? 'cljf.jsx/props 'cljf.jsx/component-props) v))]])
+        (= :key k) nil
+        (= :style k) [["style" (style-code env v)]]
+        (class-keys k) [[(name k) (class-code env v)]]
+        :else [[(prop-name k) (arg (prop-value dom? v))]]))
     ;; spreads first, the map's other props override them
     (sort-by (fn [[k]] (if (= :& k) 0 1)) props)))
 
@@ -270,10 +260,13 @@
                            (bind-spreads env props)
                            [props []])
         [type id classes] (parse-tag t)
+        ;; the tag's classes join the props' :class when they have one (Preact,
+        ;; Hono), else :className
+        class-k  (if (contains? props :class) :class :className)
         props    (cond-> (or props {})
                    id (update :id #(or % id))
                    (seq classes)
-                   (update :class (fn [c]
+                   (update class-k (fn [c]
                                     (let [s (string/join " " classes)]
                                       (cond
                                         (nil? c) s
@@ -282,7 +275,7 @@
                                         (vector? c) (into [s] c)
                                         :else [s c])))))
         children (remove nil? children)
-        entries  (concat (prop-entries env props)
+        entries  (concat (prop-entries env (string? type) props)
                          (case (count children)
                            0 nil
                            1 [["children" (child-code env (first children))]]
@@ -307,14 +300,14 @@
       call)))
 
 (defmacro x
-  "#x [:div {:class \"a\" :on-click f} \"Hi \" name] (or #jsx) is
+  "#x [:div {:className \"a\" :onClick f} \"Hi \" name] (or #jsx) is
   (cljf.jsx/x [...]): the element of hiccup, created by the JSX runtime
   (react/jsx-runtime): jsx(\"div\", {className: \"a\", onClick: f, children:
   [\"Hi \", name]}).
 
   A props map literal is a JavaScript object built where the element is,
-  with JavaScript prop names (see prop-name), :style's map literal one with
-  CSS names: only values the compiler can't see into are converted at
+  its keys the JavaScript names as written (see prop-name), :style's map
+  literal one too: only values the compiler can't see into are converted at
   runtime. {:& props} spreads props, a map converted (once per map) or a
   JavaScript object. :key is the runtime's key argument. [:<> ...] is a
   fragment, [:div.a#b] has id b and class a.
