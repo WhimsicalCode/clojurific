@@ -12,6 +12,7 @@
             [cljs.compiler :as comp]
             [cljs.env :as env]
             [cljf.esm :as esm]
+            [cljf.main]
             [cljs.util :as util]
             [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]
@@ -96,6 +97,56 @@
         (.delete f))
       (build! dir sources 'test.c)
       (is (.exists lib)))))
+
+(defn- core-jar!
+  "A jar in dir holding cljs/core.cljs as the classpath has it, the entry
+  modified at time ms, first on the thread's context class loader: the build
+  finds cljs.core in a jar, as a project depending on the compiler's artifact
+  does, and copies its source into the output directory to compile it."
+  ^ClassLoader [^File dir ms ^ClassLoader parent]
+  (let [jar (io/file dir "core.jar")]
+    (with-open [out (java.util.jar.JarOutputStream. (io/output-stream jar))]
+      (let [entry (java.util.jar.JarEntry. "cljs/core.cljs")]
+        (.setTime entry ms)
+        (.putNextEntry out entry)
+        (io/copy (io/input-stream (io/resource "cljs/core.cljs")) out)
+        (.closeEntry out)))
+    ;; the jar's resources shadow the parent's, as a jar on the classpath
+    ;; where the compiler's sources aren't: cljs/core.cljs once
+    (proxy [URLClassLoader] [(into-array URL [(.toURL (.toURI jar))]) parent]
+      (getResource [name]
+        (or (.findResource ^URLClassLoader this name)
+            (proxy-super getResource name)))
+      (getResources [name]
+        (if-let [found (.findResource ^URLClassLoader this name)]
+          (java.util.Collections/enumeration [found])
+          (proxy-super getResources name))))))
+
+(deftest restores-core-with-its-closure-libraries
+  (let [dir     (temp-dir)
+        cache   (io/file dir "cache")
+        thread  (Thread/currentThread)
+        loader  (.getContextClassLoader thread)
+        ms      (- (System/currentTimeMillis) 60000)
+        sources (into {} [(write-source! dir 'test.g "(ns test.g) (def s (str 1))" ms)])
+        out     (io/file dir "out")
+        lib     (io/file out "goog-lib" "ns" "goog.math.Integer.js")]
+    (.setContextClassLoader thread (core-jar! dir ms loader))
+    (try
+      (with-redefs [cljf.main/cache-dir (fn [name] (io/file cache name))]
+        (testing "a cold build without a cache entry compiles cljs.core from the jar's source, copied, and stores its output"
+          (is (contains? (build! dir sources 'test.g) "core.cljs"))
+          (is (.exists (io/file out "cljs" "core.cljs")))
+          (is (.exists lib))
+          (is (seq (.listFiles (io/file cache "cljs-core")))))
+        (testing "a cold build with the entry: cljs.core's output restored, not compiled, and the Closure Library namespaces only it uses written as well"
+          (doseq [^File f (reverse (file-seq out))]
+            (.delete f))
+          (is (not (contains? (build! dir sources 'test.g) "core.cljs")))
+          (is (.exists (io/file out "cljs" "core.js")))
+          (is (.exists lib))))
+      (finally
+        (.setContextClassLoader thread loader)))))
 
 (deftest builds-without-the-closure-compiler
   (let [dir     (temp-dir)
