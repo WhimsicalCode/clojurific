@@ -504,10 +504,16 @@
                     (or (:force opts) (comp/requires-compilation? source-file dest opts)))
         before (when stale? (ns-api (cached-analysis source-file opts)))
         ret    (comp/compile-file source-file dest opts)]
+    ;; cljs.core too, from source-file (a jar's cljs/core.cljs copied into
+    ;; the output directory): its analysis cache was written for that file,
+    ;; by the compile of its output or by restore-core!, so it is read.
+    ;; with-core-cljs would analyze the classpath's cljs/core.cljs instead,
+    ;; the jar's entry, modified at another time than the cache: the source
+    ;; alone, analyzed again on every build, without what compiling recorded
+    ;; (:cljf.esm/goog-libs), which the Closure Library modules of a cold
+    ;; build with the restored output then lacked
     (when-not (get-in @env/*compiler* [::ana/namespaces ns :defs])
-      (if (= 'cljs.core ns)
-        (comp/with-core-cljs opts (fn []))
-        (ana/analyze-file source-file opts)))
+      (ana/analyze-file source-file opts))
     (when (and stale? (not= before (api env/*compiler* ns)))
       (swap! *api-changed* conj ns))
     ret))
