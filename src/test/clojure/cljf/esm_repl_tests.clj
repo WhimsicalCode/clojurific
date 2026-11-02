@@ -125,8 +125,13 @@
                 (.write in (str (json/write-str msg) "\n"))
                 (.flush in)))}))
 
+(def ^:private runtime-dir
+  "The fixture's output's directory, the REPL's watch directory."
+  (atom nil))
+
 (defn- with-node-runtime [f]
   (let [dir  (temp-dir)
+        _    (reset! runtime-dir dir)
         opts (build-opts dir)
         cenv (env/default-compiler-env (merge esm/default-opts opts))
         build! #(do (esm/build opts cenv)
@@ -254,6 +259,26 @@
     (is (string/starts-with? (:error (repl/cljs-eval "#=(+ 1 2)")) "Could not read")))
   (testing "no such runtime"
     (is (= "No runtime 5, see (cljf.esm.repl/runtimes)" (:error (repl/cljs-eval "1" {:runtime-id 5}))))))
+
+(deftest bundle-runtimes-evaluate-loaded-files
+  ;; runtime 1 says it runs a bundle, as connect-socket!'s hello does
+  ;; the harness' hello, see node-harness: its root maps stack traces
+  (let [root  (str (.toUri (.toPath (.getCanonicalFile (io/file @runtime-dir "out")))))
+        hello #(repl/handle-message! (json/write-str (merge {:op "hello" :runtime 1 :url "node" :visible true :root root} %)))]
+    (hello {:hmr false})
+    (try
+      (is (= [false] (map :hmr (repl/runtimes))))
+      (testing "load-file evaluates the file's forms instead of waiting for a hot reload"
+        (let [f (doto (io/file @runtime-dir "scratch" "bundle.cljs") io/make-parents)]
+          (spit f "(ns scratch.bundle)\n(def x 41)\n")
+          (let [{:keys [value err error] :as r} (repl/load-file (.getPath f) {})]
+            (is (nil? error) (pr-str r))
+            (is (= "nil" value))
+            (is (string/includes? err "bundle's runtime, which doesn't hot reload") err))
+          (is (= ["42"] (:results (repl/cljs-eval "(inc scratch.bundle/x)"))))))
+      (finally
+        (hello {})))
+    (is (= [nil] (map :hmr (repl/runtimes))))))
 
 (defn- wrap-test
   "Middleware the tests name, answering a test op."

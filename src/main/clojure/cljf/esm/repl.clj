@@ -53,7 +53,8 @@
 
 (defonce ^:private runtimes-
   ;; {runtime-id {:runtime-id :url :title :user-agent :visible :focused-at
-  ;; :connected-at :tag}}
+  ;; :connected-at :tag :hmr}}, :hmr false for a bundle's runtime (see
+  ;; cljf.esm.repl-runtime/connect-socket!), which doesn't hot reload
   (atom {}))
 
 (defonce ^:private pending
@@ -118,6 +119,7 @@
                                        :visible      (boolean (:visible msg))
                                        :tag          (when-not taken? tag)
                                        :root         (:root msg)
+                                       :hmr          (not (false? (:hmr msg)))
                                        :connected-at (or (:connected-at r) now)})
                        (:focused msg) (assoc :focused-at now))))
                  (when taken?
@@ -143,7 +145,8 @@
   []
   (->> (vals @runtimes-)
        (sort-by :runtime-id)
-       (mapv #(select-keys % [:runtime-id :url :title :tag :visible :focused-at :user-agent]))))
+       (mapv #(cond-> (select-keys % [:runtime-id :url :title :tag :visible :focused-at :user-agent])
+                (false? (:hmr %)) (assoc :hmr false)))))
 
 (defn- default-runtime
   "The runtime focused last, visible ones first, else the one connected
@@ -461,6 +464,10 @@
         (seq (outstanding-warnings))
         {:warnings warnings
          :note     (str "hot reload is paused by " (count (outstanding-warnings)) " warning(s)")}
+
+        (and runtime (false? (:hmr runtime)))
+        {:warnings warnings
+         :note     "compiled, the runtime runs a bundle: it applies once rebundled and restarted"}
 
         :else
         {:warnings warnings
@@ -831,13 +838,14 @@
 (defn- load-file*
   "Loads file path: hot reloads its namespace, compiled by the watcher,
   waiting for the hot reload in the runtime, unless contents (an editor's
-  buffer) differ from the file, or the file isn't in a source directory:
-  then evaluates its forms."
+  buffer) differ from the file, the file isn't in a source directory, or the
+  runtime runs a bundle, which doesn't hot reload: then evaluates its forms."
   [path contents opts]
-  (let [f    (io/file path)
-        disk (when (.exists f) (slurp f))
-        ns   (try (:ns (ana/parse-ns f)) (catch Exception _ nil))]
-    (if (or (nil? disk) (and contents (not= contents disk)) (nil? ns)
+  (let [f       (io/file path)
+        disk    (when (.exists f) (slurp f))
+        ns      (try (:ns (ana/parse-ns f)) (catch Exception _ nil))
+        bundle? (false? (:hmr (target-or-nil opts)))]
+    (if (or (nil? disk) (and contents (not= contents disk)) (nil? ns) bundle?
             (not (in-dirs? f (:watch-dirs (the-build)))))
       (let [out     (StringBuilder.)
             err     (StringBuilder.)
@@ -851,7 +859,9 @@
         (let [failed (first (filter :error @results))]
           (merge {:value "nil"
                   :out   (str out)
-                  :err   (str err "; evaluated the forms, not hot reloaded: reload hooks not run\n")}
+                  :err   (str err (if bundle?
+                                    "; evaluated the forms in the bundle's runtime, which doesn't hot reload: reload hooks not run\n"
+                                    "; evaluated the forms, not hot reloaded: reload hooks not run\n"))}
             (select-keys failed [:error :stack :ex-data]))))
       (let [{:keys [compile! options]} (the-build)
             runtime (target-or-nil opts)]

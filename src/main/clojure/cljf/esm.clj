@@ -1371,11 +1371,15 @@
 
 (defn- watch-opts
   "watch's options: :esm-hmr unless disabled, and with it :esm-repl unless
-  disabled, the namespaces required at the REPL are mains too."
+  disabled, the namespaces required at the REPL are mains too. :esm-repl
+  true without :esm-hmr is a bundle's REPL (vite build --watch), whose
+  runtimes connect over the Vite plugin's socket, see
+  cljf.esm.repl-runtime/connect-socket!."
   [opts]
   (let [opts (prepare-opts (merge {:esm-hmr true} opts))]
     (cond-> opts
-      (and (:esm-hmr opts) (not (false? (:esm-repl opts))))
+      (or (true? (:esm-repl opts))
+          (and (:esm-hmr opts) (not (false? (:esm-repl opts)))))
       (assoc :esm-repl true ::repl-mains (atom #{})))))
 
 (defn- reuse-inputs

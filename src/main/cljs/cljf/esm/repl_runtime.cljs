@@ -22,7 +22,9 @@
   Messages are JSON-compatible objects, handle! takes the REPL's and replies
   with send!; connect-vite! carries them over Vite's hot module reloading
   websocket, and defines cljs_eval for the browser's console (see
-  console-eval).")
+  console-eval). Bundles (vite build --watch), which have no import.meta.hot,
+  connect-socket! to the Vite plugin's REPL socket instead: every Node.js
+  thread running the bundle is a runtime.")
 
 (def ^:private registry
   (or (.-$CLJS_ESM js/globalThis)
@@ -86,12 +88,16 @@
         v)))
 
 (defn- root
-  "The output directory's URL, the REPL sends paths relative to it."
+  "The output directory's URL, the REPL sends paths relative to it: the
+  socket's (see connect-socket!) in a bundle, whose import.meta.url is the
+  bundle's."
   []
-  ;; not new URL("../../", import.meta.url), which Vite rewrites to the URL of
-  ;; an asset
-  (let [url (.-url (js* "import.meta"))]
-    (js/URL. "../../" url)))
+  (if-let [r (.-root registry)]
+    (js/URL. r)
+    ;; not new URL("../../", import.meta.url), which Vite rewrites to the URL of
+    ;; an asset
+    (let [url (.-url (js* "import.meta"))]
+      (js/URL. "../../" url))))
 
 (defn- import-path [path]
   (js* "import(/* @vite-ignore */ ~{})" (.-href (js/URL. path (root)))))
@@ -99,10 +105,19 @@
 (defn- load-ns
   "A promise of namespace ns' view, once its module (at path, relative to
   the output directory) ran. Namespaces without a path only exist at the
-  REPL."
+  REPL. A bundle only has the namespaces it was bundled with: importing
+  another's module would run a second cljs.core."
   [ns path]
-  (if (or (nil? path) (.has (.-nses registry) ns))
+  (cond
+    (or (nil? path) (.has (.-nses registry) ns))
     (js/Promise.resolve (view ns))
+
+    (.-bundled registry)
+    (js/Promise.reject
+      (js/Error. (str "Namespace " ns " isn't in the bundle this runtime runs: "
+                      "require it from a namespace of the build, which rebundles it")))
+
+    :else
     (-> (import-path path)
         (.then (fn [mod]
                  ;; registered by the module, unless it's compiled without
@@ -307,18 +322,44 @@
 
 (defn- document [] (.-document js/globalThis))
 
-(defn- hello []
-  (let [doc (document)]
-    #js {:op        "hello"
-         :url       (some-> (.-location js/globalThis) .-href)
-         :title     (some-> doc .-title)
-         :userAgent (some-> (.-navigator js/globalThis) .-userAgent)
-         :visible   (if doc (= "visible" (.-visibilityState doc)) true)
-         :focused   (boolean (and doc (.hasFocus doc)))
-         :tag       (tag)
-         ;; the output directory's URL, the REPL maps stack traces to the
-         ;; ClojureScript sources with the source maps there
-         :root      (.-href (root))}))
+(defn- builtin
+  "Node.js' built-in module name, nil elsewhere (browsers, workerd)."
+  [name]
+  (let [p (.-process js/globalThis)]
+    (when (and p (fn? (.-getBuiltinModule p)))
+      (.getBuiltinModule p name))))
+
+(defn- node-thread
+  "The Node.js process and thread running this runtime: its URL and title
+  in (cljf.esm.repl/runtimes), which tell a process' threads apart.
+  globalThis.CLJF_REPL_TITLE, set before the build's modules run, names
+  the thread instead."
+  []
+  (when-let [^js wt (builtin "node:worker_threads")]
+    (let [pid (.-pid (.-process js/globalThis))
+          tid (.-threadId wt)]
+      {:url   (str "node://" pid "/" tid)
+       :title (or (.-CLJF_REPL_TITLE js/globalThis)
+                  (if (.-isMainThread wt)
+                    (str "main thread (pid " pid ")")
+                    (str "worker thread " tid " (pid " pid ")")))})))
+
+(defn- hello
+  "The runtime's hello, hmr? whether it applies the build's hot reloads."
+  [hmr?]
+  (let [doc    (document)
+        thread (when-not doc (node-thread))]
+    (doto #js {:op        "hello"
+               :url       (or (some-> (.-location js/globalThis) .-href) (:url thread))
+               :title     (or (some-> doc .-title) (:title thread))
+               :userAgent (some-> (.-navigator js/globalThis) .-userAgent)
+               :visible   (if doc (= "visible" (.-visibilityState doc)) true)
+               :focused   (boolean (and doc (.hasFocus doc)))
+               :tag       (tag)
+               ;; the output directory's URL, the REPL maps stack traces to the
+               ;; ClojureScript sources with the source maps there
+               :root      (.-href (root))}
+      (cond-> (not hmr?) (aset "hmr" false)))))
 
 (defn connect-vite!
   "Connects to the REPL through Vite's hot module reloading websocket (or the
@@ -346,7 +387,7 @@
       (fn [code opts]
         (console-eval send! code opts)))
     (.on hot "cljs:repl" #(when (current?) (handle! % send!)))
-    (.on hot "vite:ws:connect" #(when (current?) (send! (hello))))
+    (.on hot "vite:ws:connect" #(when (current?) (send! (hello true))))
     ;; hot reloads re-register modules, after-load hooks have run
     (.on hot "vite:afterUpdate" #(when (current?) (check-stamp-waiters!)))
     (set! (.-registered registry) (fn [_] (js/setTimeout check-stamp-waiters! 0)))
@@ -355,7 +396,68 @@
       (.addEventListener js/globalThis "focus" #(send! (state true)))
       (.addEventListener (document) "visibilitychange" #(send! (state (.hasFocus (document))))))
     (set! (.-connected registry) true)
-    (send! (hello))))
+    (send! (hello true))))
 
-(when-let [hot (js* "import.meta.hot")]
-  (connect-vite! hot))
+(defn- socket-config
+  "Where the Vite plugin's REPL socket listens, for a bundle built with its
+  replSocket option (vite build --watch): #js {:host :port :root}, the
+  bundle's define __CLJF_REPL__, its port overridden by the environment's
+  CLJF_REPL_PORT. nil without either."
+  []
+  (let [^js cfg (js* "(typeof __CLJF_REPL__ === 'undefined' ? null : __CLJF_REPL__)")
+        port    (some-> (builtin "node:process") .-env (unchecked-get "CLJF_REPL_PORT") js/parseInt)]
+    (when (or cfg (and port (not (js/isNaN port))))
+      #js {:host (or (some-> cfg .-host) "127.0.0.1")
+           :port (if (and port (not (js/isNaN port))) port (.-port cfg))
+           :root (some-> cfg .-root)})))
+
+(defn connect-socket!
+  "Connects to the REPL through the Vite plugin's REPL socket (cfg, see
+  socket-config), for a bundle in Node.js: each thread running it is a
+  runtime, which doesn't apply hot reloads (the bundle is rebuilt instead).
+  Messages are JSON lines. The socket doesn't keep the thread alive, and
+  connects again (with backoff) when the plugin restarts. Defines
+  cljs_eval, see console-eval."
+  [^js cfg]
+  (when-let [^js net (builtin "node:net")]
+    (let [token    #js {}
+          current? #(identical? token (.-runtime registry))
+          sock     (atom nil)
+          send!    (fn [m]
+                     (when-let [^js s @sock]
+                       (when (.-writable s)
+                         (.write s (str (js/JSON.stringify m) "\n")))))
+          connect  (fn connect [delay]
+                     (let [^js s  (.createConnection net #js {:host (.-host cfg) :port (.-port cfg)})
+                           buffer (atom "")
+                           retry  (atom delay)]
+                       (.unref s)
+                       (.setEncoding s "utf8")
+                       (.on s "connect" (fn []
+                                          (reset! retry 250)
+                                          (reset! sock s)
+                                          (send! (hello false))))
+                       (.on s "data" (fn [chunk]
+                                       (let [lines (.split (str @buffer chunk) "\n")]
+                                         (reset! buffer (.pop lines))
+                                         (doseq [line lines
+                                                 :when (and (current?) (not= "" line))]
+                                           (handle! (js/JSON.parse line) send!)))))
+                       ;; close follows
+                       (.on s "error" (fn [_]))
+                       (.on s "close" (fn []
+                                        (when (identical? s @sock) (reset! sock nil))
+                                        (when (current?)
+                                          (.unref (js/setTimeout #(connect (min 5000 (* 2 @retry))) @retry)))))))]
+      (set! (.-runtime registry) token)
+      (set! (.-bundled registry) true)
+      (when-let [r (.-root cfg)] (set! (.-root registry) r))
+      (set! (.-cljs_eval js/globalThis)
+        (fn [code opts]
+          (console-eval send! code opts)))
+      (connect 250))))
+
+(if-let [hot (js* "import.meta.hot")]
+  (connect-vite! hot)
+  (when-let [cfg (socket-config)]
+    (connect-socket! cfg)))

@@ -185,6 +185,7 @@ The plugin has TypeScript types (`vite-plugin-cljs/index.d.ts`): a `vite.config.
 | `ssrEntries` | `:js-entries` the dev server runs in its ssr environment once they're compiled |
 | `manifest` | the file in Vite's `outDir` the entry points' scripts and preloads are written to, for server rendered pages, defaults to `'manifest.json'`; `false` doesn't write it |
 | `prune` | removes unused protocol implementations and shortens ClojureScript property names in production bundles, defaults to `true` |
+| `replSocket` | the REPL in bundles of `vite build --watch`, i.e. a Node.js server's worker threads: `true` or `{ port, host }`, see [Worker threads](#worker-threads), defaults to `false` |
 | `replRemoteConsole` | accepts `cljs_eval` from pages on other machines too, defaults to `false` |
 | `ignoreWarnings` | hot reloads despite compiler warnings, which then go to the terminal only (the compiled line counts all namespaces' outstanding warnings), defaults to `false` |
 
@@ -242,6 +243,23 @@ export default defineConfig({
 - `vite build` bundles the server: `@hono/vite-build/node` writes `dist/index.js`, a Node.js server that doesn't need `node_modules`, run with `node dist/index.js`. Its `minify: false` leaves minifying to the cljf plugin, which minifies after pruning (`prune`).
 - A backend has no pages, so `manifest: false` skips the manifest of their scripts.
 
+#### Worker threads
+
+A service that runs its ClojureScript in `node:worker_threads` (or imports a bundle outside the dev server) bundles it with `vite build --watch`, a `:js-entries` module each thread imports. The plugin's `replSocket` option connects those threads to the [REPL](#repl):
+
+```js
+cljf({
+  outputDir: 'target/cljs',
+  compilerOptions: { jsEntries: { worker: { exports: { render: "'my.worker/render" } } }, repl: { nreplPort: 0 } },
+  replSocket: true, // or { port: 7888 }
+})
+```
+
+- The watch compiles with `:esm-repl`, and the plugin listens on a free port of 127.0.0.1 (or `replSocket.port`), defined in the bundle (`__CLJF_REPL__`). `CLJF_REPL_PORT` in a runtime's environment overrides the port. Without the plugin listening the bundle runs as before: its socket doesn't keep a thread alive, and connects again when the watch restarts.
+- Every thread importing the bundle is a runtime: `(repl/runtimes)` lists `main thread (pid 123)`, `worker thread 2 (pid 123)` (`globalThis.CLJF_REPL_TITLE`, set before the bundle runs, names one), and `{:runtime-id n}` evaluates in that thread. `def` redefines a var for the thread's code.
+- A bundle doesn't hot reload: it's rebuilt, and the process (or its threads) restarted. `load-file` evaluates the file's forms in the runtime instead, and only the namespaces bundled can be required.
+- Production builds (`vite build`) don't have the REPL.
+
 ### Launcher
 
 The npm package `clojurific` has the `cljf` command, the Vite plugin (`clojurific/vite`) and the Karma adapter (`clojurific/karma`). It has no compiler: the launcher gets the Clojars artifact of the package's version. It needs Java and Node.js, not the Clojure CLI:
@@ -266,7 +284,7 @@ The launcher and the Vite plugin start the compiler with `cljf.main`, `cljf.esm`
 
 ### REPL
 
-`watch` evaluates forms in the pages running the build (runtimes): browser tabs, the Electron window, and servers run by the dev server's ssr environment. Messages go through Vite's websocket (the ssr environment's module runner's hot channel, in the dev server's process) and the plugin's pipe to the compiler. Nothing else listens on a port but the optional nREPL server (`:repl`), which runs in the watcher's JVM:
+`watch` evaluates forms in the pages running the build (runtimes): browser tabs, the Electron window, servers run by the dev server's ssr environment, and the threads running a bundle of `vite build --watch` with the plugin's `replSocket` (see [Worker threads](#worker-threads)). Messages go through Vite's websocket (the ssr environment's module runner's hot channel, in the dev server's process) and the plugin's pipe to the compiler. Nothing else listens on a port but the optional nREPL server (`:repl`), which runs in the watcher's JVM:
 
 ```clojure
 (require '[cljf.esm.repl :as repl])

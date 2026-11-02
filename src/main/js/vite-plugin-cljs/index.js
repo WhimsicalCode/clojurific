@@ -10,13 +10,14 @@ import fs from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import os from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { compilerCommand } from '../cljf/launcher.js';
 import { pruneChunks, propertyRenames } from './prune.js';
 import { ednValue } from './edn.js';
 import { watchWarnings } from './warnings.js';
+import { listenReplSocket } from './repl-socket.js';
 
 const EVENT_PREFIX = '[cljf.esm] ';
 const NPM_AS = 'cljs-npm-as:';
@@ -406,6 +407,13 @@ export default module.exports;
  *   warnings, like shadow-cljs' :devtools {:ignore-warnings true}: they go
  *   to the terminal only, defaults to false: hot reload pauses while any
  *   namespace has warnings, and the overlay shows them
+ * @param {boolean|{port?: number, host?: string}} [options.replSocket] the
+ *   REPL for bundles of vite build --watch, i.e. a Node.js server and its
+ *   worker threads: the compiler's watch compiles with :esm-repl and every
+ *   thread running the bundle connects to this socket (127.0.0.1, port 0 a
+ *   free one, the default), its address defined in the bundle
+ *   (__CLJF_REPL__), CLJF_REPL_PORT in a runtime's environment overrides
+ *   the port. Defaults to false.
  * @param {boolean} [options.replRemoteConsole] accept cljs_eval (forms the
  *   compiler compiles, running its macros) from pages on other hosts too,
  *   defaults to false: only from this machine. A proxy in front of the dev
@@ -425,6 +433,53 @@ export default function cljf(options) {
   const localModules = new Set();
   // the compiler warnings, which hold hot updates back (see warnings.js)
   const warnings = watchWarnings({ ignoreWarnings: options.ignoreWarnings });
+
+    // The REPL (cljf.esm.repl): pages running the build (cljf.esm.repl-runtime)
+  // say hello over Vite's websocket, modules the ssr environment's runner
+  // runs (a server's :js-entries) over its hot channel, and the threads
+  // running a bundle over the REPL socket (replSocket); each
+  // connection gets a runtime id. Their cljs:repl messages go to the
+  // compiler as `repl <json>` lines, the compiler's repl-send events to the
+  // runtime of their runtime id, runtimes[id](data).
+  const runtimes = new Map();
+  let lastRuntimeId = 0;
+  const toRepl = msg => proc.stdin.writable && proc.stdin.write(`repl ${JSON.stringify(msg)}\n`);
+  // A runtime's connection: receive takes the data of its cljs:repl events
+  // for the REPL, close says bye. send replies to it, consoleAllowed whether
+  // it may cljs_eval.
+  const connectRuntime = (send, consoleAllowed) => {
+    let id;
+    const receive = data => {
+      if (data.op === 'hello' && id === undefined) {
+        id = ++lastRuntimeId;
+        runtimes.set(id, send);
+      }
+      if (id === undefined) return;
+      if (data.op === 'hello') send({ op: 'welcome', runtime: id });
+      if (data.op === 'console-eval' && !consoleAllowed) {
+        send({
+          op: 'console-result',
+          rid: data.rid,
+          result: { error: 'cljs_eval only runs in pages on the dev server\'s machine, see the cljf plugin\'s replRemoteConsole' },
+        });
+        return;
+      }
+      toRepl({ ...data, runtime: id });
+    };
+    const close = () => {
+      if (id !== undefined && runtimes.delete(id)) toRepl({ op: 'bye', runtime: id });
+    };
+    return { receive, close };
+  };
+
+  // a compiler's repl-send event: the message to its runtime
+  const replSend = event => {
+    const send = runtimes.get(event.runtime);
+    if (send) send(event.msg);
+    else toRepl({ op: 'bye', runtime: event.runtime });
+  };
+  // the REPL socket of vite build --watch (replSocket), see listenReplSocket
+  let replSocket = null;
 
   function compilerArgs(command, extra) {
     const profile = options.profile ?? (command === 'watch' ? 'dev' : 'release');
@@ -479,9 +534,16 @@ export default function cljf(options) {
     let compiled = () => {};
     return new Promise((resolve, reject) => {
       let first = true;
-      // the build's options: bundles don't hot reload, the dev server's watch does
-      proc = run(compilerArgs('watch', { ':exit-with-parent': true, ':esm-hmr': false }), event => {
-        if (event.type === 'compiling') {
+      // the build's options: bundles don't hot reload, the dev server's watch
+      // does. With the REPL socket, the bundle's threads are the REPL's runtimes.
+      proc = run(compilerArgs('watch', {
+        ':exit-with-parent': true,
+        ':esm-hmr': false,
+        ...(replSocket ? { ':esm-repl': true } : {}),
+      }), event => {
+        if (event.type === 'repl-send') {
+          replSend(event);
+        } else if (event.type === 'compiling') {
           compiling = new Promise(resolve => (compiled = resolve));
         } else if (event.type === 'compiled' || event.type === 'error') {
           compiled();
@@ -603,7 +665,20 @@ export default function cljf(options) {
         const start = Date.now();
         if (userConfig.build?.watch) {
           // vite build --watch: the compiler's watch builds, then watches the
-          // sources; the bundler rebuilds when the compiler's output changes
+          // sources; the bundler rebuilds when the compiler's output changes.
+          // With replSocket, the bundle's threads connect to the REPL.
+          if (options.replSocket) {
+            const { host, port } = typeof options.replSocket === 'object' ? options.replSocket : {};
+            replSocket = await listenReplSocket({ host, port, connect: send => connectRuntime(send, true) });
+            result.define = {
+              __CLJF_REPL__: JSON.stringify({
+                host: replSocket.host,
+                port: replSocket.port,
+                root: pathToFileURL(outputDir + path.sep).href,
+              }),
+            };
+            console.log(`[cljf] REPL socket on ${replSocket.host}:${replSocket.port}`);
+          }
           await watchCompiler();
         } else {
           await new Promise((resolve, reject) => {
@@ -906,42 +981,6 @@ export default function cljf(options) {
           }
         }
       };
-      // The REPL (cljf.esm.repl): pages running the build (cljf.esm.repl-runtime)
-      // say hello over Vite's websocket, and modules the ssr environment's
-      // runner runs (a server's :js-entries) over its hot channel; each
-      // connection gets a runtime id. Their cljs:repl messages go to the
-      // compiler as `repl <json>` lines, the compiler's repl-send events to the
-      // runtime of their runtime id, runtimes[id](data).
-      const runtimes = new Map();
-      let lastRuntimeId = 0;
-      const toRepl = msg => proc.stdin.writable && proc.stdin.write(`repl ${JSON.stringify(msg)}\n`);
-      // A runtime's connection: receive takes the data of its cljs:repl events
-      // for the REPL, close says bye. send replies to it, consoleAllowed whether
-      // it may cljs_eval.
-      const connectRuntime = (send, consoleAllowed) => {
-        let id;
-        const receive = data => {
-          if (data.op === 'hello' && id === undefined) {
-            id = ++lastRuntimeId;
-            runtimes.set(id, send);
-          }
-          if (id === undefined) return;
-          if (data.op === 'hello') send({ op: 'welcome', runtime: id });
-          if (data.op === 'console-eval' && !consoleAllowed) {
-            send({
-              op: 'console-result',
-              rid: data.rid,
-              result: { error: 'cljs_eval only runs in pages on the dev server\'s machine, see the cljf plugin\'s replRemoteConsole' },
-            });
-            return;
-          }
-          toRepl({ ...data, runtime: id });
-        };
-        const close = () => {
-          if (id !== undefined && runtimes.delete(id)) toRepl({ op: 'bye', runtime: id });
-        };
-        return { receive, close };
-      };
       server.ws.on('connection', (socket, req) => {
         // cljs_eval compiles forms in the compiler's JVM, which runs their macros:
         // only for pages on this machine, unless replRemoteConsole
@@ -976,12 +1015,7 @@ export default function cljf(options) {
         });
       }
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
-        if (event.type === 'repl-send') {
-          const send = runtimes.get(event.runtime);
-          if (send) send(event.msg);
-          else toRepl({ op: 'bye', runtime: event.runtime });
-          return;
-        }
+        if (event.type === 'repl-send') return replSend(event);
         if (event.type === 'watch-dirs') {
           // Vite's watcher (native file events) reports changes in the
           // compiler's source directories, polling them is expensive
