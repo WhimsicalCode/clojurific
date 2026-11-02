@@ -17,6 +17,10 @@
       "types": "./vite-plugin-cljs/index.d.ts",
       "default": "./vite-plugin-cljs/index.js"
     },
+    "./worker": {
+      "types": "./vite-plugin-cljs/worker.d.ts",
+      "default": "./vite-plugin-cljs/worker.js"
+    },
     "./karma": "./karma-esm/adapter.js",
     "./package.json": "./package.json"
   },

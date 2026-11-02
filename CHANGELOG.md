@@ -9,7 +9,8 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 - Keywords, `get`, `get-in`, `contains?`, `find` and map destructuring read the own properties of plain JavaScript objects (`#js {}`, `JSON.parse`'s, React's props) in ES module output, a keyword key as its namespace/name.
 - The REPL evaluates in bundles of `vite build --watch`, i.e. a Node.js server and its worker threads: with the Vite plugin's `replSocket` option the watch compiles with `:esm-repl`, and every thread running the bundle connects to the plugin's socket as a runtime of its own (its address defined in the bundle, `CLJF_REPL_PORT` overrides the port). Bundled runtimes don't hot reload: `load-file` evaluates the file's forms in them, and requiring a namespace outside the bundle fails with an explanation.
-- Node.js runtimes say which process and thread they are: `(cljf.esm.repl/runtimes)` lists them with a `node://<pid>/<threadId>` URL and a title (`main thread (pid …)`, `worker thread 2 (pid …)`, or `globalThis.CLJF_REPL_TITLE`), instead of no URL.
+- `createWorker` (`clojurific/worker`) starts a worker thread of a `:js-entries` entry: under the dev server it runs through a Vite module runner of the ssr environment, so it hot reloads in place (`defonce` keeps its value) and is a runtime of the REPL; in a bundle it's a plain `Worker` of the entry's module next to the bundle.
+- Node.js runtimes say which process and thread they are: `(cljf.esm.repl/runtimes)` lists them with a `node://<pid>/<threadId>` URL and a title (`main thread (pid …)`, `worker thread 2 (pid …)`, or `globalThis.CLJF_REPL_TITLE`), instead of no URL. Worker threads aren't visible, so the REPL evaluates in their process' main thread (or a page) by default.
 
 ### Changed
 

@@ -339,6 +339,9 @@
     (let [pid (.-pid (.-process js/globalThis))
           tid (.-threadId wt)]
       {:url   (str "node://" pid "/" tid)
+       ;; worker threads aren't the default runtime, their process' main
+       ;; thread (or a page) is
+       :main? (boolean (.-isMainThread wt))
        :title (or (.-CLJF_REPL_TITLE js/globalThis)
                   (if (.-isMainThread wt)
                     (str "main thread (pid " pid ")")
@@ -353,7 +356,10 @@
                :url       (or (some-> (.-location js/globalThis) .-href) (:url thread))
                :title     (or (some-> doc .-title) (:title thread))
                :userAgent (some-> (.-navigator js/globalThis) .-userAgent)
-               :visible   (if doc (= "visible" (.-visibilityState doc)) true)
+               :visible   (cond
+                            doc    (= "visible" (.-visibilityState doc))
+                            thread (:main? thread)
+                            :else  true)
                :focused   (boolean (and doc (.hasFocus doc)))
                :tag       (tag)
                ;; the output directory's URL, the REPL maps stack traces to the

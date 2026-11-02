@@ -245,7 +245,21 @@ export default defineConfig({
 
 #### Worker threads
 
-A service that runs its ClojureScript in `node:worker_threads` (or imports a bundle outside the dev server) bundles it with `vite build --watch`, a `:js-entries` module each thread imports. The plugin's `replSocket` option connects those threads to the [REPL](#repl):
+A server run by the dev server (`ssrEntries`) starts worker threads of a `:js-entries` entry with `createWorker` of `clojurific/worker`, which takes `new Worker`'s options:
+
+```clojure
+(ns my.server
+  (:require ["clojurific/worker" :refer [createWorker]]))
+
+(defonce worker (createWorker "worker" #js {:name "render worker" :workerData #js {:n 1}}))
+```
+
+- Under the dev server each thread runs the entry through a Vite module runner of the ssr environment: a MessagePort to the dev server's process carries its module fetches and hot updates. It hot reloads changed namespaces in place, as the server does (`defonce` keeps its value), and is a runtime of the [REPL](#repl), titled by `name`. Its modules see the `workerData` given; `import { workerData }` too.
+- In a bundle (`vite build`, `build.ssr`) `createWorker` is `new Worker` of the entry's module next to the bundle, `./<entry>.js` (the entry's `entryFileNames`, i.e. `[name].js`), or `url`.
+- The thread lives as long as the entry keeps it alive (listeners on `parentPort`, servers, timers), as a plain Worker does: not its runner's port. `CLJF_DEBUG_WORKER=1` logs its hot updates.
+- An entry name not in `:js-entries` is a module under Vite's root (i.e. a TypeScript worker), transformed by the dev server too.
+
+A service that runs its ClojureScript in threads it starts itself, outside the dev server, bundles it with `vite build --watch`, a `:js-entries` module each thread imports. The plugin's `replSocket` option connects those threads to the [REPL](#repl):
 
 ```js
 cljf({
@@ -284,7 +298,7 @@ The launcher and the Vite plugin start the compiler with `cljf.main`, `cljf.esm`
 
 ### REPL
 
-`watch` evaluates forms in the pages running the build (runtimes): browser tabs, the Electron window, servers run by the dev server's ssr environment, and the threads running a bundle of `vite build --watch` with the plugin's `replSocket` (see [Worker threads](#worker-threads)). Messages go through Vite's websocket (the ssr environment's module runner's hot channel, in the dev server's process) and the plugin's pipe to the compiler. Nothing else listens on a port but the optional nREPL server (`:repl`), which runs in the watcher's JVM:
+`watch` evaluates forms in the pages running the build (runtimes): browser tabs, the Electron window, servers run by the dev server's ssr environment and their worker threads (`createWorker`), and the threads running a bundle of `vite build --watch` with the plugin's `replSocket` (see [Worker threads](#worker-threads)). Messages go through Vite's websocket (the ssr environment's module runner's hot channel, in the dev server's process) and the plugin's pipe to the compiler. Nothing else listens on a port but the optional nREPL server (`:repl`), which runs in the watcher's JVM:
 
 ```clojure
 (require '[cljf.esm.repl :as repl])

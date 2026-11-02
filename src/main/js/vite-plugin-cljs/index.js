@@ -18,6 +18,7 @@ import { pruneChunks, propertyRenames } from './prune.js';
 import { ednValue } from './edn.js';
 import { watchWarnings } from './warnings.js';
 import { listenReplSocket } from './repl-socket.js';
+import { devWorkers, entryModule } from './dev-workers.js';
 
 const EVENT_PREFIX = '[cljf.esm] ';
 const NPM_AS = 'cljs-npm-as:';
@@ -954,6 +955,10 @@ export default function cljf(options) {
         server.ws.send(problem);
       };
       server.ws.on('connection', socket => problem && socket.send(JSON.stringify(problem)));
+      // the build info createWorker resolves :js-entries names with, read
+      // after each compile
+      let devInfo = null;
+      const refreshDevInfo = async () => (devInfo = (await buildInfo()) ?? devInfo);
       // options.ssrEntries run in the ssr environment's runner once compiled,
       // until they ran
       let ssrEntries = options.ssrEntries ?? [];
@@ -962,6 +967,7 @@ export default function cljf(options) {
       let ssrEntriesRun = Promise.resolve();
       const runSsrEntries = () => (ssrEntriesRun = ssrEntriesRun.then(runSsrEntriesOnce));
       const runSsrEntriesOnce = async () => {
+        await refreshDevInfo();
         if (!ssrEntries.length) return;
         // created when it's first read
         const runner = server.environments.ssr?.runner;
@@ -999,6 +1005,23 @@ export default function cljf(options) {
         });
         socket.on('close', runtime.close);
       });
+      // Worker threads of the ssr environment's modules (createWorker of
+      // clojurific/worker): each a module runner of the environment, hot
+      // reloaded, and a runtime of the REPL as a client of its hot channel
+      const ssrEnvironment = server.environments.ssr;
+      if (ssrEnvironment?.hot?.api?.innerEmitter) {
+        const workers = devWorkers({
+          environment: ssrEnvironment,
+          root,
+          resolve: entry => entryModule(devInfo, outputDir, root, entry),
+          onError: (e, entry) => config.logger.error(`[cljf] worker ${entry}: ${e.stack ?? e}`, { timestamp: true }),
+        });
+        globalThis.__CLJF_DEV_WORKERS__ = workers;
+        server.httpServer?.once('close', () => {
+          if (globalThis.__CLJF_DEV_WORKERS__ === workers) delete globalThis.__CLJF_DEV_WORKERS__;
+          workers.close();
+        });
+      }
       // the ssr runner's modules run in this process, each runner is a client
       // of the environment's hot channel
       const ssrHot = server.environments.ssr?.hot;
