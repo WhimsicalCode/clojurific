@@ -316,6 +316,36 @@
         (.setContextClassLoader thread loader)
         (pop-thread-bindings)))))
 
+(deftest watch-reloads-macro-namespaces-in-dependency-order
+  (let [dir    (temp-dir)
+        thread (Thread/currentThread)
+        loader (.getContextClassLoader thread)
+        cl     (doto (clojure.lang.DynamicClassLoader. loader) (.addURL (.toURL (.toURI dir))))
+        spit!  (fn [ns source]
+                 (let [f (io/file dir (str (string/replace (str ns) "." "/") ".clj"))]
+                   (io/make-parents f)
+                   (spit f source)))]
+    (push-thread-bindings {clojure.lang.Compiler/LOADER cl})
+    (.setContextClassLoader thread cl)
+    (try
+      (spit! 'test.mreload.impl "(ns test.mreload.impl) (defn f [] 1)")
+      (spit! 'test.mreload.core "(ns test.mreload.core (:require [test.mreload.impl :as impl])) (defn h [] (impl/f))")
+      (require 'test.mreload.core)
+      (testing "a batch naming a namespace before the one whose new var it uses (i.e. after a rebase)"
+        (spit! 'test.mreload.impl "(ns test.mreload.impl) (defn f [] 1) (defn g [] 2)")
+        (spit! 'test.mreload.core "(ns test.mreload.core (:require [test.mreload.impl :as impl])) (defn h [] (impl/g))")
+        (#'esm/reload-macro-nses! '[test.mreload.core test.mreload.impl])
+        (is (= 2 ((resolve 'test.mreload.core/h)))))
+      (testing "namespaces not loaded aren't"
+        (#'esm/reload-macro-nses! '[test.mreload.never])
+        (is (nil? (find-ns 'test.mreload.never))))
+      (finally
+        (.setContextClassLoader thread loader)
+        (pop-thread-bindings)
+        (remove-ns 'test.mreload.core)
+        (remove-ns 'test.mreload.impl)
+        (dosync (alter @#'clojure.core/*loaded-libs* disj 'test.mreload.core 'test.mreload.impl))))))
+
 (deftest release-builds-define-goog-debug-false
   (let [dir     (temp-dir)
         ms      (- (System/currentTimeMillis) 60000)
