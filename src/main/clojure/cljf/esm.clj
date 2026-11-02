@@ -1429,10 +1429,11 @@
         ;; REPL compiled (load-file) isn't compiled again when the editor's
         ;; save is reported
         compiled-    (atom {})
-        ;; the changes {:files :nses} of a recompile that failed, i.e. a macro
-        ;; namespace that didn't load: compiled again with the next changes,
-        ;; as they may still be stale (a failed build builds all again)
-        pending-     (atom nil)
+        ;; the changed files of recompiles whose macro namespaces didn't
+        ;; reload, {path file}: none of them were compiled, nor the namespaces
+        ;; using the macros, so the watcher's next recompile retries them (a
+        ;; failed build builds all again). Not the REPL's, failing on them
+        pending-     (atom {})
         ;; the warnings of the output files, {path [warning]}: compiled
         ;; events report them as :outstanding, the Vite plugin holds back hot
         ;; reloads while there are any
@@ -1482,7 +1483,10 @@
                              _      (swap! compiler-env assoc ::namespaces (into #{} (map :ns) inputs))
                              _      (reset! inputs- inputs)
                              macros (keep #(when (re-find #"\.clj[c]?$" (.getName ^File %)) (file-ns %)) changed)
+                             paths  (map canonical-path changed)
+                             _      (swap! pending- into (map vector paths changed))
                              _      (reload-macro-nses! macros)
+                             _      (swap! pending- #(apply dissoc % paths))
                              cljs   (keep #(when (re-find #"\.clj[sc]$" (.getName ^File %)) (file-ns %)) changed)
                              ;; namespaces newly required by a changed namespace
                              fresh  (remove #(get-in @compiler-env [::ana/namespaces % :name]) (map :ns inputs))
@@ -1511,8 +1515,10 @@
                        ;; namespaces nses (whose resources changed, or the
                        ;; REPL's), returns the compiled event, or the error
                        ;; event. Files compiled already are skipped, unless
-                       ;; :force, nothing to compile is a no-op.
-                       [{:keys [files nses force]}]
+                       ;; :force, nothing to compile is a no-op. With :retry
+                       ;; (the watcher's), the files of recompiles whose macro
+                       ;; namespaces didn't reload too.
+                       [{:keys [files nses force retry]}]
                        (locking* lock
                          (fn []
                            ;; the watcher's output, also when the REPL compiles
@@ -1520,30 +1526,26 @@
                                      *err* @stderr]
                              (let [files (remove #(= (.lastModified ^File %) (get @compiled- (canonical-path %)))
                                            files)
-                                   ;; with the changes of a failed recompile
-                                   {pending-files :files pending-nses :nses} @pending-
-                                   files (vals (into {} (map (juxt canonical-path identity))
-                                                 (concat pending-files files)))
-                                   nses  (distinct (concat pending-nses nses))]
+                                   files (if-let [pending (and retry @built?
+                                                               (seq (filter #(.exists ^File %) (vals @pending-))))]
+                                           (vals (into {} (map (juxt canonical-path identity))
+                                                   (concat pending files)))
+                                           files)]
                                (when (or force (seq files) (seq nses))
                                  (swap! compiled- into
                                    (map (fn [^File f] [(canonical-path f) (.lastModified f)]))
                                    files)
                                  (event! "compiling" {})
                                  (try
-                                   (let [event (if-not @built?
-                                                 (build!)
-                                                 ;; lookups of sources and their ns forms cached
-                                                 ;; for the recompile, not across them: files
-                                                 ;; may be added or removed in between
-                                                 (binding [util/*ns-source-cache* (java.util.concurrent.ConcurrentHashMap.)
-                                                           ana/*parse-ns-cache*  (java.util.concurrent.ConcurrentHashMap.)]
-                                                   (recompile-changes! files nses)))]
-                                     (reset! pending- nil)
-                                     event)
+                                   (if-not @built?
+                                     (build!)
+                                     ;; lookups of sources and their ns forms cached
+                                     ;; for the recompile, not across them: files
+                                     ;; may be added or removed in between
+                                     (binding [util/*ns-source-cache* (java.util.concurrent.ConcurrentHashMap.)
+                                               ana/*parse-ns-cache*  (java.util.concurrent.ConcurrentHashMap.)]
+                                       (recompile-changes! files nses)))
                                    (catch Throwable e
-                                     (when @built?
-                                       (reset! pending- {:files files :nses nses}))
                                      (doto (assoc (error-data e) :type "error")
                                        (->> (event! "error"))))
                                    (finally
@@ -1591,7 +1593,7 @@
                                    (get refs path)))
                          resources')]
         (when (or (seq changed) (seq res-nses))
-          (compile! {:files changed :nses res-nses}))
+          (compile! {:files changed :nses res-nses :retry true}))
         (recur files' resources')))))
 
 (defn- deep-merge [& ms]
