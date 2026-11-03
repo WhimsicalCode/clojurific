@@ -7,10 +7,10 @@ import net from 'node:net';
 
 /**
  * Listens for the REPL's runtimes on host:port (port 0 picks a free one).
- * connect(send) is called for each connection, send(msg) writes to it, and
- * returns { receive(msg), close() }, as the plugin's connectRuntime does.
- * Resolves with { host, port, close() } once it listens.
- * @param {{ host?: string, port?: number, connect: (send: (msg: object) => void) => { receive: (msg: object) => void, close: () => void } }} options
+ * connect(send, remoteAddress) is called for each connection, send(msg)
+ * writes to it, and returns { receive(msg), close() }, as the plugin's
+ * connectRuntime does. Resolves with { host, port, close() } once it listens.
+ * @param {{ host?: string, port?: number, connect: (send: (msg: object) => void, remoteAddress: string | undefined) => { receive: (msg: object) => void, close: () => void } }} options
  */
 export function listenReplSocket({ host = '127.0.0.1', port = 0, connect }) {
   const sockets = new Set();
@@ -19,7 +19,7 @@ export function listenReplSocket({ host = '127.0.0.1', port = 0, connect }) {
     socket.setEncoding('utf8');
     const runtime = connect(msg => {
       if (socket.writable) socket.write(JSON.stringify(msg) + '\n');
-    });
+    }, socket.remoteAddress);
     let buffer = '';
     socket.on('data', chunk => {
       const lines = (buffer + chunk).split('\n');

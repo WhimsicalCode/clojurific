@@ -717,8 +717,19 @@ export default function cljf(options) {
           // sources; the bundler rebuilds when the compiler's output changes.
           // With replSocket, the bundle's threads connect to the REPL.
           if (options.replSocket) {
-            const { host, port } = typeof options.replSocket === 'object' ? options.replSocket : {};
-            replSocket = await listenReplSocket({ host, port, connect: send => connectRuntime(send, true) });
+            const { host = '127.0.0.1', port } = typeof options.replSocket === 'object' ? options.replSocket : {};
+            // cljs_eval compiles forms in the compiler's JVM, which runs their
+            // macros: only from this machine, unless replRemoteConsole, as the
+            // dev server's websocket
+            if (!options.replRemoteConsole && !isLoopback(host) && host !== 'localhost') {
+              throw new Error(`[cljf] replSocket's host ${host} isn't this machine's loopback: ` +
+                'set replRemoteConsole to accept runtimes from other machines');
+            }
+            replSocket = await listenReplSocket({
+              host,
+              port,
+              connect: (send, remoteAddress) => connectRuntime(send, options.replRemoteConsole || isLoopback(remoteAddress)),
+            });
             result.define = {
               __CLJF_REPL__: JSON.stringify({
                 host: replSocket.host,

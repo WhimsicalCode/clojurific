@@ -10,10 +10,11 @@ const once = (emitter, event) => new Promise(resolve => emitter.once(event, reso
 test('relays JSON lines between runtimes and their connections', async () => {
   const received = [];
   let closed = 0;
-  let send;
+  let send, peer;
   const socket = await listenReplSocket({
-    connect: s => {
+    connect: (s, remoteAddress) => {
       send = s;
+      peer = remoteAddress;
       return { receive: msg => received.push(msg), close: () => closed++ };
     },
   });
@@ -28,6 +29,8 @@ test('relays JSON lines between runtimes and their connections', async () => {
     client.write('lo"}\n\nnot json\n{"op":"result","id":1}\n');
     for (let i = 0; i < 100 && received.length < 2; i++) await new Promise(r => setTimeout(r, 10));
     assert.deepEqual(received, [{ op: 'hello' }, { op: 'result', id: 1 }]);
+    // the peer's address, which decides whether it may cljs_eval
+    assert.match(peer, /^(127\.|::ffff:127\.|::1$)/);
     const reply = once(client, 'data');
     send({ op: 'welcome', runtime: 1 });
     assert.equal(await reply, '{"op":"welcome","runtime":1}\n');

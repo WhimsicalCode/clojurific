@@ -103,7 +103,8 @@ export interface CljfOptions {
   /**
    * The REPL for bundles of `vite build --watch` (a Node.js server and its worker threads): every thread running
    * the bundle connects to this socket and is a runtime of the REPL. `true` listens on a free port of 127.0.0.1;
-   * `CLJF_REPL_PORT` in a runtime's environment overrides the port. Defaults to false.
+   * `CLJF_REPL_PORT` in a runtime's environment overrides the port. `cljs_eval` is accepted from this machine only,
+   * and a `host` other than loopback needs `replRemoteConsole`. Defaults to false.
    */
   replSocket?: boolean | { port?: number; host?: string };
   /** Accept cljs_eval from pages on other hosts too, defaults to false. */

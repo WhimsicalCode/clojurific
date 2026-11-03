@@ -272,7 +272,7 @@ cljf({
 })
 ```
 
-- The watch compiles with `:esm-repl`, and the plugin listens on a free port of 127.0.0.1 (or `replSocket.port`), defined in the bundle (`__CLJF_REPL__`). `CLJF_REPL_PORT` in a runtime's environment overrides the port. Without the plugin listening the bundle runs as before: its socket doesn't keep a thread alive, and connects again when the watch restarts.
+- The watch compiles with `:esm-repl`, and the plugin listens on a free port of 127.0.0.1 (or `replSocket.port`), defined in the bundle (`__CLJF_REPL__`). `CLJF_REPL_PORT` in a runtime's environment overrides the port. As the dev server's websocket, it accepts `cljs_eval` (whose forms' macros run in the compiler's JVM) only from this machine, and a `host` other than loopback needs `replRemoteConsole`. Without the plugin listening the bundle runs as before: its socket doesn't keep a thread alive, and connects again when the watch restarts.
 - Every thread importing the bundle is a runtime: `(repl/runtimes)` lists `main thread (pid 123)`, `worker thread 2 (pid 123)` (`globalThis.CLJF_REPL_TITLE`, set before the bundle runs, names one), and `{:runtime-id n}` evaluates in that thread. `def` redefines a var for the thread's code.
 - A bundle doesn't hot reload: it's rebuilt, and the process (or its threads) restarted. `load-file` evaluates the file's forms in the runtime instead, and only the namespaces bundled can be required.
 - Production builds (`vite build`) don't have the REPL.
