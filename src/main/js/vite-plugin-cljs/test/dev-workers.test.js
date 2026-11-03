@@ -1,30 +1,15 @@
-// Worker threads of the dev server's ssr environment (dev-workers.js,
-// worker-runner.js), over a hot channel like Vite's server hot channel and a
-// stand-in for Vite's module runner: the thread connects as a client of the
-// channel, its modules see the user's workerData, it gets broadcasts but not
-// the replies meant for other clients, and disconnects when it exits.
+// Worker threads of the dev server (dev-workers.js, worker-runner.js), over
+// the plugin's hot channel and a stand-in for Vite's module runner: the
+// thread connects as a client of the channel, its modules see the user's
+// workerData, it gets broadcasts and its own client's messages, a full
+// reload goes to onFullReload, and it disconnects when it exits.
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { devWorkers, entryModule } from '../dev-workers.js';
-
-// Vite's createServerHotChannel, as far as dev-workers.js uses it
-function hotChannel() {
-  const innerEmitter = new EventEmitter();
-  const outsideEmitter = new EventEmitter();
-  return {
-    name: 'ssr',
-    hot: {
-      send: payload => outsideEmitter.emit('send', payload),
-      on: (event, fn) => innerEmitter.on(event, fn),
-      api: { innerEmitter, outsideEmitter },
-    },
-  };
-}
+import { devWorkers, entryModule, workerHotChannel } from '../dev-workers.js';
 
 // vite/module-runner's ModuleRunner: connects the transport, imports the
 // entry as a plain module, passes the channel's messages to it
@@ -32,7 +17,6 @@ const FAKE_RUNNER = `
 export class ESModulesEvaluator {}
 export class ModuleRunner {
   constructor({ transport }) {
-    this.transport = transport;
     transport.connect({ onMessage: m => globalThis.__onMessage?.(m), onDisconnection() {} });
     globalThis.__send = p => transport.send(p);
   }
@@ -59,34 +43,45 @@ globalThis.__onMessage = m => {
 globalThis.__send({ type: 'custom', event: 'test:hello', data: { hi: 1 } });
 `;
 
-test('worker threads are clients of the ssr environment\'s hot channel', async () => {
+const once = (channel, event) => new Promise(resolve => {
+  const fn = (data, client) => {
+    channel.off(event, fn);
+    resolve({ data, client });
+  };
+  channel.on(event, fn);
+});
+
+test('worker threads are clients of the plugin\'s hot channel', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cljf-dev-workers-'));
   fs.writeFileSync(path.join(dir, 'runner.mjs'), FAKE_RUNNER);
   fs.writeFileSync(path.join(dir, 'entry.mjs'), ENTRY);
-  const environment = hotChannel();
-  const { innerEmitter } = environment.hot.api;
+  const channel = workerHotChannel();
   const workers = devWorkers({
-    environment,
+    channel,
     root: dir,
     resolve: entry => entryModule({ entries: {} }, dir, dir, entry),
     // the stand-in, not the Vite root resolves
     runnerUrl: pathToFileURL(path.join(dir, 'runner.mjs')).href,
   });
-  const connected = new Promise(resolve => innerEmitter.once('vite:client:connect', (_, client) => resolve(client)));
-  const hello = new Promise(resolve => innerEmitter.once('test:hello', (data, client) => resolve({ data, client })));
-  const disconnected = new Promise(resolve => innerEmitter.once('vite:client:disconnect', (_, client) => resolve(client)));
+  const connected = once(channel, 'vite:client:connect');
+  const hello = once(channel, 'test:hello');
+  const disconnected = once(channel, 'vite:client:disconnect');
+  const fullReloads = [];
   try {
-    const worker = workers.spawn('entry.mjs', { workerData: { user: 1 }, name: 'test worker' });
-    const client = await connected;
+    const worker = workers.spawn('entry.mjs', {
+      workerData: { user: 1 },
+      name: 'test worker',
+      onFullReload: (w, payload) => fullReloads.push([w, payload]),
+    });
+    const { client } = await connected;
     const { data, client: from } = await hello;
     assert.deepEqual(data, { hi: 1 });
     assert.equal(from, client, 'its events come from its own client');
+    assert.equal(channel.clients, 1);
     const result = new Promise(resolve => worker.once('message', resolve));
-    // a broadcast it gets, and replies of the in-process runner it doesn't
-    environment.hot.send({ type: 'update', updates: [] });
-    environment.hot.send({ type: 'custom', event: 'cljs:repl', data: { op: 'welcome', runtime: 99 } });
-    environment.hot.send({ type: 'custom', event: 'vite:invoke', data: { id: 'response:x' } });
-    // its own client's messages
+    // a broadcast, a full reload, and its own client's messages
+    channel.send({ type: 'update', updates: [] });
+    channel.send({ type: 'full-reload', triggeredBy: '/src/main.ts' });
     client.send({ type: 'custom', event: 'cljs:repl', data: { op: 'welcome', runtime: 1 } });
     client.send({ type: 'custom', event: 'test:done' });
     const { workerData, seen, title } = await result;
@@ -96,11 +91,26 @@ test('worker threads are clients of the ssr environment\'s hot channel', async (
       { type: 'update', updates: [] },
       { type: 'custom', event: 'cljs:repl', data: { op: 'welcome', runtime: 1 } },
     ]);
-    assert.equal(await disconnected, client);
+    assert.deepEqual(fullReloads, [[worker, { type: 'full-reload', triggeredBy: '/src/main.ts' }]]);
+    assert.equal((await disconnected).client, client);
+    assert.equal(channel.clients, 0);
   } finally {
     await workers.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the channel passes a client\'s custom events to the listeners, with the client', () => {
+  const channel = workerHotChannel();
+  const got = [];
+  const fn = (data, client) => got.push([data, client]);
+  channel.on('x', fn);
+  const client = { send() {} };
+  channel.receive({ type: 'custom', event: 'x', data: 1 }, client);
+  channel.receive({ type: 'update', updates: [] }, client);
+  channel.off('x', fn);
+  channel.receive({ type: 'custom', event: 'x', data: 2 }, client);
+  assert.deepEqual(got, [[1, client]]);
 });
 
 test('entryModule: a :js-entries name, else a file under root', () => {

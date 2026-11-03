@@ -214,7 +214,13 @@
          (-> src
              indirect-eval
              (string/replace #"(?m)^var COMPILED = false;" "var COMPILED = false; // eslint-disable-line")
-             (string/replace #"(?m)^var goog = goog \|\| \{\};" "var goog = {};")
+             (string/replace #"(?m)^var goog = goog \|\| \{\};" "var goog = {};\ngoog.esmProvided_ = {};")
+             ;; A namespace already declared is one this base.js provided: the
+             ;; module graph runs each file once per instance, and a module
+             ;; runner running the graph again (a dev server's full reload) has
+             ;; a new base.js, while the namespaces' objects stay on the global
+             (string/replace "if (goog.isProvided_(name)) {\n      throw new Error('Namespace \"' + name + '\" already declared.');\n    }"
+                             "if (goog.esmProvided_[name]) {\n      throw new Error('Namespace \"' + name + '\" already declared.');\n    }\n    goog.esmProvided_[name] = true;")
              (string/replace #"(?m)^goog\.global =\s*[^;]*;" "goog.global = globalThis;"))
          ;; base.js isn't strict mode, ES modules are: uids of non-extensible
          ;; objects can't be properties, see cljf/esm/goog.js

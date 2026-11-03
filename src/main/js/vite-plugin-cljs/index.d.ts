@@ -96,6 +96,11 @@ export interface CljfOptions {
   /** `:js-entries` the dev server runs in its ssr environment once compiled. */
   ssrEntries?: string[];
   /**
+   * The dev server's worker threads (`createWorker` of `clojurific/worker`), run in an environment of their own,
+   * `cljf_worker`, resolving as the ssr environment. Defaults to true with `ssrEntries`, else false.
+   */
+  workers?: boolean;
+  /**
    * The REPL for bundles of `vite build --watch` (a Node.js server and its worker threads): every thread running
    * the bundle connects to this socket and is a runtime of the REPL. `true` listens on a free port of 127.0.0.1;
    * `CLJF_REPL_PORT` in a runtime's environment overrides the port. Defaults to false.

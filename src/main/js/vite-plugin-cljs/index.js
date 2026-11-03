@@ -18,7 +18,7 @@ import { pruneChunks, propertyRenames } from './prune.js';
 import { ednValue } from './edn.js';
 import { watchWarnings } from './warnings.js';
 import { listenReplSocket } from './repl-socket.js';
-import { devWorkers, entryModule } from './dev-workers.js';
+import { WORKER_ENV, devWorkers, entryModule, importVite, workerHotChannel } from './dev-workers.js';
 
 const EVENT_PREFIX = '[cljf.esm] ';
 const NPM_AS = 'cljs-npm-as:';
@@ -92,6 +92,28 @@ function isLoopback(address) {
 function isLocalConnection(req) {
   const realIp = req.headers['x-real-ip'];
   return isLoopback(req.socket.remoteAddress) && (realIp === undefined || isLoopback(realIp));
+}
+
+// Whether a plugin hook runs for one of the dev server's server environments
+// (ssr, worker threads), whose module runner runs modules as ES modules
+function serverEnvironment(ctx) {
+  const env = ctx.environment;
+  return env?.mode === 'dev' && env.config?.consumer === 'server';
+}
+
+// Whether file (a package's module) is CommonJS: .cjs, or .js without ES
+// module syntax (which Node.js runs the same either way: a .js of a "type":
+// "module" package without import, export or top-level await only has side
+// effects)
+const commonJSFiles = new Map();
+async function isCommonJSFile(file) {
+  if (file.endsWith('.mjs')) return false;
+  if (file.endsWith('.cjs')) return true;
+  if (!file.endsWith('.js')) return false;
+  if (!commonJSFiles.has(file)) {
+    commonJSFiles.set(file, fs.readFile(file, 'utf8').then(isCommonJS, () => false));
+  }
+  return commonJSFiles.get(file);
 }
 
 // A module without ES module syntax is CommonJS, i.e. its module.exports is
@@ -404,6 +426,10 @@ export default module.exports;
  *   its ssr environment once they're compiled, i.e. a server's (which a
  *   plugin like @hono/vite-dev-server imports from the same runner): the REPL
  *   evaluates in them before their first request
+ * @param {boolean} [options.workers] the dev server's worker threads
+ *   (createWorker of clojurific/worker): an environment of their own,
+ *   cljf_worker, resolving as the ssr environment. Defaults to true with
+ *   ssrEntries, else false.
  * @param {boolean} [options.ignoreWarnings] hot reload despite compiler
  *   warnings, like shadow-cljs' :devtools {:ignore-warnings true}: they go
  *   to the terminal only, defaults to false: hot reload pauses while any
@@ -481,6 +507,14 @@ export default function cljf(options) {
   };
   // the REPL socket of vite build --watch (replSocket), see listenReplSocket
   let replSocket = null;
+  // The dev server's worker threads (createWorker of clojurific/worker): an
+  // environment of their own, WORKER_ENV, whose transport is this channel,
+  // each thread a client of it. See dev-workers.js.
+  const workerChannel = workerHotChannel();
+  // the dev server's first compile, and its first successful one, see api
+  let firstCompile, firstSuccess;
+  const initialCompile = new Promise(resolve => (firstCompile = resolve));
+  const successfulCompile = new Promise(resolve => (firstSuccess = resolve));
 
   function compilerArgs(command, extra) {
     const profile = options.profile ?? (command === 'watch' ? 'dev' : 'release');
@@ -725,6 +759,30 @@ export default function cljf(options) {
           result.build.minify = false;
         }
       } else {
+        // The worker threads' environment, resolving as the ssr environment
+        // (its ssr options), created with Vite's DevEnvironment: its
+        // transport is the plugin's channel to the threads
+        if (env.command === 'serve' && (options.workers ?? Boolean(options.ssrEntries?.length))) {
+          const ssr = userConfig.ssr ?? {};
+          const resolve = Object.fromEntries(Object.entries({
+            noExternal: ssr.noExternal,
+            external: ssr.external,
+            conditions: ssr.resolve?.conditions,
+            externalConditions: ssr.resolve?.externalConditions,
+          }).filter(([, v]) => v !== undefined));
+          result.environments = {
+            [WORKER_ENV]: {
+              consumer: 'server',
+              resolve,
+              dev: {
+                createEnvironment: async (name, resolvedConfig) => {
+                  const { DevEnvironment } = await importVite(root);
+                  return new DevEnvironment(name, resolvedConfig, { hot: true, transport: workerChannel });
+                },
+              },
+            },
+          };
+        }
         // dependencies to pre-bundle, from the previous build's entry points
         // and the page, not every HTML file under the root
         const info = await buildInfo();
@@ -793,6 +851,36 @@ export default function cljf(options) {
     },
 
     async load(id) {
+      // The dev server's server environments (ssr, worker threads) run
+      // modules with Vite's module runner, which would run a CommonJS npm
+      // module as an ES module, without its exports: Node.js loads it
+      // instead, as it does the dependencies Vite externalizes. Its
+      // module.exports is the default export, its keys named exports. A
+      // resolved file, whichever plugin resolved it (i.e. a project's own
+      // resolver of npm packages, which an absolute path keeps from being
+      // externalized).
+      const cjsFile = !id.startsWith('\0') && serverEnvironment(this) && id.split('?')[0];
+      if (cjsFile && path.isAbsolute(cjsFile) && cjsFile.includes(`${path.sep}node_modules${path.sep}`) &&
+          await isCommonJSFile(cjsFile)) {
+        const file = cjsFile;
+        const require = createRequire(file);
+        let names = [];
+        try {
+          const m = require(file);
+          names = m && (typeof m === 'object' || typeof m === 'function')
+            ? Object.keys(m).filter(k => /^[A-Za-z_$][\w$]*$/.test(k) && k !== 'default')
+            : [];
+        } catch (e) {
+          // loads in the runtime, which reports it
+        }
+        // locals named apart from the keys, which may be reserved words
+        // (exports.delete): string export names
+        return `import { createRequire } from 'node:module';\n` +
+          `const m = createRequire(${JSON.stringify(file)})(${JSON.stringify(file)});\n` +
+          `export default m;\n` +
+          names.map((n, i) => `const $$cjs${i} = m[${JSON.stringify(n)}];\n` +
+            `export { $$cjs${i} as ${JSON.stringify(n)} };\n`).join('');
+      }
       if (id.startsWith('\0' + SOURCE)) {
         const file = id.slice(SOURCE.length + 1);
         if (!servedSource(file)) this.error(`${file} is outside the project`);
@@ -937,16 +1025,39 @@ export default function cljf(options) {
     },
 
     // Hot updates of compiled modules wait for the compile (and its build
-    // hooks, i.e. generated CSS) to finish.
-    async handleHotUpdate({ file }) {
+    // hooks, i.e. generated CSS) to finish, in every environment: the pages',
+    // the ssr environment's and the worker threads'.
+    async hotUpdate({ file }) {
       await compiling;
       if (warnings.held(file)) return [];
     },
 
+    // for scripts running the dev server themselves (createServer), i.e. to
+    // import a server once its ClojureScript is compiled
+    api: {
+      /**
+       * Resolves once the dev server's first compile finished: true if it
+       * succeeded, false if it failed.
+       */
+      ready: () => initialCompile,
+      /**
+       * Resolves once a compile of the dev server succeeded (with warnings or
+       * not): its output is complete, i.e. a server's entry can be imported.
+       */
+      compiled: () => successfulCompile,
+    },
+
     configureServer(devServer) {
       server = devServer;
-      let ready, compiled = () => {};
-      const initialBuild = new Promise(resolve => (ready = resolve));
+      let compiled = () => {};
+      let readyResolve;
+      const initialBuild = new Promise(resolve => (readyResolve = resolve));
+      // ok: whether the compile succeeded (with warnings or not)
+      const ready = ok => {
+        readyResolve();
+        firstCompile(ok);
+        if (ok) firstSuccess();
+      };
       // the overlay of the last compile's error or warnings, for pages loaded
       // since: a reloaded page runs the output with warnings
       let problem = null;
@@ -1005,36 +1116,42 @@ export default function cljf(options) {
         });
         socket.on('close', runtime.close);
       });
-      // Worker threads of the ssr environment's modules (createWorker of
-      // clojurific/worker): each a module runner of the environment, hot
-      // reloaded, and a runtime of the REPL as a client of its hot channel
-      const ssrEnvironment = server.environments.ssr;
-      if (ssrEnvironment?.hot?.api?.innerEmitter) {
+      // Worker threads (createWorker of clojurific/worker): module runners
+      // of the WORKER_ENV environment, hot reloaded, and runtimes of the REPL
+      // as clients of its channel
+      if (server.environments[WORKER_ENV]) {
         const workers = devWorkers({
-          environment: ssrEnvironment,
+          channel: workerChannel,
           root,
           resolve: entry => entryModule(devInfo, outputDir, root, entry),
           onError: (e, entry) => config.logger.error(`[cljf] worker ${entry}: ${e.stack ?? e}`, { timestamp: true }),
         });
         globalThis.__CLJF_DEV_WORKERS__ = workers;
-        server.httpServer?.once('close', () => {
+        const closeWorkers = () => {
           if (globalThis.__CLJF_DEV_WORKERS__ === workers) delete globalThis.__CLJF_DEV_WORKERS__;
-          workers.close();
-        });
-      }
-      // the ssr runner's modules run in this process, each runner is a client
-      // of the environment's hot channel
-      const ssrHot = server.environments.ssr?.hot;
-      if (ssrHot) {
-        const ssrRuntimes = new Map();
-        const ssrRuntime = client => {
-          if (!ssrRuntimes.has(client)) ssrRuntimes.set(client, connectRuntime(data => client.send('cljs:repl', data), true));
-          return ssrRuntimes.get(client);
+          return workers.close();
         };
-        ssrHot.on('cljs:repl', (data, client) => data && ssrRuntime(client).receive(data));
-        ssrHot.on('vite:client:disconnect', (data, client) => {
-          ssrRuntimes.get(client)?.close();
-          ssrRuntimes.delete(client);
+        server.httpServer?.once('close', closeWorkers);
+        const close = server.close.bind(server);
+        server.close = async () => {
+          await closeWorkers();
+          return close();
+        };
+      }
+      // the server environments' module runners (the ssr environment's in
+      // this process, the worker threads') are clients of their hot channels
+      for (const environment of [server.environments.ssr, server.environments[WORKER_ENV]]) {
+        const hot = environment?.hot;
+        if (!hot) continue;
+        const clientRuntimes = new Map();
+        const clientRuntime = client => {
+          if (!clientRuntimes.has(client)) clientRuntimes.set(client, connectRuntime(data => client.send('cljs:repl', data), true));
+          return clientRuntimes.get(client);
+        };
+        hot.on('cljs:repl', (data, client) => data && clientRuntime(client).receive(data));
+        hot.on('vite:client:disconnect', (data, client) => {
+          clientRuntimes.get(client)?.close();
+          clientRuntimes.delete(client);
         });
       }
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
@@ -1083,7 +1200,7 @@ export default function cljf(options) {
           // (those loading @vite/client); a port that never opens shows
           // nothing but the line above.
           runSsrEntries();
-          ready();
+          ready(true);
         } else if (held) {
           const { released, ignored } = held;
           // all namespaces' warnings, not only this compile's
@@ -1098,7 +1215,7 @@ export default function cljf(options) {
             }
           }
           runSsrEntries();
-          ready();
+          ready(true);
         } else if (event.type === 'error') {
           config.logger.error(`[cljf] ${event.message}`, { timestamp: true });
           showProblem({
@@ -1106,7 +1223,7 @@ export default function cljf(options) {
             id: event.file,
             loc: event.file ? { file: event.file, line: event.line, column: event.column } : undefined,
           });
-          ready();
+          ready(false);
         }
       });
       const stop = () => proc.kill();

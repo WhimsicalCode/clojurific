@@ -245,7 +245,7 @@ export default defineConfig({
 
 #### Worker threads
 
-A server run by the dev server (`ssrEntries`) starts worker threads of a `:js-entries` entry with `createWorker` of `clojurific/worker`, which takes `new Worker`'s options:
+A server run by the dev server (`ssrEntries`, or a script importing it with the ssr environment's runner) starts worker threads of a `:js-entries` entry with `createWorker` of `clojurific/worker`, which takes `new Worker`'s options:
 
 ```clojure
 (ns my.server
@@ -254,10 +254,13 @@ A server run by the dev server (`ssrEntries`) starts worker threads of a `:js-en
 (defonce worker (createWorker "worker" #js {:name "render worker" :workerData #js {:n 1}}))
 ```
 
-- Under the dev server each thread runs the entry through a Vite module runner of the ssr environment: a MessagePort to the dev server's process carries its module fetches and hot updates. It hot reloads changed namespaces in place, as the server does (`defonce` keeps its value), and is a runtime of the [REPL](#repl), titled by `name`. Its modules see the `workerData` given; `import { workerData }` too.
+- Under the dev server each thread runs the entry through a Vite module runner of an environment of the dev server's own, `cljf_worker` (the plugin's `workers` option, on with `ssrEntries`), which resolves as the ssr environment (`ssr.noExternal`, `ssr.external`, its conditions). Its transport is a MessagePort to the dev server's process, through Vite's public `HotChannel` interface: each thread is a client of the environment's channel. It hot reloads changed namespaces in place, as the server does (`defonce` keeps its value), and is a runtime of the [REPL](#repl), titled by `name`. Its modules see the `workerData` given; `import { workerData }` too.
+- A change it can't hot update (no module accepts it, i.e. a TypeScript entry's own code) re-runs the entry in the thread, unless `createWorker`'s `onFullReload(worker, payload)` is given, i.e. to replace the thread.
 - In a bundle (`vite build`, `build.ssr`) `createWorker` is `new Worker` of the entry's module next to the bundle, `./<entry>.js` (the entry's `entryFileNames`, i.e. `[name].js`), or `url`.
 - The thread lives as long as the entry keeps it alive (listeners on `parentPort`, servers, timers), as a plain Worker does: not its runner's port. `CLJF_DEBUG_WORKER=1` logs its hot updates.
 - An entry name not in `:js-entries` is a module under Vite's root (i.e. a TypeScript worker), transformed by the dev server too.
+- In the dev server's server environments (ssr, `cljf_worker`) CommonJS npm modules load with Node.js' `require`, their `module.exports` the default export and its keys named exports, rather than Vite running them as ES modules.
+- For a script that creates the dev server itself (`createServer`, i.e. in middleware mode without a websocket) and imports its server entry afterwards, the plugin's `api.ready()` resolves once the first compile is done (`true` if it succeeded), and `api.compiled()` once a compile succeeded, which a failed first one waits for.
 
 A service that runs its ClojureScript in threads it starts itself, outside the dev server, bundles it with `vite build --watch`, a `:js-entries` module each thread imports. The plugin's `replSocket` option connects those threads to the [REPL](#repl):
 
