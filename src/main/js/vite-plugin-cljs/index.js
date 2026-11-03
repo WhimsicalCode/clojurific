@@ -1215,6 +1215,9 @@ export default function cljf(options) {
           // (those loading @vite/client); a port that never opens shows
           // nothing but the line above.
           runSsrEntries();
+          // createWorker resolves :js-entries names with it, i.e. right after
+          // api.compiled()
+          await refreshDevInfo();
           ready(true);
         } else if (held) {
           const { released, ignored } = held;
@@ -1230,6 +1233,9 @@ export default function cljf(options) {
             }
           }
           runSsrEntries();
+          // createWorker resolves :js-entries names with it, i.e. right after
+          // api.compiled()
+          await refreshDevInfo();
           ready(true);
         } else if (event.type === 'error') {
           config.logger.error(`[cljf] ${event.message}`, { timestamp: true });
