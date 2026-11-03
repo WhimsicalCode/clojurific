@@ -511,10 +511,24 @@ export default function cljf(options) {
   // environment of their own, WORKER_ENV, whose transport is this channel,
   // each thread a client of it. See dev-workers.js.
   const workerChannel = workerHotChannel();
-  // the dev server's first compile, and its first successful one, see api
-  let firstCompile, firstSuccess;
-  const initialCompile = new Promise(resolve => (firstCompile = resolve));
-  const successfulCompile = new Promise(resolve => (firstSuccess = resolve));
+  // the dev server's first compile, and its first successful one, see api.
+  // Both reject if the compiler exits before they settle.
+  let firstCompile, firstSuccess, compilerExited;
+  const initialCompile = new Promise((resolve, reject) => {
+    firstCompile = resolve;
+    compilerExited = e => {
+      reject(e);
+      failSuccess(e);
+    };
+  });
+  let failSuccess;
+  const successfulCompile = new Promise((resolve, reject) => {
+    firstSuccess = resolve;
+    failSuccess = reject;
+  });
+  // settled by the compiler's exit only when nobody awaits them
+  initialCompile.catch(() => {});
+  successfulCompile.catch(() => {});
 
   function compilerArgs(command, extra) {
     const profile = options.profile ?? (command === 'watch' ? 'dev' : 'release');
@@ -1037,12 +1051,13 @@ export default function cljf(options) {
     api: {
       /**
        * Resolves once the dev server's first compile finished: true if it
-       * succeeded, false if it failed.
+       * succeeded, false if it failed. Rejects if the compiler exits first.
        */
       ready: () => initialCompile,
       /**
        * Resolves once a compile of the dev server succeeded (with warnings or
        * not): its output is complete, i.e. a server's entry can be imported.
+       * Rejects if the compiler exits first.
        */
       compiled: () => successfulCompile,
     },
@@ -1226,7 +1241,22 @@ export default function cljf(options) {
           ready(false);
         }
       });
-      const stop = () => proc.kill();
+      // The compiler exiting stops the dev server's compiles and hot reloads:
+      // before a successful compile, api.ready() and api.compiled() reject (a
+      // script waiting for them exits rather than hangs), after, its output
+      // stays as it was.
+      let stopping = false;
+      proc.on('exit', (code, signal) => {
+        if (stopping) return;
+        const message = `ClojureScript watch exited (${signal ?? code}): no more compiles or hot reloads, restart the dev server`;
+        config.logger.error(`[cljf] ${message}`, { timestamp: true });
+        readyResolve();
+        compilerExited(new Error(message));
+      });
+      const stop = () => {
+        stopping = true;
+        proc.kill();
+      };
       server.httpServer?.once('close', stop);
       process.once('exit', stop);
       // hold requests until the initial compile finished
