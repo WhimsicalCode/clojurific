@@ -507,6 +507,12 @@ export default function cljf(options) {
   };
   // the REPL socket of vite build --watch (replSocket), see listenReplSocket
   let replSocket = null;
+  // closed with the watch (closeWatcher), or when it fails to start: another
+  // watch in the same process can listen on its port
+  const closeReplSocket = () => {
+    replSocket?.close();
+    replSocket = null;
+  };
   // The dev server's worker threads (createWorker of clojurific/worker): an
   // environment of their own, WORKER_ENV, whose transport is this channel,
   // each thread a client of it. See dev-workers.js.
@@ -739,7 +745,12 @@ export default function cljf(options) {
             };
             console.log(`[cljf] REPL socket on ${replSocket.host}:${replSocket.port}`);
           }
-          await watchCompiler();
+          try {
+            await watchCompiler();
+          } catch (e) {
+            closeReplSocket();
+            throw e;
+          }
         } else {
           await new Promise((resolve, reject) => {
             const child = run(compilerArgs('build', { ':verbose': false }), () => {});
@@ -830,6 +841,13 @@ export default function cljf(options) {
         const importAnalysis = config.plugins.find(p => p.name === 'vite:build-import-analysis');
         if (importAnalysis?.generateBundle) deferPreloadSourceMaps(importAnalysis, preloadEdits);
       }
+    },
+
+    // vite build --watch's watcher closed (i.e. through the JavaScript API):
+    // its compiler and REPL socket go with it
+    closeWatcher() {
+      closeReplSocket();
+      if (config?.command === 'build') proc?.kill();
     },
 
     // a watch rebuild, started by the compiler writing its output, bundles
