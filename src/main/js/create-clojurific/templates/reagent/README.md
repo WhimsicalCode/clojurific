@@ -18,3 +18,7 @@ Editors connect to the dev server's nREPL server, its port in `.nrepl-port`
 evaluate `(cljf.esm.repl/repl)` to switch the session to ClojureScript. Its
 cider-nrepl middleware completes the build's namespaces and vars and the
 runtime's JavaScript properties, for editors and Tab in `npm run repl`.
+
+The dev server's pages preload [cljs-devtools](https://github.com/binaryage/cljs-devtools),
+whose console formatters show ClojureScript values in Chrome's and Firefox's
+consoles: enable custom formatters in the browser's DevTools settings.

@@ -1,5 +1,7 @@
 {:paths ["src"]
- :deps {;; the dev server's nREPL server, for npm run repl and editors
+ :deps {;; cljs-devtools, its console formatters preloaded by vite.config.ts
+        binaryage/devtools {:mvn/version "1.0.7"}
+        ;; the dev server's nREPL server, for npm run repl and editors
         nrepl/nrepl {:mvn/version "1.8.0"}
         ;; its middleware (vite.config.ts) completing and looking up
         ;; ClojureScript and the runtime's JavaScript, for npm run repl, CIDER

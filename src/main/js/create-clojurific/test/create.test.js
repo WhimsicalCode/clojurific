@@ -66,6 +66,10 @@ for (const template of TEMPLATES) {
     assert.match(deps, /cider\/cider-nrepl/);
     const viteConfig = readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
     assert.match(viteConfig, /repl: \{ nreplPort: 0, middleware: \["'cider\.nrepl\/cider-middleware"\] \}/);
+    if (template !== 'hono') {
+      assert.match(deps, /binaryage\/devtools/);
+      assert.match(viteConfig, /command === 'serve' && \{\n *preloads: \["'devtools\.preload"\]/);
+    }
     assert.ok(existsSync(path.join(root, '.gitignore')));
     assert.ok(!existsSync(path.join(root, '_gitignore')));
     const source = readFileSync(path.join(root, 'src', 'my_app', 'core.cljs'), 'utf8');
