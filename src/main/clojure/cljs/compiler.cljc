@@ -353,11 +353,20 @@
         (when (pos? n)
           (let [ns (string/join "." (take n segs))]
             (if (esm-module-ns? ns)
-              (do (if (and (= ns (str ana/*cljs-ns*)) (not *esm-repl*))
-                    ;; the module's own namespace object
-                    (reset! (:self-import *esm*) true)
-                    (swap! (:refs *esm*) conj ns))
-                  (string/join "." (cons (esm-ns-alias ns) (drop n segs))))
+              ;; as in munge-esm-var, Closure Library members without a shim
+              ;; come from the compatibility layer
+              (let [lib? (and (string/starts-with? ns "goog.")
+                              #?(:clj  (let [member (some-> (nth segs n nil) esm-var-name)
+                                             shim   (esm-goog-shim-exports ns ana/*cljs-ns*)]
+                                         (if member (not (contains? shim member)) (nil? shim)))
+                                 :cljs true))]
+                (cond
+                  (and (= ns (str ana/*cljs-ns*)) (not *esm-repl*))
+                  ;; the module's own namespace object
+                  (reset! (:self-import *esm*) true)
+                  lib?  (swap! (:goog-lib-refs *esm*) conj ns)
+                  :else (swap! (:refs *esm*) conj ns))
+                (string/join "." (cons (str (esm-ns-alias ns) (when lib? "$")) (drop n segs))))
               (recur (dec n)))))))))
 
 (defn- esm-def!

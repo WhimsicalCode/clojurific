@@ -8,11 +8,11 @@
 
 (ns cljf.esm-build-tests
   "cljf.esm builds reusing the output of a previous build."
-  (:require [cljs.analyzer :as ana]
+  (:require [cljf.esm :as esm]
+            [cljf.main]
+            [cljs.analyzer :as ana]
             [cljs.compiler :as comp]
             [cljs.env :as env]
-            [cljf.esm :as esm]
-            [cljf.main]
             [cljs.util :as util]
             [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]
@@ -147,6 +147,18 @@
           (is (.exists lib))))
       (finally
         (.setContextClassLoader thread loader)))))
+
+(deftest js-references-to-closure-libraries-without-a-shim
+  (let [dir     (temp-dir)
+        sources (into {} [(write-source! dir 'test.n
+                            "(ns test.n (:require [goog.async.nextTick]))
+                             (defn f [g] (set! js/goog.async.nextTick.setImmediate_ g))"
+                            (- (System/currentTimeMillis) 60000))])]
+    (build! dir sources 'test.n)
+    (let [out (output dir 'test.n)]
+      (is (string/includes? out "import goog$async$nextTick$ from \"../goog-lib/ns/goog.async.nextTick.js\""))
+      (is (string/includes? out "goog$async$nextTick$.setImmediate_ = g"))
+      (is (not (string/includes? out "goog/async/nextTick.js"))))))
 
 (deftest builds-without-the-closure-compiler
   (let [dir     (temp-dir)
