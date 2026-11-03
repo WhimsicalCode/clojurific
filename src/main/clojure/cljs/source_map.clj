@@ -380,28 +380,3 @@
                       {:line line :col column :name name}))
               (sorted-map))))))
     @inverted))
-
-(comment
-  ;; INSTRUCTIONS:
-
-  ;; switch into samples/hello
-  ;; run repl to start clojure
-  ;; build with
-
-  (require '[cljs.closure :as cljsc])
-  (cljsc/build "src"
-    {:optimizations :simple
-     :output-to "hello.js"
-     :source-map "hello.js.map"
-     :output-dir "out"})
-
-  ;; load source map
-  (def raw-source-map
-    (json/read-str (slurp (io/file "hello.js.map")) :key-fn keyword))
-
-  ;; test it out
-  (first (decode-reverse raw-source-map))
-
-  ;; decoded source map preserves file order
-  (= (keys (decode-reverse raw-source-map)) (:sources raw-source-map))
-  )

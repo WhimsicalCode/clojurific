@@ -17,7 +17,6 @@
                     [cljs.source-map :as sm]
                     [cljs.tagged-literals :as tags]
                     [cljs.util :as util]
-                    [cljs.vendor.clojure.data.json :as json]
                     [clojure.java.io :as io]
                     [clojure.set :as set]
                     [clojure.string :as string]
@@ -52,8 +51,6 @@
      :ecmascript-2018 :ecmascript-2019 :ecmascript-2020 :ecmascript-2021
      :ecmascript-next]))
 
-(def ^:dynamic *recompiled* nil)
-(def ^:dynamic *inputs* nil)
 (def ^:dynamic *source-map-data* nil)
 (def ^:dynamic *source-map-data-gen-col* nil)
 (def ^:dynamic *lexical-renames* {})
@@ -62,7 +59,7 @@
 ;; them in an IIFE, see emit-let.
 (def ^:dynamic *hoisted-locals* nil)
 
-;; ES module output (:module-format :esm)
+;; ES module output, the only output
 ;;
 ;; Every namespace becomes an ES module. Vars of the namespace being compiled
 ;; are module-local bindings named my$ns$var, exported as var. Vars of other
@@ -70,13 +67,32 @@
 ;; bundlers can statically resolve, tree-shake and rename.
 
 (def ^:dynamic *esm*
-  "Per-file ESM emission state, a map of atoms. Bound by emit-source when
-  compiling with :module-format :esm."
+  "Per-file ESM emission state, a map of atoms (see esm-state). Bound by
+  emit-source."
   nil)
 
+(defn esm-state
+  "The emission state of a module, *esm*: the namespaces it references and
+  imports, its exports, the declarations it hoists. src and dest are the
+  source and output files, relative imports are resolved from them."
+  ([] (esm-state nil nil))
+  ([src dest]
+   {:src           src
+    :dest          dest
+    :refs          (atom #{})
+    :imported      (atom #{})
+    :hoist         (atom #{})
+    :exports       (atom {})
+    :dynamic       (atom #{})
+    :self-import   (atom false)
+    :goog-lib-refs (atom #{})
+    :libs          (atom {})
+    :export-syms   (atom {})}))
+
 (def ^:dynamic *esm-emitting*
-  "True while emitting (not analyzing) an ESM file. Var munging only switches
-  to ESM names during emission, analysis time munging is unaffected."
+  "True while emitting (not analyzing) a module. Var munging only switches
+  to ES module names (my$ns.var) during emission, analysis time munging
+  (my.ns.var, i.e. of macros) is unaffected."
   false)
 
 (def ^:dynamic *esm-in-fn*
@@ -96,13 +112,6 @@
   "The namespace evaluating REPL forms in a running build, imported first by
   the main namespaces under :esm-repl."
   'cljf.esm.repl-runtime)
-
-(defn esm-mode?
-  "Whether compiling to ES modules, :module-format :esm."
-  ([] (esm-mode? (when env/*compiler* (:options @env/*compiler*))))
-  ([opts] (= :esm (:module-format opts))))
-
-(def cljs-reserved-file-names #{"deps.cljs"})
 
 (defn get-first-ns-segment
   "Gets the part up to the first `.` of a namespace.
@@ -191,7 +200,7 @@
                    :cljs (-hash ^not-native (:name s)))
     (shadow-depth s)))
 
-(declare munge emits)
+(declare munge emits emit-ast)
 
 (defn esm-ns-alias
   "Returns the identifier a namespace is imported as, i.e. my$ns."
@@ -385,7 +394,7 @@
 (defn- emit-esm-type-binding
   "Emits the binding a deftype / defrecord constructor is assigned to."
   [t]
-  (if (and *esm-emitting* (not *esm-repl*))
+  (if-not *esm-repl*
     (let [local (esm-def! t)]
       (if *esm-in-fn*
         (do (swap! (:hoist *esm*) conj local)
@@ -428,7 +437,17 @@
 
 (defmulti emit* :op)
 
-(defn emit [ast]
+(defn emit
+  "Emits ast as module code. Outside a module's emission (emit-source,
+  emit-esm-repl), i.e. of a single form, with a module state of its own."
+  [ast]
+  (if (nil? *esm*)
+    (binding [*esm*          (esm-state)
+              *esm-emitting* true]
+      (emit ast))
+    (emit-ast ast)))
+
+(defn- emit-ast [ast]
   (when *source-map-data*
     (let [{:keys [env]} ast]
       (when (:line env)
@@ -448,8 +467,7 @@
                           (update-in line [(if column (dec column) 0)]
                             (fnil (fn [column] (conj column minfo)) [])))
                     (sorted-map))))))))))
-  (if (and *esm-emitting*
-           (not *esm-in-fn*)
+  (if (and (not *esm-in-fn*)
            (or (= :fn (:op ast))
                ;; these emit an IIFE in expression context
                (and (= :expr (-> ast :env :context))
@@ -632,9 +650,8 @@
                      name))
     (emits ",")
     (emit-constant (hash kw))
-    ;; _idx, see cljs.core/array-map-index-of: initialized in ES module output,
-    ;; classic builds' keywords start without (undefined, as before)
-    (emits (if *esm-emitting* ",-1)" ")"))))
+    ;; _idx, see cljs.core/array-map-index-of
+    (emits ",-1)")))
 
 (defn emits-symbol [sym]
   (let [ns     (namespace sym)
@@ -659,8 +676,7 @@
   of the constants module (:emit-constants). cljs.core, which the constants
   module imports, keeps its own."
   []
-  (and *esm-emitting*
-       (-> @env/*compiler* :options :emit-constants)
+  (and (-> @env/*compiler* :options :emit-constants)
        (not= 'cljs.core ana/*cljs-ns*)
        ;; the constants module has the constants of the compiled namespaces
        (not *esm-repl*)))
@@ -669,14 +685,10 @@
   "Emits the reference to constant x of the constants table, true if it has
   one."
   [x]
-  (when-let [value (and (-> @env/*compiler* :options :emit-constants)
+  (when-let [value (and (esm-constants?)
                         (-> @env/*compiler* ::ana/constant-table x))]
-    (if *esm-emitting*
-      (when (esm-constants?)
-        (emits (esm-ns-alias ana/constants-ns-sym) "." value)
-        true)
-      (do (emits "cljs.core." value)
-          true))))
+    (emits (esm-ns-alias ana/constants-ns-sym) "." value)
+    true))
 
 (defmethod emit-constant* #?(:clj clojure.lang.Keyword :cljs Keyword) [x]
   (when-not (emit-constant-ref x)
@@ -732,11 +744,10 @@
   [{:keys [info env form] :as ast}]
   (if-let [const-expr (:const-expr ast)]
     (emit (assoc const-expr :env env))
-    (let [{:keys [options] :as cenv} @env/*compiler*
+    (let [{:keys [options]} @env/*compiler*
           var-name (:name info)
           info (if (= (namespace var-name) "js")
-                 (let [js-module-name (get-in cenv [:js-module-index (name var-name) :name])]
-                   (or js-module-name (name var-name)))
+                 (name var-name)
                  info)]
       ;; We need a way to write bindings out to source maps and javascript
       ;; without getting wrapped in an emit-wrap calls, otherwise we get
@@ -748,12 +759,12 @@
         (emits (munge ast))
 
         ;; ES modules are never loaded by the goog debug loader
-        (and *esm-emitting* (= 'js/COMPILED var-name))
+        (= 'js/COMPILED var-name)
         (emit-wrap env (emits "true"))
 
         ;; a compile time constant, bundlers eliminate dead code depending on
         ;; it, set with :closure-defines {goog.DEBUG false}
-        (and *esm-emitting* (contains? '#{goog/DEBUG js/goog.DEBUG} var-name))
+        (contains? '#{goog/DEBUG js/goog.DEBUG} var-name)
         (when-not (= :statement (:context env))
           (emit-wrap env
             ;; true unless defined as a value goog-define accepts (not nil)
@@ -762,12 +773,12 @@
 
         ;; a direct eval in a module defeats tree shaking and renaming of all
         ;; of the module's bindings
-        (and *esm-emitting* (= 'js/eval var-name))
+        (= 'js/eval var-name)
         (when-not (= :statement (:context env))
           (emit-wrap env (emits "(0,eval)")))
 
         ;; namespaces accessed as JavaScript globals, i.e. js/my.ns.foo
-        (and *esm-emitting* (= "js" (namespace var-name)) (esm-js-ns-ref (name var-name)))
+        (and (= "js" (namespace var-name)) (esm-js-ns-ref (name var-name)))
         (when-not (= :statement (:context env))
           (emit-wrap env (emits (esm-js-ns-ref (name var-name)))))
 
@@ -780,24 +791,9 @@
                                 ;; as they're not valid ES5 - Antonio
                                 (some? (namespace var-name)))
                            (set/difference ana/es5-allowed))
-                js-module (get-in cenv [:js-namespaces (or (namespace var-name) (name var-name))])
                 info (cond-> info
                        (not= form 'js/-Infinity) (munge reserved))]
-            (emit-wrap env
-              (case (:module-type js-module)
-                ;; Closure exports CJS exports through default property
-                :commonjs
-                (if (namespace var-name)
-                  (emits (munge (namespace var-name) reserved) "[\"default\"]." (munge (name var-name) reserved))
-                  (emits (munge (name var-name) reserved) "[\"default\"]"))
-
-                ;; Emit bracket notation for default prop access instead of dot notation
-                :es6
-                (if (and (namespace var-name) (= "default" (name var-name)))
-                  (emits (munge (namespace var-name) reserved) "[\"default\"]")
-                  (emits info))
-
-                (emits info)))))))))
+            (emit-wrap env (emits info))))))))
 
 (defmethod emit* :var [expr] (emit-var expr))
 (defmethod emit* :binding [expr] (emit-var expr))
@@ -1021,13 +1017,6 @@
           (emitln then "} else {")
           (emitln else "}"))))))
 
-(defn- decl
-  "The keyword declaring a local: kind (\"const \" or \"let \") in ES module
-  output, where locals are block scoped (and tools such as React Compiler don't
-  take var), var otherwise."
-  [kind]
-  (if *esm-emitting* kind "var "))
-
 (defn iife-open [{:keys [async]}]
   (str (when async "(await ") "(" (when async "async ") "function (){"))
 
@@ -1040,26 +1029,26 @@
     (emitln (iife-open env)))
   (let [gs (gensym "caseval__")]
     (when (= :expr (:context env))
-      (emitln (decl "let ") gs ";"))
+      (emitln "let " gs ";"))
     (emitln "switch (" v ") {")
-    ;; a block per clause in ES module output: the clauses of a switch share
-    ;; its scope, where their const locals would clash
+    ;; a block per clause: the clauses of a switch share its scope, where
+    ;; their const locals would clash
     (doseq [{ts :tests {:keys [then]} :then} nodes]
       (doseq [test (map :test ts)]
         (emitln "case " test ":"))
-      (when *esm-emitting* (emitln "{"))
+      (emitln "{")
       (if (= :expr (:context env))
         (emitln gs "=" then)
         (emitln then))
-      (when *esm-emitting* (emitln "}"))
+      (emitln "}")
       (emitln "break;"))
     (when default
       (emitln "default:")
-      (when *esm-emitting* (emitln "{"))
+      (emitln "{")
       (if (= :expr (:context env))
         (emitln gs "=" default)
         (emitln default))
-      (when *esm-emitting* (emitln "}")))
+      (emitln "}"))
     (emitln "}")
     (when (= :expr (:context env))
       (emitln "return " gs ";"
@@ -1071,85 +1060,6 @@
     (emits (iife-open env) "throw " throw (iife-close env))
     (emitln "throw " throw ";")))
 
-(def base-types
-  #{"null" "*" "...*"
-    "boolean" "Boolean"
-    "string" "String"
-    "number" "Number"
-    "array" "Array"
-    "object" "Object"
-    "RegExp"
-    "Date"})
-
-(def mapped-types
-  {"nil" "null"})
-
-(defn resolve-type [env ^String t]
-  (cond
-    (get base-types t) t
-
-    (get mapped-types t) (get mapped-types t)
-
-    #?(:clj  (.startsWith t "!")
-       :cljs (gstring/startsWith t "!"))
-    (str "!" (resolve-type env (subs t 1)))
-
-    #?(:clj  (.startsWith t "{")
-       :cljs (gstring/startsWith t "{")) t
-
-    #?(:clj  (.startsWith t "function")
-       :cljs (gstring/startsWith t "function"))
-    (let [idx         (.lastIndexOf t ":")
-          [fstr rstr] (if-not (== -1 idx)
-                        [(subs t 0 idx) (subs t (inc idx) (count t))]
-                        [t nil])
-          ret-t       (when rstr (resolve-type env rstr))
-          axstr       (subs fstr 9 (dec (count fstr)))
-          args-ts     (when-not (string/blank? axstr)
-                        (map (comp #(resolve-type env %) string/trim)
-                          (string/split axstr #",")))]
-      (cond-> (str "function(" (string/join "," args-ts) ")")
-        ret-t (str ":" ret-t)))
-
-    #?(:clj  (.endsWith t "=")
-       :cljs (gstring/endsWith t "="))
-    (str (resolve-type env (subs t 0 (dec (count t)))) "=")
-
-    :else
-    (munge (str (:name (ana/resolve-var env (symbol t)))))))
-
-(defn resolve-types [env ts]
-  (let [ts (-> ts string/trim (subs 1 (dec (count ts))))
-        xs (string/split ts #"\|")]
-    (str "{" (string/join "|" (map #(resolve-type env %) xs)) "}")))
-
-(defn munge-param-return [env line]
-  (cond
-    (re-find #"@param" line)
-    (let [[p ts n & xs] (map string/trim
-                          (string/split (string/trim line) #" "))]
-      (if (and (= "@param" p)
-               ts #?(:clj  (.startsWith ^String ts "{")
-                     :cljs (gstring/startsWith ts "{")))
-        (string/join " " (concat [p (resolve-types env ts) (munge n)] xs))
-        line))
-
-    (re-find #"@return" line)
-    (let [[p ts & xs] (map string/trim
-                        (string/split (string/trim line) #" "))]
-      (if (and (= "@return" p)
-               ts #?(:clj  (.startsWith ^String ts "{")
-                     :cljs (gstring/startsWith ts "{")))
-        (string/join " " (concat [p (resolve-types env ts)] xs))
-        line))
-
-    :else line))
-
-(defn checking-types? []
-  (#{:error :warning}
-    (get-in @env/*compiler*
-      [:options :closure-warnings :check-types])))
-
 (defn emit-comment
   "Emit a nicely formatted comment string."
   ([doc jsdoc]
@@ -1160,8 +1070,7 @@
          docs (remove nil? docs)]
      (letfn [(print-comment-lines [e]
                (let [[x & ys]
-                     (map #(if (checking-types?) (munge-param-return env %) %)
-                       (string/split-lines e))]
+                     (string/split-lines e)]
                  (emitln " * " (string/replace x "*/" "* /"))
                  (doseq [next-line ys]
                    (emitln " * "
@@ -1187,8 +1096,6 @@
                   :cljs #(gstring/startsWith % "@define"))
            jsdoc)
          opts
-         (or (= (:optimizations opts) :none)
-             (esm-mode? opts))
          (let [define (get-in opts [:closure-defines (str mname)])]
            (when (valid-define-value? define)
              (pr-str define))))))
@@ -1197,14 +1104,14 @@
   [{:keys [name var init env doc goog-define jsdoc export test var-ast]}]
   ;; Under ESM a var without init, i.e. (declare ^:dynamic *x*), still needs
   ;; a binding other namespaces can import and set! with binding
-  (when (and *esm-emitting* (not *esm-repl*) (nil? init) (not (:def-emits-var env)))
+  (when (and (not *esm-repl*) (nil? init) (not (:def-emits-var env)))
     (swap! (:hoist *esm*) conj (esm-def! name)))
   ;; We only want to emit if an init is supplied, this is to avoid dead code
   ;; elimination issues. The REPL is the exception to this rule.
   (when (or init (:def-emits-var env))
     (let [mname (binding [*esm-emitting* false] (munge name))
           ;; at the REPL var is the namespace view's property, see *esm-repl*
-          esm-local (when (and *esm-emitting* (not *esm-repl*)) (esm-def! name))
+          esm-local (when-not *esm-repl* (esm-def! name))
           esm-var-decl? (and esm-local
                              (not *esm-in-fn*)
                              (= :statement (:context env))
@@ -1226,7 +1133,7 @@
         (emits " = "
           (if-let [define (get-define mname jsdoc)]
             define
-            (if (and goog-define *esm-emitting* (= :invoke (:op init)))
+            (if (and goog-define (= :invoke (:op init)))
               ;; no override, the default value of (goog/define name default)
               (second (:args init))
               init))))
@@ -1240,15 +1147,10 @@
                 (iife-close env)))
       (when (= :return (:context env))
         (emitln ")"))
-      ;; NOTE: JavaScriptCore does not like this under advanced compilation
-      ;; this change was primarily for REPL interactions - David
-      ;(emits " = (typeof " mname " != 'undefined') ? " mname " : undefined")
       (when-not (= :expr (:context env)) (emitln ";"))
+      ;; also a global for scripts calling into the build, i.e. my.app.init()
       (when export
-        (if *esm-emitting*
-          ;; also a global for scripts calling into the build, i.e. my.app.init()
-          (emitln (munge 'goog/exportSymbol) "('" (binding [*esm-emitting* false] (munge export)) "', " var ");")
-          (emitln "goog.exportSymbol('" (munge export) "', " mname ");")))
+        (emitln (munge 'goog/exportSymbol) "('" (binding [*esm-emitting* false] (munge export)) "', " var ");"))
       (when (and ana/*load-tests* test)
         (when (= :expr (:context env))
           (emitln ";"))
@@ -1260,17 +1162,17 @@
         delegate-name (str (munge name) "__delegate")]
     (emitln "(function (" arglist "){")
     (doseq [[i param] (map-indexed vector (drop-last 2 params))]
-      (emits (decl "const "))
+      (emits "const ")
       (emit param)
       (emits (cc " = cljs.core.first("))
       (emitln arglist ");")
       (emitln arglist (cc " = cljs.core.next(") arglist ");"))
     (if (< 1 (count params))
       (do
-        (emits (decl "const "))
+        (emits "const ")
         (emit (last (butlast params)))
         (emitln (cc " = cljs.core.first(") arglist ");")
-        (emits (decl "const "))
+        (emits "const ")
         (emit (last params))
         (emitln (cc " = cljs.core.rest(") arglist ");")
         (emits "return " delegate-name "(")
@@ -1279,7 +1181,7 @@
           (when-not (= param (last params)) (emits ",")))
         (emitln ");"))
       (do
-        (emits (decl "const "))
+        (emits "const ")
         (emit (last params))
         (emitln (cc " = cljs.core.seq(") arglist ");")
         (emits "return " delegate-name "(")
@@ -1303,7 +1205,7 @@
   [params]
   (if (some #(= "self__" (str (munge %))) params)
     (emitln "self__ = this;")
-    (emitln (decl "const ") "self__ = this;")))
+    (emitln "const self__ = this;")))
 
 (defn- emit-fn-body*
   [expr recurs type params]
@@ -1351,39 +1253,38 @@
 
 (defn emit-fn-body
   "Emits the body of a fn method, after its opening brace (on its line),
-  declaring the locals its lets in expression position hoisted (see emit-let):
-  at its end with var, or in ES module output at its start with let, on the
-  opening brace's line (after which the source map has no entries). The
-  declaration isn't known until the body is emitted: the outermost fn's body
-  is written to a buffer, the fns in it write a placeholder their declaration
-  replaces once the outermost's is emitted. type: this is self__."
+  declaring the locals its lets in expression position hoisted (see emit-let)
+  at its start with let, on the opening brace's line (after which the source
+  map has no entries). The declaration isn't known until the body is emitted:
+  the outermost fn's body is written to a buffer, the fns in it write a
+  placeholder their declaration replaces once the outermost's is emitted.
+  type: this is self__."
   [expr recurs type params]
   (binding [*hoisted-locals* (atom [])]
-    (if #?(:clj *esm-emitting* :cljs false)
-      #?(:clj
-         (let [decl-str #(when-let [locals (seq %)] (str "let " (string/join ", " locals) ";"))]
-           (if-let [{:keys [marker decls]} *fn-decls*]
-             (let [n (count @decls)]
-               (swap! decls assoc n nil)
-               (.write ^Writer *out* (str marker n (char 0)))
+    #?(:clj
+       (let [decl-str #(when-let [locals (seq %)] (str "let " (string/join ", " locals) ";"))]
+         (if-let [{:keys [marker decls]} *fn-decls*]
+           (let [n (count @decls)]
+             (swap! decls assoc n nil)
+             (.write ^Writer *out* (str marker n (char 0)))
+             (emitln)
+             (emit-fn-body* expr recurs type params)
+             (swap! decls assoc n (decl-str @*hoisted-locals*)))
+           (let [body   (java.io.StringWriter.)
+                 marker (fn-decls-marker)
+                 decls  (atom {})]
+             (binding [*out* body *fn-decls* {:marker marker :decls decls}]
                (emitln)
-               (emit-fn-body* expr recurs type params)
-               (swap! decls assoc n (decl-str @*hoisted-locals*)))
-             (let [body   (java.io.StringWriter.)
-                   marker (fn-decls-marker)
-                   decls  (atom {})]
-               (binding [*out* body *fn-decls* {:marker marker :decls decls}]
-                 (emitln)
-                 (emit-fn-body* expr recurs type params))
-               (when-let [d (decl-str @*hoisted-locals*)]
-                 (.write ^Writer *out* ^String d))
-               (.write ^Writer *out* (fill-fn-decls (str body) marker @decls)))))
-         :cljs nil)
-      (do
-        (emitln)
-        (emit-fn-body* expr recurs type params)
-        (when-let [locals (seq @*hoisted-locals*)]
-          (emitln "var " (comma-sep locals) ";"))))))
+               (emit-fn-body* expr recurs type params))
+             (when-let [d (decl-str @*hoisted-locals*)]
+               (.write ^Writer *out* ^String d))
+             (.write ^Writer *out* (fill-fn-decls (str body) marker @decls)))))
+       :cljs
+       (do
+         (emitln)
+         (emit-fn-body* expr recurs type params)
+         (when-let [locals (seq @*hoisted-locals*)]
+           (emitln "var " (comma-sep locals) ";"))))))
 
 (defn emit-fn-method
   [{expr :body :keys [type name params env recurs]}]
@@ -1403,7 +1304,7 @@
   (let [mname (munge (gensym))
         i (str mname "__i")
         a (str mname "__a")]
-    (emitln (decl "let ") i " = 0, "
+    (emitln "let " i " = 0, "
                    a " = new Array(arguments.length -  " startslice ");")
     (emitln "while (" i " < " a ".length) {"
       a "[" i "] = arguments[" i " + " startslice "]; ++" i ";}")
@@ -1416,8 +1317,8 @@
           mname (munge name)
           delegate-name (str mname "__delegate")
           async (:async env)]
-      (emitln (when *esm-emitting* "/*@__PURE__*/") "(function() { ")
-      (emits (decl "const ") delegate-name " = " (when async "async ") "function (")
+      (emitln "/*@__PURE__*/(function() { ")
+      (emits "const " delegate-name " = " (when async "async ") "function (")
       (doseq [param params]
         (emit param)
         (when-not (= param (last params)) (emits ",")))
@@ -1425,7 +1326,7 @@
       (emit-fn-body expr recurs type params)
       (emitln "};")
 
-      (emitln (decl "const ") mname " = " (when async "async ")  "function ("
+      (emitln "const " mname " = " (when async "async ")  "function ("
               (comma-sep
                (if variadic
                  (concat (butlast params) ['var_args])
@@ -1435,7 +1336,7 @@
       (when variadic
         ;; a rest param named var_args is the wrapper's own param
         (when-not (= "var_args" (str (munge (last params))))
-          (emits (decl "let ")))
+          (emits "let "))
         (emit (last params))
         (emitln " = null;")
         (emitln "if (arguments.length > " (dec (count params)) ") {")
@@ -1486,12 +1387,12 @@
   [{variadic :variadic? :keys [name named? env methods max-fixed-arity recur-frames in-loop loop-lets] :as ast}]
   ;;fn statements get erased, serve no purpose and can pollute scope if named
   (when-not (= :statement (:context env))
-    (let [;; Under ESM the name def gives a fn is the module binding of its var:
+    (let [;; The name def gives a fn is the module binding of its var:
           ;; the function expression's name would shadow it in the fn's body,
           ;; where calls (as the dispatcher of a variadic defn) must see the
           ;; value set! (and with-redefs) assign. The engine names the fn
           ;; after the binding it's assigned to.
-          name (when-not (and *esm-emitting* (not named?)) name)
+          name (when named? name)
           recur-params (mapcat :params (filter #(and % @(:flag %)) recur-frames))
           loop-locals
           (->> (concat recur-params
@@ -1524,10 +1425,10 @@
           (when (= :return (:context env))
             (emits "return "))
           ;; only defines and returns the fn, marked pure for bundlers
-          (emitln (when *esm-emitting* "/*@__PURE__*/") "(function() {")
-          (emitln (decl "let ") mname " = null;")
+          (emitln "/*@__PURE__*/(function() {")
+          (emitln "let " mname " = null;")
           (doseq [[n meth] ms]
-            (emits (decl "const ") n " = ")
+            (emits "const " n " = ")
             (if (:variadic? meth)
               (emit-variadic-fn-method meth)
               (emit-fn-method meth))
@@ -1537,7 +1438,7 @@
                                (concat (butlast maxparams) ['var_args])
                                maxparams)) "){")
           (when (and variadic (not= "var_args" (str (munge (last maxparams)))))
-            (emits (decl "const "))
+            (emits "const ")
             (emit (last maxparams))
             (emitln " = var_args;"))
           (emitln "switch(arguments.length){")
@@ -1545,7 +1446,7 @@
             (if (:variadic? meth)
               (do (emitln "default:")
                   (let [restarg (munge (gensym))]
-                    (emitln (decl "let ") restarg " = null;")
+                    (emitln "let " restarg " = null;")
                     (emitln "if (arguments.length > " max-fixed-arity ") {")
                     (let [a (emit-arguments-to-array max-fixed-arity)]
                       (emitln restarg (cc " = new cljs.core.IndexedSeq(") a ",0,null);"))
@@ -1758,7 +1659,7 @@
                                 (not (uses-fn-scope? init)))
                        (assign-tails init (munge binding)))]
           ;; recur assigns loop locals, and the tails an assigned binding
-          (emits (decl (if (or is-loop assign) "let " "const ")))
+          (emits (if (or is-loop assign) "let " "const "))
           (emit binding) ; Binding will be treated as a var
           (if assign
             (do (emitln ";")
@@ -1792,7 +1693,7 @@
   (let [temps (vec (take (count exprs) (repeatedly gensym)))
         params (:params frame)]
     (dotimes [i (count exprs)]
-      (emitln (decl "const ") (temps i) " = " (exprs i) ";"))
+      (emitln "const " (temps i) " = " (exprs i) ";"))
     (dotimes [i (count exprs)]
       (emitln (munge (params i)) " = " (temps i) ";"))
     (emitln "continue;")))
@@ -1805,12 +1706,12 @@
     ;; bindings are (see emit-let-scope): a const can't be declared twice
     (binding [*lexical-renames*
               (into *lexical-renames*
-                (when (and *esm-emitting* (not= :expr context))
+                (when (not= :expr context)
                   (map (fn [binding]
                          [(hash-scope binding) (gensym (str (:name binding) "-"))])
                        bindings)))]
       (doseq [{:keys [init] :as binding} bindings]
-        (emitln (decl "const ") (munge binding) " = " init ";"))
+        (emitln "const " (munge binding) " = " init ";"))
       (emits expr))
     (when (= :expr context) (emits (iife-close env)))))
 
@@ -1822,12 +1723,10 @@
 
 (defn- emit-lookup-test
   "Emits the test whether local m has the -lookup method lookup (its property),
-  shorter with optional chaining in ES module output (ES2020): methods are
-  functions, so it's truthy exactly when m != null and the method != null."
+  with optional chaining (ES2020): methods are functions, so it's truthy exactly
+  when m != null and the method != null."
   [m lookup]
-  (if *esm-emitting*
-    (emits "(" m "?" lookup ")")
-    (emits "((" m " != null) && (" m lookup " != null))")))
+  (emits "(" m "?" lookup ")"))
 
 (defmethod emit* :invoke
   [{f :fn :keys [args env] :as expr}]
@@ -1855,10 +1754,9 @@
         first-arg-tag (ana/infer-tag env (first (:args expr)))
         opt-not? (and (= (:name info) 'cljs.core/not)
                       (= first-arg-tag 'boolean))
-        ;; the call site dispatch below (protocol methods called at the call site
-        ;; rather than through the shared fn) in ES module output only: it adds
-        ;; code, classic builds keep their size
-        site? (and fn? *esm-emitting*)
+        ;; the call site dispatch below: protocol methods called at the call site
+        ;; rather than through the shared fn
+        site? fn?
         ;; (get m k) of a local map and a constant or local key: m's -lookup at the
         ;; call site when it has one, see the keyword? case below
         get-lookup? (and site?
@@ -1997,8 +1895,7 @@
        keyword?
        (let [[m nf] args
              lookup (str ".cljs$core$ILookup$_lookup$arity$" (inc (count args)))]
-         (if (and *esm-emitting*
-                  (= :const (:op (ana/unwrap-quote f)))
+         (if (and (= :const (:op (ana/unwrap-quote f)))
                   (<= 1 (count args) 2)
                   (= :local (:op m)))
            ;; (:k m) of a local: its -lookup at this call site, as get would call
@@ -2106,7 +2003,7 @@
   returns [ns name]. Closure Library namespaces run by the compatibility
   layer are objects, set! assigns their properties; shims are modules."
   [{:keys [op info]}]
-  (when (and *esm-emitting* (= :var op))
+  (when (= :var op)
     (let [sym (:name info)
           ns  (namespace sym)]
       (when (and ns
@@ -2137,112 +2034,6 @@
     (let [xs (string/split sublib #"\.")]
       (apply str
         (map #(str "['" % "']") xs)))))
-
-(defn emit-global-export [ns-name global-exports lib opts]
-  (let [[lib' sublib] (ana/lib&sublib lib)
-        ref (str "goog.global"
-              ;; Convert object dot access to bracket access
-              (->> (string/split (name (or (get global-exports (symbol lib'))
-                                           (get global-exports (name lib'))))
-                     #"\.")
-                (map (fn [prop] (str "[\"" prop "\"]")))
-                (apply str)))]
-    (when (and (ana/external-dep? lib')
-               (= :none (:optimizations opts)))
-      (emitln
-        "if(!" ref ") throw new Error(\"External library, " lib' ", never provided\");"))
-    (emitln
-      (munge ns-name) "."
-      (ana/munge-global-export lib)
-      " = "
-      ref
-      (sublib-select sublib)
-      ";")))
-
-(defn load-libs
-  [libs seen reloads deps ns-name]
-  (let [{:keys [options js-dependency-index]} @env/*compiler*
-        {:keys [target nodejs-rt optimizations]} options
-        loaded-libs (munge 'cljs.core.*loaded-libs*)
-        loaded-libs-temp (munge (gensym 'cljs.core.*loaded-libs*))
-        [node-libs libs-to-load] (let [libs (remove (set (vals seen)) (filter (set (vals libs)) deps))]
-                                   (if (= :nodejs target)
-                                     (let [{node-libs true libs-to-load false} (group-by ana/node-module-dep? libs)]
-                                       [node-libs libs-to-load])
-                                     [nil libs]))
-        [goog-modules libs-to-load] (let [{goog-modules true libs-to-load false}
-                                          (group-by ana/goog-module-dep? libs-to-load)]
-                                      [goog-modules libs-to-load])
-        global-exports-libs (filter ana/dep-has-global-exports? libs-to-load)]
-    (when (-> libs meta :reload-all)
-      (emitln "if(!COMPILED) " loaded-libs-temp " = " loaded-libs " || cljs.core.set([\"cljs.core\"]);")
-      (emitln "if(!COMPILED) " loaded-libs " = cljs.core.set([\"cljs.core\"]);"))
-    (doseq [lib libs-to-load]
-      (cond
-        #?@(:clj
-            [(ana/foreign-dep? lib)
-             ;; we only load foreign libraries under optimizations :none
-             ;; under :modules we also elide loads, as the module loader will
-             ;; have handled it - David
-             (when (and (= :none optimizations)
-                        (not (contains? options :modules)))
-               (let [[lib _] (ana/lib&sublib lib)]
-                 (if nodejs-rt
-                   ;; under node.js we load foreign libs globally
-                   (let [ijs (get js-dependency-index (name lib))]
-                     (emitln "cljs.core.load_file("
-                       (-> (io/file (util/output-directory options)
-                             (or (deps/-relative-path ijs)
-                                 (util/relative-name (:url ijs))))
-                         str
-                         escape-string
-                         wrap-in-double-quotes)
-                       ");"))
-                   (if-not (ana/external-dep? lib)
-                     (emitln "goog.require('" (munge lib) "');")
-                     ;; TODO: validate the lib exists
-                     ))))]
-            :cljs
-            [(and (ana/foreign-dep? lib)
-                  (not (keyword-identical? optimizations :none)))
-             nil])
-
-        (or (-> libs meta :reload)
-            (= (get reloads lib) :reload))
-        (emitln "goog.require('" (munge lib) "', 'reload');")
-
-        (or (-> libs meta :reload-all)
-            (= (get reloads lib) :reload-all))
-        (emitln "goog.require('" (munge lib) "', 'reload-all');")
-
-        :else
-        (when-not (= lib 'goog)
-          (emitln "goog.require('" (munge lib) "');"))))
-    ;; Node Libraries
-    (doseq [lib node-libs]
-      (let [[lib' sublib] (ana/lib&sublib lib)]
-        (emitln (munge ns-name) "."
-          (ana/munge-node-lib lib)
-          " = require('" lib' "')" (sublib-select sublib) ";")))
-    ;; Google Closure Library Modules (i.e. goog.module(...))
-    ;; these must be assigned to vars
-    (doseq [lib goog-modules]
-      (let [[lib' sublib] (ana/lib&sublib lib)]
-        (emitln "goog.require('" lib' "');")
-        ;; we emit goog.scope here to suppress a Closure error about
-        ;; goog.module.get when compiling - meant to discourage incorrect
-        ;; usage by hand written code - not applicable here
-        (emitln "goog.scope(function(){")
-        (emitln (munge ns-name) "."
-          (ana/munge-goog-module-lib lib)
-          " = goog.module.get('" lib' "')" (sublib-select sublib) ";")
-        (emitln "});")))
-    ;; Global Exports
-    (doseq [lib global-exports-libs]
-      (let [{:keys [global-exports]} (get js-dependency-index (name (-> lib ana/lib&sublib first)))]
-        (emit-global-export ns-name global-exports lib options)))
-    (when (-> libs meta :reload-all)
-      (emitln "if(!COMPILED) " loaded-libs " = cljs.core.into(" loaded-libs-temp ", " loaded-libs ");"))))
 
 #?(:clj
    (def esm-goog-shim-exports
@@ -2610,15 +2401,7 @@
      Library namespaces run by the compatibility layer as esm-ns-alias plus
      $: the function's parameters."
      [ast]
-     (let [state {:refs          (atom #{})
-                  :imported      (atom #{})
-                  :hoist         (atom #{})
-                  :exports       (atom {})
-                  :dynamic       (atom #{})
-                  :self-import   (atom false)
-                  :goog-lib-refs (atom #{})
-                  :libs          (atom {})
-                  :export-syms   (atom {})}
+     (let [state (esm-state)
            js    (binding [*esm*          state
                            *esm-emitting* true
                            *esm-repl*     true]
@@ -2628,42 +2411,19 @@
         :goog-lib-refs @(:goog-lib-refs state)})))
 
 (defmethod emit* :ns*
-  [{:keys [name requires uses require-macros reloads env deps]}]
-  (cond
+  [{:keys [env deps]}]
+  (if *esm-repl*
     ;; cljf.esm.repl loads the namespaces
-    *esm-repl*
     (emit-wrap env (emits "null"))
-
-    *esm-emitting*
     #?(:clj (emit-esm-imports ana/*cljs-ns* deps)
-       :cljs nil)
-
-    :else
-    (do
-      (load-libs requires nil (:require reloads) deps name)
-      (load-libs uses requires (:use reloads) deps name)))
-  (when (:repl-env env)
-    (emitln "'nil';")))
+       :cljs nil)))
 
 (defmethod emit* :ns
-  [{:keys [name requires uses require-macros reloads env deps]}]
-  (cond
-    *esm-repl*
+  [{:keys [name env deps]}]
+  (if *esm-repl*
     (emit-wrap env (emits "null"))
-
-    *esm-emitting*
     #?(:clj (emit-esm-imports name deps)
-       :cljs nil)
-
-    :else
-    (do
-      (emitln "goog.provide('" (munge name) "');")
-      (when-not (= name 'cljs.core)
-        (emitln "goog.require('cljs.core');")
-        (when (-> @env/*compiler* :options :emit-constants)
-          (emitln "goog.require('" (munge ana/constants-ns-sym) "');")))
-      (load-libs requires nil (:require reloads) deps name)
-      (load-libs uses requires (:use reloads) deps name))))
+       :cljs nil)))
 
 (defmethod emit* :deftype
   [{:keys [t fields pmasks body protocols]}]
@@ -2693,7 +2453,7 @@
     (when body
       (emitln "constructor(" (comma-sep (map munge params)) ") {")
       ;; this is accessible once the base class' constructor returned
-      (emitln (if base (str (decl "let ") "self__;") (str (decl "const ") "self__ = this;")))
+      (emitln (if base "let self__;" "const self__ = this;"))
       (emit body)
       (emitln "}"))
     (emits "})")))
@@ -2737,7 +2497,7 @@
     (if field
       ;; namespaces read as JavaScript globals' fields, i.e.
       ;; (.. js/cljs -core -PersistentArrayMap -EMPTY), as js/my.ns.foo
-      (if-some [ref (when *esm-emitting* (some-> (esm-js-path ast) esm-js-ns-ref))]
+      (if-some [ref (some-> (esm-js-path ast) esm-js-ns-ref)]
         (emits ref)
         (emits target "." (munge field #{})))
       (emits target "." (munge method #{}) "("
@@ -2757,26 +2517,6 @@
         (emits (esm-rewrite-core-refs code))
         (emits (interleave (concat (map esm-rewrite-core-refs segs) (repeat nil))
                            (concat args [nil])))))))
-
-;; TODO: unify renaming helpers - this one was hard to find - David
-
-#?(:clj
-   (defn rename-to-js
-     "Change the file extension from .cljs to .js. Takes a File or a
-     String. Always returns a String."
-     [^String file-str]
-     (cond
-       (.endsWith file-str ".cljs")
-       (clojure.string/replace file-str #"\.cljs$" ".js")
-
-       (.endsWith file-str ".cljc")
-       (if (= "cljs/core.cljc" file-str)
-         "cljs/core$macros.js"
-         (clojure.string/replace file-str #"\.cljc$" ".js"))
-
-       :else
-       (throw (util/compilation-error (IllegalArgumentException.
-                                        (str "Invalid source file extension " file-str)))))))
 
 #?(:clj
    (defn with-core-cljs
@@ -2809,38 +2549,11 @@
           (str " " (pr-str (ana/build-affecting-options opts))))))))
 
 #?(:clj
-   (defn cached-core [ns ext opts]
-     (and (= :none (:optimizations opts))
-          (not (esm-mode? opts))
-          (not= "cljc" ext)
-          (= 'cljs.core ns)
-          (io/resource "cljs/core.aot.js"))))
-
-#?(:clj
    (defn macro-ns? [ns ext opts]
      (or (= "clj" ext)
          (= 'cljs.core$macros ns)
          (and (= ns 'cljs.core) (= "cljc" ext))
          (:macros-ns opts))))
-
-#?(:clj
-   (defn emit-cached-core [src dest cached opts]
-     ;; no need to bother with analysis cache reading, handled by
-     ;; with-core-cljs
-     (when (or ana/*verbose* (:verbose opts))
-       (util/debug-prn "Using cached cljs.core" (str src)))
-     (spit dest (slurp cached))
-     (.setLastModified ^File dest (util/last-modified src))
-     (when (true? (:source-map opts))
-       (spit (io/file (str dest ".map"))
-         (json/write-str
-           (assoc
-             (json/read-str (slurp (io/resource "cljs/core.aot.js.map")))
-             "file"
-             (str (io/file (util/output-directory opts) "cljs" "core.js"))))))
-     (merge
-       (ana/parse-ns src dest nil)
-       {:out-file dest})))
 
 #?(:clj
    (defn emit-source-map [src dest sm-data opts]
@@ -2867,9 +2580,9 @@
             :source-map-path (:source-map-path opts)
             :source-map-timestamp (:source-map-timestamp opts)
             :source-map-pretty-print (:source-map-pretty-print opts)
-            ;; ES modules are bundled from the output directory, which
-            ;; doesn't have the sources (jar ones aren't files)
-            :sources-content (when (esm-mode? opts) [(slurp src)])
+            ;; modules are bundled from the output directory, which doesn't
+            ;; have the sources (jar ones aren't files)
+            :sources-content [(slurp src)]
             :relpaths {(util/path src)
                        (util/ns->relpath (first (:provides opts)) (:ext opts))}})))))
 
@@ -2888,28 +2601,15 @@
                                             :gen-line 0}))
                  *source-map-data-gen-col* (AtomicLong.)
                  find-ns-starts-with   (memoize find-ns-starts-with)
-                 *esm*                 (when (esm-mode? opts)
-                                         {:src      src
-                                          :dest     dest
-                                          :refs     (atom #{})
-                                          :imported (atom #{})
-                                          :hoist    (atom #{})
-                                          :exports  (atom {})
-                                          :dynamic  (atom #{})
-                                          :self-import (atom false)
-                                          :goog-lib-refs (atom #{})
-                                          :libs     (atom {})
-                                          :export-syms (atom {})})]
+                 *esm*                 (esm-state src dest)]
          (emitln (compiled-by-string opts))
-         (when (and *esm* (:esm-hmr opts))
+         (when (:esm-hmr opts)
            (emit-esm-hmr-header))
          (with-open [rdr (io/reader src)]
            (let [env (ana/empty-env)
                  emitter (when (:parallel-build opts)
                            (Executors/newSingleThreadExecutor))
-                 emit (if *esm*
-                        #(binding [*esm-emitting* true] (emit %))
-                        emit)
+                 emit #(binding [*esm-emitting* true] (emit %))
                  emit (if emitter
                         #(.execute emitter ^Runnable (bound-fn [] (emit %)))
                         emit)]
@@ -2953,11 +2653,9 @@
                    (let [_ (when emitter
                              (.shutdown emitter)
                              (.awaitTermination emitter 1000 TimeUnit/HOURS))
-                         _ (when *esm*
-                             (binding [*esm-emitting* true]
-                               (emit-esm-footer (or ns-name 'cljs.user))))
-                         dts (when *esm*
-                               (esm-dts (or ns-name 'cljs.user) @(:export-syms *esm*)))
+                         _ (binding [*esm-emitting* true]
+                             (emit-esm-footer (or ns-name 'cljs.user)))
+                         dts (esm-dts (or ns-name 'cljs.user) @(:export-syms *esm*))
                          sm-data (when *source-map-data* (assoc @*source-map-data*
                                                            :gen-col (.get ^AtomicLong *source-map-data-gen-col*)))
                          ret (merge
@@ -2974,13 +2672,10 @@
                                 :source-file src}
                                (when sm-data
                                  {:source-map (:source-map sm-data)})
-                               (when dts
-                                 {:esm-dts dts}))]
-                     (when (and sm-data (= :none (:optimizations opts)))
+                               {:esm-dts dts})]
+                     (when sm-data
                        (emit-source-map src dest sm-data
                          (merge opts {:ext ext :provides [ns-name]})))
-                     (let [path (.getPath (.toURL ^File dest))]
-                       (swap! env/*compiler* assoc-in [::compiled-cljs path] ret))
                      (ana/ensure-defs ns-name)
                      (let [{:keys [output-dir cache-analysis]} opts]
                        (when (and (true? cache-analysis) output-dir)
@@ -3001,25 +2696,25 @@
                  (throw e)))))))))
 
 #?(:clj
-   (defn emit-source [src ^File dest ext opts]
-     (if (esm-mode? opts)
-       ;; written to a temporary file first, dev servers watching the output
-       ;; directory never see a partially written module
-       (let [tmp (io/file (str (.getPath dest) ".tmp"))
-             ret (try
-                   (emit-source* src dest tmp ext opts)
-                   (catch Throwable e
-                     (.delete tmp)
-                     (throw e)))
-             dts (io/file (string/replace (.getPath dest) #"\.js$" ".d.ts"))]
-         (when-not (false? (:esm-dts opts))
-           (spit dts (:esm-dts ret)))
-         (java.nio.file.Files/move (.toPath tmp) (.toPath dest)
-           (into-array java.nio.file.CopyOption
-             [java.nio.file.StandardCopyOption/REPLACE_EXISTING
-              java.nio.file.StandardCopyOption/ATOMIC_MOVE]))
-         ret)
-       (emit-source* src dest dest ext opts))))
+   (defn emit-source
+     "Writes the module of src to dest, and its TypeScript declarations. To a
+     temporary file first: dev servers watching the output directory never
+     see a partially written module."
+     [src ^File dest ext opts]
+     (let [tmp (io/file (str (.getPath dest) ".tmp"))
+           ret (try
+                 (emit-source* src dest tmp ext opts)
+                 (catch Throwable e
+                   (.delete tmp)
+                   (throw e)))
+           dts (io/file (string/replace (.getPath dest) #"\.js$" ".d.ts"))]
+       (when-not (false? (:esm-dts opts))
+         (spit dts (:esm-dts ret)))
+       (java.nio.file.Files/move (.toPath tmp) (.toPath dest)
+         (into-array java.nio.file.CopyOption
+           [java.nio.file.StandardCopyOption/REPLACE_EXISTING
+            java.nio.file.StandardCopyOption/ATOMIC_MOVE]))
+       ret)))
 
 #?(:clj
    (defn compile-file*
@@ -3029,30 +2724,26 @@
           (:options @env/*compiler*))))
      ([^File src ^File dest opts]
       (ensure
-        ;; Under ES module output, compiling cljs.core analyzes it first
-        ;; without writing its analysis cache, which the compile writes
-        ;; right after
-        (with-core-cljs (cond-> opts
-                          (and (esm-mode? opts) (= 'cljs.core (:ns (ana/parse-ns src))))
-                          (assoc :cache-analysis false))
-          (fn []
-            (when (and (or ana/*verbose* (:verbose opts))
-                       (not (:compiler-stats opts)))
-              (util/debug-prn "Compiling" (str src) "to" (str dest)))
-            (util/measure (and (or ana/*verbose* (:verbose opts))
-                               (:compiler-stats opts))
-              (str "Compiling " (str src) " to " (str dest))
-              (let [ext (util/ext src)
-                   {:keys [ns] :as ns-info} (ana/parse-ns src)]
-               (if-let [cached (cached-core ns ext opts)]
-                 [(emit-cached-core src dest cached opts) false]
-                 (let [opts (if (macro-ns? ns ext opts)
-                              (assoc opts :macros-ns true)
-                              opts)
-                       dest-exists? (.exists dest)
-                       ret [(emit-source src dest ext opts) dest-exists?]]
-                   (.setLastModified ^File dest (util/last-modified src))
-                   ret))))))))))
+        (let [{:keys [ns]} (ana/parse-ns src)]
+          ;; compiling cljs.core analyzes it first without writing its
+          ;; analysis cache, which the compile writes right after
+          (with-core-cljs (cond-> opts
+                            (= 'cljs.core ns)
+                            (assoc :cache-analysis false))
+            (fn []
+              (when (and (or ana/*verbose* (:verbose opts))
+                         (not (:compiler-stats opts)))
+                (util/debug-prn "Compiling" (str src) "to" (str dest)))
+              (util/measure (and (or ana/*verbose* (:verbose opts))
+                                 (:compiler-stats opts))
+                (str "Compiling " (str src) " to " (str dest))
+                (let [ext  (util/ext src)
+                      opts (if (macro-ns? ns ext opts)
+                             (assoc opts :macros-ns true)
+                             opts)
+                      ret  (emit-source src dest ext opts)]
+                  (.setLastModified ^File dest (util/last-modified src))
+                  ret)))))))))
 
 #?(:clj
    (defn requires-compilation?
@@ -3062,47 +2753,27 @@
         (when env/*compiler*
           (:options @env/*compiler*))))
      ([^File src ^File dest opts]
-      (let [{:keys [ns requires]} (ana/parse-ns src)]
-        (if (and (= 'cljs.loader ns) (not (contains? opts :cache-key)))
-          false
-          (ensure
-           (or (not (.exists dest))
-               (util/changed? src dest)
-               (let [version' (util/compiled-by-version dest)
-                     version (util/clojurescript-version)]
-                 (and version (not= version version')))
-               (and opts
-                    ;; ns first: the resource lookup searches the classpath
-                    ;; under its class loader's lock, for every namespace
-                    (not (and (= 'cljs.core ns) (io/resource "cljs/core.aot.js")))
-                    (not= (ana/build-affecting-options opts)
-                          (ana/build-affecting-options (util/build-options dest))))
-               (and opts (:source-map opts)
-                    (if (= (:optimizations opts) :none)
-                      (not (.exists (io/file (str (.getPath dest) ".map"))))
-                      (not (get-in @env/*compiler* [::compiled-cljs (.getAbsolutePath dest)]))))
-               (when-let [recompiled' (and *recompiled* @*recompiled*)]
-                 (some requires recompiled')))))))))
+      (ensure
+        (or (not (.exists dest))
+            (util/changed? src dest)
+            (let [version' (util/compiled-by-version dest)
+                  version (util/clojurescript-version)]
+              (and version (not= version version')))
+            (and opts
+                 (not= (ana/build-affecting-options opts)
+                       (ana/build-affecting-options (util/build-options dest))))
+            (and opts (:source-map opts)
+                 (not (.exists (io/file (str (.getPath dest) ".map"))))))))))
 
 #?(:clj
    (defn compile-file
-     "Compiles src to a file of the same name, but with a .js extension,
-      in the src file's directory.
-
-      With dest argument, write file to provided location. If the dest
-      argument is a file outside the source tree, missing parent
-      directories will be created. The src file will only be compiled if
-      the dest file has an older modification time.
+     "Compiles src to the module dest, creating missing parent directories,
+     unless dest is up to date (see requires-compilation?), or :force.
 
       Both src and dest may be either a String or a File.
 
       Returns a map containing {:ns .. :provides .. :requires .. :file ..}.
-      If the file was not compiled returns only {:file ...}"
-     ([src]
-      (let [dest (rename-to-js src)]
-        (compile-file src dest
-          (when env/*compiler*
-            (:options @env/*compiler*)))))
+      If the file was not compiled returns its ns info with :out-file."
      ([src dest]
       (compile-file src dest
         (when env/*compiler*
@@ -3115,8 +2786,7 @@
                 ana/*cljs-warnings*    ana/*cljs-warnings*]
         (let [nses      (get @env/*compiler* ::ana/namespaces)
               src-file  (io/file src)
-              dest-file (io/file dest)
-              opts      (merge {:optimizations :none} opts)]
+              dest-file (io/file dest)]
           (if (.exists src-file)
             (try
               (let [{ns :ns :as ns-info} (ana/parse-ns src-file dest-file opts)
@@ -3134,110 +2804,17 @@
                                (not= 'cljs.core ns)
                                (not= :interactive (:mode opts)))
                       (ana/remove-namespace! env/*compiler* ns))
-                    (let [[ret recompiled?] (compile-file* src-file dest-file opts)]
-                      (when (and *recompiled*
-                                 recompiled?)
-                        (swap! *recompiled* conj ns))
-                      ret))
+                    (compile-file* src-file dest-file opts))
                   (do
                     ;; populate compilation environment with analysis information
                     ;; when constants are optimized
-                    (when (or (and (= ns 'cljs.loader)
-                                   (not (contains? opts :cache-key)))
-                              (and (true? (:optimize-constants opts))
-                                   (nil? (get-in nses [ns :defs]))))
+                    (when (and (true? (:optimize-constants opts))
+                               (nil? (get-in nses [ns :defs])))
                       (with-core-cljs opts (fn [] (ana/analyze-file src-file opts))))
                     (assoc ns-info :out-file (.toString dest-file)))))
               (catch Exception e
                 (throw (ex-info (str "failed compiling file:" src) {:file src :clojure.error/phase :compilation} e))))
             (throw (util/compilation-error (java.io.FileNotFoundException. (str "The file " src " does not exist."))))))))))
-
-#?(:clj
-   (defn cljs-files-in
-     "Return a sequence of all .cljs and .cljc files in the given directory."
-     [dir]
-     (map io/file
-       (reduce
-         (fn [m x]
-           (if (.endsWith ^String x ".cljs")
-             (cond-> (conj m x)
-               (contains? m (str (subs x 0 (dec (count x))) "c"))
-               (set/difference #{(str (subs x 0 (dec (count x))) "c")}))
-             ;; ends with .cljc
-             (cond-> m
-               (not (contains? m (str (subs x 0 (dec (count x))) "s")))
-               (conj x))))
-         #{}
-         (into []
-           (comp
-             (filter
-               #(let [name (.getName ^File %)]
-                  (and (or (.endsWith name ".cljs")
-                         (.endsWith name ".cljc"))
-                    (not= \. (first name))
-                    (not (contains? cljs-reserved-file-names name)))))
-             (map #(.getPath ^File %)))
-           (file-seq dir))))))
-
-#?(:clj
-   (defn compile-root
-     "Looks recursively in src-dir for .cljs files and compiles them to
-      .js files. If target-dir is provided, output will go into this
-      directory mirroring the source directory structure. Returns a list
-      of maps containing information about each file which was compiled
-      in dependency order."
-     ([src-dir]
-      (compile-root src-dir "out"))
-     ([src-dir target-dir]
-      (compile-root src-dir target-dir
-        (when env/*compiler*
-          (:options @env/*compiler*))))
-     ([src-dir target-dir opts]
-      (swap! env/*compiler* assoc :root src-dir)
-      (let [src-dir-file (io/file src-dir)
-            inputs (deps/dependency-order
-                     (map #(ana/parse-ns %)
-                       (cljs-files-in src-dir-file)))]
-        (binding [*inputs* (zipmap (map :ns inputs) inputs)]
-          (loop [inputs (seq inputs) compiled []]
-            (if inputs
-              (let [{:keys [source-file] :as ns-info} (first inputs)
-                    output-file (util/to-target-file target-dir ns-info)
-                    ijs (compile-file source-file output-file opts)]
-                (recur
-                  (next inputs)
-                  (conj compiled
-                    (assoc ijs :file-name (.getPath output-file)))))
-              compiled)))))))
-
-#?(:clj
-   (defn find-source [file]
-     (ana/parse-ns file)))
-
-#?(:clj
-   (defn find-root-sources
-     [src-dir]
-      (let [src-dir-file (io/file src-dir)]
-        (map find-source (cljs-files-in src-dir-file)))))
-
-;; TODO: needs fixing, table will include other things than keywords - David
-
-(defn emit-constants-table [table]
-  (emitln "goog.provide('" (munge ana/constants-ns-sym) "');")
-  (emitln "goog.require('cljs.core');")
-  (doseq [[sym value] table]
-    (let [ns   (namespace sym)
-          name (name sym)]
-      (emits "cljs.core." value " = ")
-      (cond
-        (keyword? sym) (emits-keyword sym)
-        (symbol? sym) (emits-symbol sym)
-        :else (throw
-                (ex-info
-                  (str "Cannot emit constant for type " (type sym))
-                  {:error :invalid-constant-type
-                   :clojure.error/phase :compilation})))
-      (emits ";\n"))))
 
 #?(:clj
    (defn emit-esm-constants-table
@@ -3247,46 +2824,10 @@
      (binding [*esm-emitting* true
                ana/*cljs-ns*  ana/constants-ns-sym
                ;; the namespaces cc references, cljs.core is imported below
-               *esm*          {:refs (atom #{}) :self-import (atom false)}]
+               *esm*          (esm-state)]
        (emitln "import * as " (esm-ns-alias 'cljs.core) " from \""
          (esm-ns-path ana/constants-ns-sym 'cljs.core) "\";")
        (doseq [[x value] (sort-by (comp str val) table)]
          (emits "export const " value " = /*@__PURE__*/ ")
          (if (keyword? x) (emits-keyword x) (emits-symbol x))
          (emitln ";")))))
-
-#?(:clj
-   (defn emit-constants-table-to-file [table dest]
-     (io/make-parents dest)
-     (with-open [out ^java.io.Writer (io/make-writer dest {})]
-       (binding [*out* out]
-         (emit-constants-table table)))))
-
-(defn emit-externs
-  ([externs]
-   (emit-externs [] externs (atom #{})
-     (when env/*compiler* (ana/get-externs))))
-  ([prefix externs top-level known-externs]
-   (loop [ks (seq (keys externs))]
-     (when ks
-       (let [k (first ks)
-             [top :as prefix'] (conj prefix k)]
-         (when (and (not= 'prototype k)
-                    (nil? (get-in known-externs prefix')))
-           (if-not (or (contains? @top-level top)
-                       (contains? known-externs top))
-             (do
-               (emitln "var " (string/join "." (map munge prefix')) ";")
-               (swap! top-level conj top))
-             (emitln (string/join "." (map munge prefix')) ";")))
-         (let [m (get externs k)]
-           (when-not (empty? m)
-             (emit-externs prefix' m top-level known-externs))))
-       (recur (next ks))))))
-
-#?(:clj
-   (defn emit-inferred-externs-to-file [externs dest]
-     (io/make-parents dest)
-     (with-open [out ^java.io.Writer (io/make-writer dest {})]
-       (binding [*out* out]
-         (emit-externs externs)))))

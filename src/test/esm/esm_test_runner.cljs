@@ -6,8 +6,8 @@
 ;; the terms of this license.
 ;; You must not remove this notice, or any other, from this software.
 
-;; The runtime test suite (test-runner) under :module-format :esm, minus
-;; cljs.npm-deps-test which exercises Closure's foreign lib processing.
+;; The runtime test suite, compiled to ES modules and run with Node.js by
+;; script/test-esm.
 
 (ns esm-test-runner
   (:require [cljf.esm-test]

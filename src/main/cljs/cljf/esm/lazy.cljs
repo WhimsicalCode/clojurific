@@ -7,7 +7,7 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns cljf.esm.lazy
-  "Lazily loaded code under :module-format :esm. (loadable my.ns/var)
+  "Lazily loaded code. (loadable my.ns/var)
   references a var of a namespace loaded with a dynamic import(), bundlers
   split it and everything only it requires into separate chunks. The API
   follows shadow.lazy."

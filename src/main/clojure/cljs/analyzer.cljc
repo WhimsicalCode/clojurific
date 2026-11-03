@@ -183,8 +183,7 @@
   "Returns false-y, :warn, or :error based on configuration and the
    current value of *unchecked-arrays*."
   []
-  (when (and (not= :advanced (:optimizations (compiler-options)))
-             (not *unchecked-arrays*))
+  (when-not *unchecked-arrays*
     *checked-arrays*))
 
 (def js-reserved
@@ -284,7 +283,7 @@
 
 (defmethod error-message :esm-unsupported-goog-ns
   [warning-type {:keys [ns] :as info}]
-  (str "Closure Library namespace " ns " is not available under :module-format :esm"))
+  (str "Closure Library namespace " ns " is not available"))
 
 (defmethod error-message :undeclared-ns
   [warning-type {:keys [ns-sym js-provide] :as info}]
@@ -912,23 +911,6 @@
       (or (some? (get (:requires ns) prefix))
           (some? (get (:imports ns) prefix))))))
 
-(defn- internal-js-module-exists?
-  [js-module-index module]
-  ;; we need to check both keys and values of the JS module index, because
-  ;; macroexpansion will be looking for the provided name - António Monteiro
-  (contains?
-    (into #{}
-      (mapcat (fn [[k v]]
-                [k (:name v)]))
-      js-module-index)
-    (str module)))
-
-(def js-module-exists?* (memoize internal-js-module-exists?))
-
-(defn js-module-exists?
-  [module]
-  (js-module-exists?* (get-in @env/*compiler* [:js-module-index]) module))
-
 (defn node-module-dep?
   #?(:cljs {:tag boolean})
   [module]
@@ -949,19 +931,6 @@
     (or (contains? global-exports (symbol module))
         (contains? global-exports (name module)))))
 
-(defn goog-module-dep?
-  [module]
-  (let [[module _] (lib&sublib module)
-        module-str (str module)
-        options    (compiler-options)]
-    ;; CLJS-3330: flag for loading some old things in the old way to give time
-    ;; for library authors to migrate
-    (if (and (:global-goog-object&array options)
-             (#{"goog.object" "goog.array"} module-str))
-      false
-      (and (not= :esm (:module-format options))
-           (= :goog (get-in @env/*compiler* [:js-dependency-index module-str :module]))))))
-
 (defn confirm-var-exists
   ([env prefix suffix]
    (let [warn (confirm-var-exist-warning env prefix suffix)]
@@ -978,8 +947,7 @@
      (when (and (not (implicit-import? env prefix suffix))
                 (not (loaded-js-ns? env prefix))
                 (not (and (= 'cljs.core prefix) (= 'unquote suffix)))
-                (nil? (gets @env/*compiler* ::namespaces prefix :defs suffix))
-                (not (js-module-exists? prefix)))
+                (nil? (gets @env/*compiler* ::namespaces prefix :defs suffix)))
        (missing-fn env prefix suffix)))))
 
 (defn confirm-var-exists-throw []
@@ -1016,8 +984,7 @@
              (nil? (gets @env/*compiler* ::namespaces ns-sym))
              ;; macros may refer to namespaces never explicitly required
              ;; confirm that the library at least exists
-             #?(:clj (nil? (util/ns->source ns-sym)))
-             (not (js-module-exists? ns-sym)))
+             #?(:clj (nil? (util/ns->source ns-sym))))
     (warning :undeclared-ns env {:ns-sym ns-sym :js-provide ns-sym})))
 
 (defn core-name?
@@ -1162,16 +1129,6 @@ x                          (not (contains? ret :info)))
                (recur (next pre) externs' top
                  (update ret :resolved conj x))))))))))
 
-(defn normalize-unresolved-prefix
-  [pre]
-  (cond-> pre
-    (< 1 (count pre))
-    (cond->
-      (-> pre pop peek meta :ctor)
-      (-> pop
-        (conj 'prototype)
-        (conj (peek pre))))))
-
 (defn has-extern?*
   [pre externs]
   (boolean (resolve-extern pre externs)))
@@ -1213,12 +1170,6 @@ x                          (not (contains? ret :info)))
   (str "node$module$" (munge (string/replace (str name) #"[.\/]" #?(:clj "\\$"
                                                                     :cljs "$$")))))
 
-(defn munge-goog-module-lib
-  ([name]
-   (str "goog$module$" (munge (string/replace (str name) #"[.\/]" #?(:clj "\\$" :cljs "$$")))))
-  ([ns name]
-   (str (munge ns) "." (munge-goog-module-lib name))))
-
 (defn munge-global-export [name]
   (str "global$module$" (munge (string/replace (str name) #"[.\/]" #?(:clj "\\$"
                                                                       :cljs "$$")))))
@@ -1240,25 +1191,13 @@ x                          (not (contains? ret :info)))
 
 (defn ns->module-type [ns]
   (cond
-    (goog-module-dep? ns) :goog-module
-    (js-module-exists? ns) :js
     (node-module-dep? ns) :node
     (dep-has-global-exports? ns) :global))
 
 (defmulti resolve* (fn [env sym full-ns current-ns] (ns->module-type full-ns)))
 
-(defmethod resolve* :js
-  [env sym full-ns current-ns]
-  {:name (symbol (str full-ns) (str (name sym)))
-   :op :js-var
-   :ns full-ns})
-
 (defn extern-pre [sym current-ns]
-  (let [pre (into '[Object] (->> (string/split (name sym) #"\.") (map symbol) vec))]
-    (when-not (has-extern? pre)
-      (swap! env/*compiler* update-in
-        (into [::namespaces current-ns :externs] pre) merge {}))
-    pre))
+  (into '[Object] (->> (string/split (name sym) #"\.") (map symbol) vec)))
 
 (defn node-like?
   ([]
@@ -1281,15 +1220,6 @@ x                          (not (contains? ret :info)))
      :name    (symbol (str current-ns) (str (munge-node-lib full-ns) "." (name sym)))
      :op      :js-var
      :foreign true}))
-
-(defmethod resolve* :goog-module
-  [env sym full-ns current-ns]
-  (let [sym-ast (gets @env/*compiler* ::namespaces full-ns :defs (symbol (name sym)))]
-    (merge sym-ast
-      {:name (symbol (str current-ns) (str (munge-goog-module-lib full-ns) "." (name sym)))
-       :ns   current-ns
-       :op   :var
-       :unaliased-name (symbol (str full-ns) (name sym))})))
 
 (defmethod resolve* :global
   [env sym full-ns current-ns]
@@ -1332,19 +1262,13 @@ x                          (not (contains? ret :info)))
   [ns env]
   (let [ns (resolve-ns-alias env ns)]
     (and (required? ns env)
-         (or (js-module-exists? ns)
-             (node-module-dep? ns)
+         (or (node-module-dep? ns)
              (dep-has-global-exports? ns)))))
 
 (defn resolve-invokeable-ns [ns current-ns env]
   (let [ns (resolve-ns-alias env ns)
         module-type (ns->module-type ns)]
     (case module-type
-      :js     {:name (symbol
-                       (or (gets @env/*compiler* :js-module-index ns :name)
-                           (resolve-ns-alias env ns)))
-               :op :js-var
-               :ns 'js}
       :node   {:name (symbol (str current-ns)
                        (munge-node-lib (resolve-ns-alias env ns)))
                :op :js-var
@@ -1355,15 +1279,6 @@ x                          (not (contains? ret :info)))
                :op :js-var
                :ns current-ns
                :tag 'js})))
-
-(defn resolve-import
-  "goog.modules are deterministically assigned to a property of the namespace,
-   we cannot expect the reference will be globally available, so we resolve to
-   namespace local reference."
-  [env import]
-  (if (goog-module-dep? import)
-    (symbol (munge-goog-module-lib (-> env :ns :name) import))
-    import))
 
 ;; core.async calls `macroexpand-1` manually with an ill-formed
 ;; :locals map. Normally :locals maps symbols maps, but
@@ -1431,12 +1346,7 @@ x                          (not (contains? ret :info)))
 
            :else
            (let [pre (->> (string/split (name sym) #"\.") (map symbol) vec)
-                 res (resolve-extern (->> (string/split (name sym) #"\.") (map symbol) vec))]
-             (when (and (not res)
-                        ;; ignore exists? usage
-                        (not (-> sym meta ::no-resolve)))
-               (swap! env/*compiler* update-in
-                 (into [::namespaces (-> env :ns :name) :externs] pre) merge {}))
+                 res (resolve-extern pre)]
              (merge
                {:name sym
                 :op :js-var
@@ -1464,10 +1374,7 @@ x                          (not (contains? ret :info)))
                                     :cljs (identical? "clojure.core" ns))
                                "cljs.core"
                                ns)
-                     full-ns (resolve-ns-alias env ns
-                               (or (and (js-module-exists? ns)
-                                        (gets @env/*compiler* :js-module-index ns :name))
-                                   (symbol ns)))]
+                     full-ns (resolve-ns-alias env ns (symbol ns))]
                  (when (some? confirm)
                    (when (not= current-ns full-ns)
                      (confirm-ns env full-ns))
@@ -1483,11 +1390,7 @@ x                          (not (contains? ret :info)))
                (update resolved :name #(symbol (str % "." suffix)))
                ;; glib imports (i.e. (:import [goog.module ModuleLoader])
                ;; are always just dotted symbols after the recursion
-               (let [s   (str
-                           (cond->> s
-                             (goog-module-dep? sym)
-                             (resolve-import env)))
-                     idx (.lastIndexOf (str s) ".")
+               (let [idx (.lastIndexOf (str s) ".")
                      pre (subs s 0 idx)
                      suf (subs s (inc idx))]
                  {:op   :var
@@ -2916,23 +2819,9 @@ x                          (not (contains? ret :info)))
 #?(:clj
    (defn locate-src
      "Given a namespace return the corresponding ClojureScript (.cljs or .cljc)
-     resource on the classpath or file from the root of the build."
+     resource on the classpath."
      [ns]
-     (or (util/ns->source ns)
-       ;; Find sources available in inputs given to cljs.closure/build - Juho Teperi
-       (some (fn [source]
-               (if (= ns (:ns source))
-                 (:source-file source)))
-             (:sources @env/*compiler*))
-       ;; Find sources in directory given to cljs.compiler/compile-root - Juho Teperi
-       (let [rootp (when-let [root (:root @env/*compiler*)]
-                     (.getPath ^File root))
-             cljsf (io/file rootp (ns->relpath ns :cljs))
-             cljcf (io/file rootp (ns->relpath ns :cljc))]
-         (if (and (.exists cljsf) (.isFile cljsf))
-           cljsf
-           (if (and (.exists cljcf) (.isFile cljcf))
-             cljcf))))))
+     (util/ns->source ns)))
 
 (defn external-dep?
   "Returns true if the library is an :external? foreign dep. This means no source is provided
@@ -2973,21 +2862,11 @@ x                          (not (contains? ret :info)))
        (doseq [dep deps]
          (when-not (or (some? (get-in compiler [::namespaces dep :defs]))
                        (node-module-dep? dep)
-                       (js-module-exists? (name dep))
                        #?(:clj (deps/find-classpath-lib dep)))
            (let [idx (:js-dependency-index compiler)
                  dep (-> dep lib&sublib first)]
-             (if (contains? idx (name dep))
-               (let [dep-name (name dep)]
-                 ;; under ES module output Closure Library namespaces are
-                 ;; treated as untyped JavaScript, see cljf.esm
-                 (when (and (string/starts-with? dep-name "goog.")
-                            (not= :esm (:module-format opts)))
-                   #?(:clj (let [js-lib (get idx dep-name)
-                                 ns (do (require 'cljs.externs)
-                                        ((resolve 'cljs.externs/analyze-goog-file)
-                                         (:file js-lib) (symbol dep-name)))]
-                             (swap! env/*compiler* update-in [::namespaces dep] merge ns)))))
+             ;; Closure Library namespaces are untyped JavaScript, see cljf.esm
+             (when-not (contains? idx (name dep))
                #?(:clj  (if-some [src (locate-src dep)]
                           (analyze-file src opts)
                           (throw
@@ -3328,13 +3207,6 @@ x                          (not (contains? ret :info)))
     (do
       (basic-validate-ns-spec env macros? spec)
       (let [[lib & opts] spec
-            ;; We need to load JS modules by the name that has been created by the
-            ;; Google Closure compiler, e.g. module$resources$libs$calculator.
-            ;; This means that we need to create an alias from the module name
-            ;; given with :provides to the new name.
-            [lib js-module-provides] (if-some [js-module-name (gets @env/*compiler* :js-module-index (str lib) :name)]
-                                       [(symbol js-module-name) lib]
-                                       [lib nil])
             {alias :as referred :refer renamed :rename
              :or {alias (if (string? lib)
                           (symbol (munge lib))
@@ -3357,7 +3229,7 @@ x                          (not (contains? ret :info)))
                 (warning :js-used-as-alias env {:spec spec})))
             (swap! aliases
               update-in [alias-type]
-              conj [alias lib] (when js-module-provides [js-module-provides lib]))))
+              conj [alias lib])))
         (when-not (or (and (sequential? referred)
                            (every? symbol? referred))
                       (nil? referred))
@@ -3366,17 +3238,15 @@ x                          (not (contains? ret :info)))
               (parse-ns-error-msg spec
                 ":refer must be followed by a sequence of symbols in :require / :require-macros"))))
         (when-not macros?
-          ;; under ES module output string requires are imports resolved by
-          ;; the bundler, i.e. npm packages or relative paths
-          (when (and (= :esm (:module-format (compiler-options)))
-                     (or (string? lib) (esm-npm-symbol? lib)))
+          ;; string requires are imports resolved by the bundler, i.e. npm
+          ;; packages or relative paths
+          (when (or (string? lib) (esm-npm-symbol? lib))
             (swap! env/*compiler* update :node-module-index
               (fnil conj #{}) (str (first (lib&sublib lib)))))
           (swap! deps conj lib))
         (merge
           (when (some? alias)
-            {rk (merge {alias lib} {lib lib}
-                  (when js-module-provides {js-module-provides lib}))})
+            {rk (merge {alias lib} {lib lib})})
           (when (some? referred-without-renamed)
             {uk (apply hash-map (interleave referred-without-renamed (repeat lib)))})
           (when (some? renamed)
@@ -3622,7 +3492,7 @@ x                          (not (contains? ret :info)))
              src   (cond
                      (.isFile f) f
                      (instance? URL file) file
-                     ;; cljs.closure's sources in jars, file:/x.jar!/my/ns.cljs
+                     ;; sources in jars, file:/x.jar!/my/ns.cljs
                      (re-find #"^file:.*!/" s) (URL. (str "jar:" s))
                      (re-find #"^(?:file|jar):" s) (URL. s))
              cache ^java.util.concurrent.ConcurrentHashMap jsx-literals-cache]
@@ -4116,12 +3986,6 @@ x                          (not (contains? ret :info)))
                        (string/join "."
                          (cond-> pre' (= 'prototype (last pre')) butlast)))
                :property prop})))))
-    (when (js-tag? tag)
-      (let [pre (-> tag meta :prefix)]
-        (when-not (has-extern? pre)
-          (swap! env/*compiler* update-in
-            (into [::namespaces (-> env :ns :name) :externs]
-              (normalize-unresolved-prefix pre)) merge {}))))
     (case dot-action
       ::access (let [children [:target]]
                  {:op :host-field
@@ -4821,9 +4685,6 @@ x                          (not (contains? ret :info)))
         ast))
     ast))
 
-(defn- repl-self-require? [env deps]
-  (and (:repl-env env) (some #{*cljs-ns*} deps)))
-
 #?(:clj
    (defn ns-side-effects
      [env {:keys [op] :as ast} opts]
@@ -4831,7 +4692,7 @@ x                          (not (contains? ret :info)))
        (let [{:keys [name deps uses require-macros use-macros reload reloads]} ast]
          (when (and *analyze-deps* (seq deps))
            (analyze-deps
-             (if (repl-self-require? env deps) 'cljs.user name)
+             name
              deps env (dissoc opts :macros-ns)))
          (if *load-macros*
            (do
@@ -5112,8 +4973,8 @@ x                          (not (contains? ret :info)))
 #?(:clj
    (defn ^:dynamic parse-ns
      "Helper for parsing only the essential namespace information from a
-      ClojureScript source file and returning a cljs.closure/IJavaScript compatible
-      map _not_ a namespace AST node.
+      ClojureScript source file and returning a map _not_ a namespace AST
+      node.
 
       By default does not load macros or perform any analysis of dependencies. If
       opts parameter provided :analyze-deps and :load-macros keys their values will
@@ -5248,8 +5109,8 @@ x                          (not (contains? ret :info)))
    (defn build-affecting-options [opts]
      (select-keys opts
        [:static-fns :fn-invoke-direct :optimize-constants :elide-asserts :target :nodejs-rt
-        :cache-key :checked-arrays :language-out :optimizations :lite-mode :elide-to-string
-        :module-format :esm-hmr :esm-repl :npm-interop :closure-defines :preloads :mode :load-tests
+        :cache-key :checked-arrays :language-out :lite-mode :elide-to-string
+        :esm-hmr :esm-repl :npm-interop :closure-defines :preloads :mode :load-tests
         :checked-set-literals :warnings-as-errors :jsx-import-source])))
 
 #?(:clj

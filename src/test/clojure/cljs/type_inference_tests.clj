@@ -386,30 +386,3 @@
                (analyze test-env
                  '(let [g (Foo.)]
                     g))))))))
-
-(deftest test-goog-import-ctor-infer
-  (is (= 'goog.history/Html5History
-         (:tag
-           (env/with-compiler-env (env/default-compiler-env)
-             (ana/analyze-form-seq
-               '[(ns test.foo
-                   (:import [goog.history Html5History]))
-                 (Html5History.)]
-               {} true))))))
-
-(deftest test-goog-infer
-  (is (= 'boolean
-        (:tag (env/with-compiler-env (env/default-compiler-env)
-                (ana/analyze-form-seq
-                  '[(ns test.foo
-                      (:require [goog.string :as gstring]))
-                    (gstring/contains "foobar" "foo")]
-                  {} true)))))
-  (is (= 'boolean
-        (:tag
-          (env/with-compiler-env (env/default-compiler-env)
-            (ana/analyze-form-seq
-              '[(ns test.foo
-                  (:require [goog.object :as gobject]))
-                (gobject/containsKey (js-object) "foo")]
-              {} true))))))

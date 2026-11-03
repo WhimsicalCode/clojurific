@@ -8,33 +8,11 @@
   org.clojure/tools.reader {:mvn/version "1.3.6"}
   org.clojure/test.check {:mvn/version "1.1.1"}}
  :aliases
- {:closure               {:extra-deps {com.google.javascript/closure-compiler {:mvn/version "v20250820"}}}
-  :cljs-repl             {:extra-paths ["src/test/cljs"]
-                          :main-opts ["-m" "cljs.main" "-re" "node" "-d" ".cljs_repl" "-r"]}
-  :cljs-brepl            {:extra-paths ["src/test/cljs"]
-                          :main-opts ["-m" "cljs.main" "-d" ".cljs_brepl" "-r"]}
-  :cljs-lite-repl        {:extra-paths ["src/test/cljs"]
-                          :main-opts ["-m" "cljs.main" "-co" "{:lite-mode true}" "-re" "node" "-d" ".cljs_lite_repl" "-r"]}
-  :cli.test.run          {:extra-paths ["src/test/cljs_cli"]
-                          :main-opts ["-i" "src/test/cljs_cli/cljs_cli/test_runner.clj"
-                                      "-e" "(cljs-cli.test-runner/-main)"]}
-  :compiler.test         {:extra-paths ["src/test/cljs" "src/test/cljs_build" "src/test/cljs_cp"
-                                        "src/test/clojure" "src/test/self"]
-                          :extra-deps {org.clojure/spec.alpha {:mvn/version "0.5.238"}}}
-  :compiler.test.run     {:main-opts ["-i" "src/test/clojure/cljs/test_runner.clj"
-                                      "-e" "(cljs.test-runner/-main)"]}
-  :benchmark.build       {:extra-paths ["benchmark"]
-                          :main-opts ["-m" "cljs.main" "-co" "resources/benchmark.edn" "-c"]}
-  :runtime.test.build    {:extra-paths ["src/test/cljs"]
-                          :main-opts ["-m" "cljs.main" "-co" "resources/test.edn" "-c"]}
-  :lite.test.build       {:extra-paths ["src/test/cljs"]
-                          :main-opts ["-m" "cljs.main" "-co" "resources/lite_test.edn" "-c"]}
-  :selfhost.test.build   {:extra-paths ["src/test/self"]
-                          :main-opts ["-m" "cljs.main" "-co" "resources/self_host_test.edn" "-c"]}
-  :selfparity.test.build {:extra-paths ["src/test/self"]
-                          :main-opts ["-i" "src/test/self/self_parity/setup.clj"
-                                      "-e" "(self-parity.setup/-main)"
-                                      "-m" "cljs.main" "-co" "resources/self_parity_test.edn" "-c"]}
-  :uberjar               {:extra-deps {com.github.seancorfield/depstar {:mvn/version "2.0.193"}}
-                          :exec-fn hf.depstar/uberjar
-                          :exec-args {:aot true}}}}
+ {;; the Closure Compiler and the parser of its externs (cljs.externs), for
+  ;; script/gen-default-externs only: the compiler doesn't need them
+  :closure           {:extra-paths ["script/gen_default_externs"]
+                      :extra-deps {com.google.javascript/closure-compiler {:mvn/version "v20250820"}}}
+  :compiler.test     {:extra-paths ["src/test/cljs" "src/test/clojure"]
+                      :extra-deps {org.clojure/spec.alpha {:mvn/version "0.5.238"}}}
+  :compiler.test.run {:main-opts ["-i" "src/test/clojure/cljs/test_runner.clj"
+                                  "-e" "(cljs.test-runner/-main)"]}}}

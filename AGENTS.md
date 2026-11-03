@@ -1,7 +1,9 @@
 # Clojurific
 
-Clojurific is a fork of ClojureScript: `:module-format :esm` compiles namespaces to ES modules
-bundled by Vite, without the Closure Compiler. Its coordinate is `com.whimsical/clojurific`;
+Clojurific is a fork of ClojureScript that compiles namespaces to ES modules bundled by Vite,
+without the Closure Compiler. ES modules are its only output: the classic compiler (`cljs.closure`,
+`goog.provide` output, `:advanced`, `cljs.main`, the classic REPLs, self-hosted `cljs.js`) was
+removed, and upstream changes are adopted by reimplementing them rather than by merging. Its coordinate is `com.whimsical/clojurific`;
 ClojureScript's namespaces stay `cljs.*`, so libraries written for ClojureScript work unchanged,
 and the fork's own are `cljf.*` (`cljf.esm`, `cljf.x`). Read
 [`README.md`](README.md) (usage, design, known gaps) before changing it.
@@ -33,27 +35,20 @@ and the fork's own are `cljf.*` (`cljf.esm`, `cljf.x`). Read
 - `no-clojurescript/` — an empty project replacing stock ClojureScript (`org.clojure/clojurescript`)
   through `:override-deps`
 - `src/test/clojure/cljf/esm_build_tests.clj`, `esm_repl_tests.clj` — build and REPL tests
+- `src/test/clojure/cljs/` — the analyzer's and the compiler's unit tests (`cljs.test-runner`)
+- `script/gen_default_externs/` — `cljs.externs`, the Closure Compiler's externs parser, which only
+  `script/gen-default-externs` uses (with the `:closure` alias)
 
 ## Testing
 
-`script/test-esm` runs the build and REPL tests, then the ClojureScript runtime test suite compiled
-to ES modules under Node.js. It must end with `0 failures, 0 errors.` It runs without the Closure
-Compiler on the classpath, which the ES module build doesn't need. Changes outside `cljf.esm` that
-can affect the classic compiler also need `script/test` (runtime tests, `:advanced`) and the
-compiler tests (`clojure -M:closure:compiler.test:compiler.test.run`). The classic compiler needs
-the Closure Compiler, which only the `:closure` alias adds: list it with the other aliases, e.g.
-`clojure -M:closure:runtime.test.build`.
+`script/test-esm` runs the analyzer's and the compiler's unit tests
+(`clojure -M:compiler.test:compiler.test.run`), the build and REPL tests, then the ClojureScript
+runtime test suite compiled to ES modules under Node.js. It must end with `0 failures, 0 errors.`
+Nothing runs with the Closure Compiler on the classpath but `script/gen-default-externs`.
 
-Without `script/bootstrap`'s jars and JS engine homes, `script/test` can't run: build the suites
-with `clojure -M:closure:runtime.test.build` (and `lite.test.build`, `selfhost.test.build`), run
-`builds/out-adv/core-advanced-test.js` and `builds/out-lite/lite-test.js` under Node with
-`globalThis.print = console.log` preloaded (`node -r`), and `builds/out-self/core-self-test.js` from
-the repository root (it reads `src/test/self/...` relative to the working directory).
-
-Gate code generation changes meant for ES module output on `*esm-emitting*` (in `core.cljc`
-macros, `(:module-format (cljs.analyzer/compiler-options))`): the compiler tests ratchet
-`:advanced` output size (`build_api_tests.clj`) and assert the emitted classic code
-(`test-optimized-invoke-emit`), which `script/test-esm` doesn't cover.
+The compiler emits ES modules only: there's no classic output to keep unchanged, so code
+generation changes need no gating. `*esm-emitting*` still tells emission (ES module names,
+`my$ns.var`) from analysis time munging (macros, `my.ns.var`).
 
 `script/test-clojars` installs the Clojars artifact into an empty local Maven repository and builds
 with it from the Clojure CLI. `script/test-launcher` tests the launcher and `create-clojurific`
@@ -63,14 +58,14 @@ projects with the local Maven repository; `CLJF_TEST_DOWNLOADS=1` adds a cold st
 one (about 20 MB from Maven Central). Java 17 is the launcher's minimum: run `script/test-esm` and
 `script/test-launcher` on it too after changes that could need a newer Java.
 
-After updating `com.google.javascript/closure-compiler` (e.g. when merging an upstream bump), run
+After updating `com.google.javascript/closure-compiler` (the `:closure` alias), run
 `script/gen-default-externs` and commit `src/main/clojure/cljs/externs/default.edn`, the default
 externs the analyzer reads without the Closure Compiler. After changing
 `src/main/js/cljf/resolver/deps.edn` (i.e. to update tools.deps), run `script/lock-resolver` and
 commit `src/main/js/cljf/resolver.lock.json`.
 
-ClojureScript namespaces requiring `cljs.repl` load `cljs/repl.cljc` on the JVM for its macros, so
-keep it free of load-time `cljs.closure` requires; `script/test-esm` fails without the jar otherwise.
+`cljs/repl.cljc` is only `cljs.repl`'s macros (`doc`, `source`, `dir`, `apropos`, `find-doc`) and
+the docs they read, which `cljf.esm.repl` and cider's orchard use; the classic REPL is gone.
 
 When diffing the compiler's output across changes, `:parallel-build` makes some local names
 nondeterministic (`shadow-depth` renames a local when a namespace starting with its name was already
@@ -81,13 +76,13 @@ analyzed): normalize `__$N` suffixes and gensym numbers, or build without `:para
 The npm package's version (`src/main/js/package.json`, and `create-clojurific`'s, which must match
 it) is `0.<minor>.<release>`: `<minor>` is the
 ClojureScript 1.x release the fork is based on (12 for 1.12.x), `<release>` counts Clojurific's
-releases from 1. Bump `<release>` for each release; when merging a new upstream minor release, set
+releases from 1. Bump `<release>` for each release; when adopting a new upstream minor release, set
 `<minor>` to it and `<release>` back to 1.
 
 [`CHANGELOG.md`](CHANGELOG.md) records the fork's changes since it was forked, not upstream's (its
 `changes.md` isn't kept). Add each noteworthy change under the `[Next]` release, in `### Added`,
 `### Changed` or `### Fixed` (in that order, only the ones with entries), as one concise bullet.
-Record merges of upstream ClojureScript too, naming the upstream commit or release. Omit changes
+Record upstream ClojureScript changes adopted too, naming the upstream commit or release. Omit changes
 only to tests, tooling or the fork's own unreleased features. When releasing, replace `[Next]` with
 the release date (`[YYYY-MM-DD]`) and start a new `[Next]` release with the next version.
 

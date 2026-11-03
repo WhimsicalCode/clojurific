@@ -7,7 +7,7 @@
 ;; You must not remove this notice, or any other, from this software.
 
 (ns cljf.esm-test
-  "Tests of behavior specific to :module-format :esm."
+  "Tests of behavior specific to ES module output."
   (:require ["node:path" :as node-path]
             [cljf.esm.lazy :as lazy]
             [cljs.test :refer-macros [async deftest is testing]]))

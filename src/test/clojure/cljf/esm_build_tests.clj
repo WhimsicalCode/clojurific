@@ -165,7 +165,6 @@
         sources (into {} [(write-source! dir 'test.d "(ns test.d) (defn f [x] (if (js/isNaN x) 1 2))"
                             (- (System/currentTimeMillis) 60000))])]
     (build! dir sources 'test.d)
-    (is (nil? (find-ns 'cljs.closure)))
     (is (nil? (find-ns 'cljs.externs)))
     (testing "the default externs' types, from cljs/externs/default.edn: isNaN returns a boolean"
       (is (string/includes? (output dir 'test.d) "if(isNaN(x))")))))

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The subset of Closure Library's base.js used by ClojureScript, as an ES
-// module for :module-format :esm.
+// module.
 
 export let global = globalThis;
 

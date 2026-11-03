@@ -26,9 +26,7 @@
            [java.util.concurrent.locks ReentrantLock]))
 
 (def default-opts
-  {:module-format  :esm
-   :optimizations  :none
-   :output-dir     "out"
+  {:output-dir     "out"
    :language-out   :es2020
    :static-fns     true
    :cache-analysis true
@@ -62,7 +60,7 @@
 
 (defn- source-file
   "Returns a File for a source URL. Sources in jars are copied to the output
-  directory, like cljs.closure does."
+  directory."
   ^File [^URL url ns output-dir]
   (if (jar-url? url)
     (let [ext  (util/ext url)
@@ -391,8 +389,8 @@
 (def ^:private ^:dynamic *api-changed*
   "Namespaces of a build recompiled with a different api, an atom: the
   namespaces requiring them are recompiled too, their output may depend on
-  it. Like cljs.closure's :recompile-dependents, without recompiling the
-  dependents of every namespace recompiled."
+  it. Like the classic compiler's :recompile-dependents, without
+  recompiling the dependents of every namespace recompiled."
   nil)
 
 (defn- missing-preloads?
@@ -767,8 +765,8 @@
        args))))
 
 (defn- cljs-warnings
-  "The analyzer's warnings with the :warnings option applied, like
-  cljs.closure: a map of warning types to true, false, :warning, :error or
+  "The analyzer's warnings with the :warnings option applied, as
+  ClojureScript's :warnings: a map of warning types to true, false, :warning, :error or
   :off, or one of them for the undeclared var and namespace warnings.
   :warnings-as-errors true makes every enabled warning an error, like
   shadow-cljs. Closure namespace munging doesn't happen under ES module
@@ -784,8 +782,8 @@
         (as-> ws (reduce-kv (fn [m k v] (assoc m k (if (#{true :warning} v) :error v))) ws ws)))))
 
 (defn compiler-bindings
-  "The dynamic bindings compiling with opts, as cljs.closure binds them:
-  :warnings, :elide-asserts and :load-tests."
+  "The dynamic bindings compiling with opts: :warnings, :elide-asserts and
+  :load-tests."
   [opts]
   {#'ana/*cljs-warnings* (cljs-warnings opts)
    #'*assert*            (not= true (:elide-asserts opts))
@@ -816,8 +814,8 @@
   (-> (merge default-opts (check-test-runner opts))
       (update :closure-defines normalize-closure-defines)
       release-defines
-      ;; as cljs.closure: keyword and symbol constants are hoisted into a
-      ;; constants module (see write-constants!)
+      ;; keyword and symbol constants are hoisted into a constants module
+      ;; (see write-constants!)
       (cond-> (true? (:optimize-constants opts)) (assoc :emit-constants true))
       ;; the generated test runner is a main namespace
       (cond-> (:test-runner opts)

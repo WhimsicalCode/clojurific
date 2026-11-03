@@ -1,4 +1,4 @@
-// Vite plugin for ClojureScript compiled to ES modules (:module-format :esm).
+// Vite plugin for ClojureScript compiled to ES modules (Clojurific).
 //
 // The ClojureScript compiler runs in a JVM, `vite build` runs a one-shot build
 // before bundling, `vite` (dev) runs the compiler in watch mode. Compiled

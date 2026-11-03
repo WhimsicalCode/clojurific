@@ -1325,7 +1325,7 @@
 (deftest test-cljs-2387
   (ana/no-warn
     (env/with-compiler-env test-cenv
-      (ana/analyze-file (io/file "src/test/cljs_build/analyzer_test/no_defs.cljs"))))
+      (ana/analyze-file (io/file "src/test/clojure/analyzer_test/no_defs.cljs"))))
   (is (= {} (get-in @test-cenv [::ana/namespaces 'analyzer-test.no-defs :defs]))))
 
 (deftest test-cljs-2475
@@ -1509,25 +1509,6 @@
       (is (= w2 "cljs.core/-, all arguments must be numbers, got [string] instead"))
       (is (= w3 "cljs.core//, all arguments must be numbers, got [number string] instead"))
       (is (= w4 "cljs.core/*, all arguments must be numbers, got [string] instead")))))
-
-;; this test does pass, but shows a current problem goog file analysis
-;; we only consider the functional API, we don't include information needed
-;; to infer usage of classes
-(deftest test-analyze-goog-ns
-  (let [cenv (env/default-compiler-env)]
-    (env/with-compiler-env cenv
-      (ana/analyze-form-seq
-        '[(ns test.foo
-           (:import [goog.history Html5History]))]))
-    (is (some? (get-in @cenv [::ana/namespaces 'goog.history.Html5History :defs])))))
-
-(deftest test-analyze-goog-ns-ctor
-  (let [cenv (env/default-compiler-env)]
-    (env/with-compiler-env cenv
-      (ana/analyze-form-seq
-        '[(ns test.foo
-            (:import [goog.history Html5History]))]))
-    (is (some? (get-in @cenv [::ana/namespaces 'goog.history.Html5History :defs 'Html5History])))))
 
 (deftest test-cljs-3239
   (let [cenv (env/default-compiler-env)]

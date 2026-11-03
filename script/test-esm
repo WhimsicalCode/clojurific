@@ -1,8 +1,14 @@
 #!/bin/sh
 
-# Runs the runtime test suite compiled to ES modules (:module-format :esm,
-# see cljf.esm) with Node.js, unbundled, and the tests of cljf.esm builds and
-# their REPL, with its nREPL server and cider-nrepl's middleware.
+# Runs the analyzer's and the compiler's unit tests (cljs.test-runner), the
+# tests of cljf.esm builds and their REPL, with its nREPL server and
+# cider-nrepl's middleware, and the runtime test suite compiled to ES modules
+# with Node.js, unbundled.
+
+if ! clojure -M:compiler.test:compiler.test.run; then
+  >&2 echo analyzer and compiler tests failed
+  exit 1
+fi
 
 if ! clojure -Sdeps '{:aliases {:esm-build-test {:extra-paths ["src/test/clojure" "src/test/esm_repl"]
                                               :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}

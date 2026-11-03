@@ -1106,12 +1106,9 @@
 (core/defmacro unsafe-cast
   "EXPERIMENTAL: Subject to change. Unsafely cast a value to a different type."
   [t x]
-  (if (= :esm (:module-format (cljs.analyzer/compiler-options)))
-    ;; only a Closure type annotation, which ES module output has no use for;
-    ;; the assignment would fail on a const local
-    x
-    (core/let [cast-expr (core/str "~{} = /** @type {" t "} */ (~{})")]
-      (core/list 'js* cast-expr x x))))
+  ;; only a Closure type annotation, which has no use here, as an assignment
+  ;; it would fail on a const local
+  x)
 
 (core/defmacro js-inline-comment
   "Emit an inline JavaScript comment."
@@ -1135,11 +1132,10 @@
    in JavaScript."
   [x]
   (core/cond
-    ;; under ES module output namespaces aren't reachable through a global
-    ;; path, namespaces of the build exist
+    ;; namespaces aren't reachable through a global path, namespaces of the
+    ;; build exist
     (core/and (core/symbol? x)
               (core/nil? (namespace x))
-              (= :esm (:module-format (cljs.analyzer/compiler-options)))
               (core/not (contains? (:locals &env) x))
               (comp/esm-module-ns? (core/str x)))
     true
@@ -1147,7 +1143,6 @@
     ;; nor are vars, check the var's binding itself
     (core/and (core/symbol? x)
               (core/not= "js" (namespace x))
-              (= :esm (:module-format (cljs.analyzer/compiler-options)))
               (core/let [{:keys [op ns]} (cljs.analyzer/resolve-var &env x)]
                 (core/and (= :var op) (core/some? ns) (comp/esm-module-ns? (core/str ns)))))
     (bool-expr (core/list 'js* "(typeof ~{} !== 'undefined')"
@@ -1157,7 +1152,6 @@
     ;; through them (react/a.b checks react/a, then react/a.b)
     (core/and (core/symbol? x)
               (core/not= "js" (namespace x))
-              (= :esm (:module-format (cljs.analyzer/compiler-options)))
               (core/not (contains? (:locals &env) x))
               (:foreign (cljs.analyzer/resolve-var &env x)))
     (core/let [segs (string/split (name x) #"\.")
@@ -1203,13 +1197,6 @@
 
 (core/defmacro symbol? [x]
   (bool-expr `(instance? Symbol ~x)))
-
-(core/defmacro ^:private esm-or
-  "esm in ES module output, else classic: for cljs.core's support of what
-  only ES module output supports, i.e. reading plain JavaScript objects (see
-  get), which classic output leaves out."
-  [esm classic]
-  (if (= :esm (:module-format (cljs.analyzer/compiler-options))) esm classic))
 
 (core/defmacro get-in
   "A literal path of constant keys, (get-in m [:a :b]), as the gets get-in makes,
@@ -3612,15 +3599,11 @@
            (core/cond
              (multi-arity-fn? fdecl)
              (multi-arity-fn name
-               (if (comp/checking-types?)
-                 (update-in m [:jsdoc] conj "@param {...*} var_args")
-                 m) fdecl (:def-emits-var &env))
+               m fdecl (:def-emits-var &env))
 
              (variadic-fn? fdecl)
              (variadic-fn name
-               (if (comp/checking-types?)
-                 (update-in m [:jsdoc] conj "@param {...*} var_args")
-                 m) fdecl (:def-emits-var &env))
+               m fdecl (:def-emits-var &env))
 
              :else
              (core/list 'def (with-meta name m)

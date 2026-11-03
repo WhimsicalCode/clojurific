@@ -9,7 +9,8 @@
 (ns cljs.analyzer.spec-tests
   (:require [cljs.analyzer :as ana]
             [cljs.analyzer.api :as ana-api :refer [no-warn]]
-            [cljs.compiler.api :as comp-api]
+            [cljs.compiler :as comp]
+            [cljs.env :as env]
             [cljs.analyzer-tests :refer [analyze ns-env]]
             [cljs.analyzer.specs :as a]
             [clojure.test :as test :refer [deftest is]]
@@ -248,8 +249,9 @@
     (is (s/valid? ::a/node node))))
 
 (deftest test-the-var
-  (let [node (comp-api/with-core-cljs {}
-               #(analyze ns-env '(var first)))]
+  (let [node (env/ensure
+               (comp/with-core-cljs {}
+                 #(analyze ns-env '(var first))))]
     (is (= :the-var (:op node)))
     (is (s/valid? ::a/node node))))
 

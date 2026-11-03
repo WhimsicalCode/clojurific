@@ -2094,7 +2094,7 @@ reduces them without incurring seq initialization"
         (native-satisfies? ILookup o)
         (-lookup o k)
 
-        :else (esm-or (js-object-lookup o k nil) nil))))
+        :else (js-object-lookup o k nil))))
   ([o k not-found]
     (if-not (nil? o)
       (cond
@@ -2114,7 +2114,7 @@ reduces them without incurring seq initialization"
         (native-satisfies? ILookup o)
         (-lookup o k not-found)
 
-        :else (esm-or (js-object-lookup o k not-found) not-found))
+        :else (js-object-lookup o k not-found))
       not-found)))
 
 (def ^:private REQ_NOT_FOUND #js {})
@@ -2550,12 +2550,10 @@ reduces them without incurring seq initialization"
       (if (associative? coll)
         (when (contains? coll k)
           (MapEntry. k (get coll k) nil))
-        (esm-or
-          ;; a plain JavaScript object's own property, see get
-          (let [v (get coll k lookup-sentinel)]
-            (when-not (identical? v lookup-sentinel)
-              (MapEntry. k v nil)))
-          nil)))))
+        ;; a plain JavaScript object's own property, see get
+        (let [v (get coll k lookup-sentinel)]
+          (when-not (identical? v lookup-sentinel)
+            (MapEntry. k v nil)))))))
 
 (defn distinct?
   "Returns true if no two of the arguments are ="

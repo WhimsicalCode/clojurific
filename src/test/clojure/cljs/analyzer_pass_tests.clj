@@ -80,7 +80,7 @@
           code     (with-out-str (emit ast))]
       (is (equiv-modulo-newlines code
             (string/replace
-              "(function (){var $SYM = true;\nreturn ((true) && ((($SYM) || (false))));\n})()"
+              "(function (){const $SYM = true;\nreturn ((true) && ((($SYM) || (false))));\n})()"
               "$SYM" (str local)))))))
 
 (deftest test-and-or-local

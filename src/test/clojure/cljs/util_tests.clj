@@ -51,8 +51,8 @@
       (System/setProperty "user.dir" initial))))
 
 (deftest test-path
-  (is (= (.getAbsolutePath (io/file "src/main/clojure/cljs/closure.clj"))
-         (util/path (io/as-url (io/file "src/main/clojure/cljs/closure.clj"))))))
+  (is (= (.getAbsolutePath (io/file "src/main/clojure/cljs/compiler.cljc"))
+         (util/path (io/as-url (io/file "src/main/clojure/cljs/compiler.cljc"))))))
 
 (deftest test-bytes-to-hex-str
   (is (= "09616263" (#'util/bytes-to-hex-str (.getBytes "\u0009abc")))))

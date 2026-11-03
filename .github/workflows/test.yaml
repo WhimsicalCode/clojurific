@@ -1,9 +1,10 @@
 name: Tests
 
-# The classic compiler's suites (with the Closure Compiler, the :closure
-# alias), the ES module suite without it, and the launcher's: cljf, the npm
-# package and the Clojars artifact. The ES module and launcher suites also run
-# on Java 17, the launcher's minimum.
+# The ES module suite (the analyzer's and compiler's unit tests, cljf.esm's
+# build and REPL tests, the runtime tests), and the launcher's: cljf, the npm
+# package and the Clojars artifact. Both also run on Java 17, the launcher's
+# minimum. default-externs checks that cljs/externs/default.edn is generated
+# from the Closure Compiler of the :closure alias.
 
 on:
   push:
@@ -26,32 +27,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - suite: compiler
+          - suite: default-externs
             run: |
-              clojure -M:closure:compiler.test:compiler.test.run
               script/gen-default-externs
               git diff --exit-code src/main/clojure/cljs/externs/default.edn ||
                 { echo "::error::cljs/externs/default.edn is out of date, run script/gen-default-externs"; exit 1; }
-          - suite: runtime
-            run: |
-              clojure -M:closure:runtime.test.build
-              node builds/out-adv/core-advanced-test.js | tee test-out.txt
-              grep -qxF '0 failures, 0 errors.' test-out.txt
-          - suite: lite
-            run: |
-              clojure -M:closure:lite.test.build
-              node builds/out-lite/lite-test.js | tee test-out.txt
-              grep -qxF '0 failures, 0 errors.' test-out.txt
-          - suite: self-host
-            run: |
-              clojure -M:closure:selfhost.test.build
-              node builds/out-self/core-self-test.js | tee test-out.txt
-              grep -qxF '0 failures, 0 errors.' test-out.txt
-          - suite: self-parity
-            run: |
-              clojure -M:closure:selfparity.test.build
-              node builds/out-self-parity/main.js | tee test-out.txt
-              grep -qxF '0 failures, 0 errors.' test-out.txt
           - suite: esm
             run: script/test-esm
           - suite: esm (Java 17)

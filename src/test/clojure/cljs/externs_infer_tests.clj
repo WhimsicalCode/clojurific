@@ -1,27 +1,23 @@
+;; Copyright (c) Rich Hickey. All rights reserved.
+;; The use and distribution terms for this software are covered by the
+;; Eclipse Public License 1.0 (http://opensource.org/licenses/eclipse-1.0.php)
+;; which can be found in the file epl-v10.html at the root of this distribution.
+;; By using this software in any fashion, you are agreeing to be bound by
+;; the terms of this license.
+;; You must not remove this notice, or any other, from this software.
+
 (ns cljs.externs-infer-tests
+  "Type inference from the default externs (cljs/externs/default.edn) and the
+  :infer-warning warnings."
   (:require
     [cljs.analyzer :as ana]
     [cljs.analyzer-tests :refer [analyze collecting-warning-handler test-cenv]]
     [cljs.compiler :as comp]
-    [cljs.closure :as closure]
     [cljs.env :as env]
-    [cljs.externs :as externs]
-    [cljs.test-util :refer [unsplit-lines]]
-    [cljs.util :as util]
     [clojure.string :as string]
-    [clojure.test :as test :refer [is are deftest testing]]))
+    [clojure.test :as test :refer [is deftest testing]]))
 
-(def externs-cenv
-  (atom
-    {::ana/externs
-     (externs/externs-map
-       (closure/load-externs
-         {:externs ["src/test/externs/test.js"]}))}))
-
-(def core-inferred
-  ["var setTimeout;" "var process;" "process.hrtime;"
-   "goog.isArrayLike;" "Java.type;" "Object.out;" "Object.out.println;"
-   "Object.error;" "Object.error.println;"])
+(def externs @env/default-externs)
 
 (deftest test-normalize-js-tag
   (is (= 'js (ana/normalize-js-tag 'js)))
@@ -30,609 +26,189 @@
   (is (= '[Foo Bar] (-> 'js/Foo.Bar ana/normalize-js-tag meta :prefix)))
   (is (true? (-> 'js/Foo.Bar ana/normalize-js-tag meta :prefix last meta :ctor))))
 
-(deftest test-normalize-unresolved-prefix
-  (let [pre (-> (ana/normalize-js-tag 'js/Foo) meta :prefix (conj 'bar))]
-    (is (= '[Foo prototype bar] (ana/normalize-unresolved-prefix pre))))
-  (let [pre '[Foo bar]]
-    (is (= '[Foo bar] (ana/normalize-unresolved-prefix pre)))))
-
-(comment
-
-  (test/test-vars [#'test-normalize-js-tag])
-  (test/test-vars [#'test-normalize-unresolved-prefix])
-
-  )
-
 (deftest test-resolve-extern
-  (let [externs
-        (externs/externs-map
-          (closure/load-externs
-            {:externs                 ["src/test/externs/test.js"]
-             :use-only-custom-externs true}))]
-    (is (some? (ana/resolve-extern '[baz] externs)))
-    (is (nil? (ana/resolve-extern '[Foo gozMethod] externs)))))
-
-(deftest test-has-extern?-basic
-  (let [externs (externs/externs-map
-                  (closure/load-externs
-                    {:externs ["src/test/externs/test.js"]
-                     :use-only-custom-externs true}))]
-    (is (true? (ana/has-extern? '[Foo] externs)))
-    (is (true? (ana/has-extern? '[Foo wozMethod] externs)))
-    (is (false? (ana/has-extern? '[foo] externs)))
-    (is (false? (ana/has-extern? '[Foo gozMethod] externs)))
-    (is (true? (ana/has-extern? '[baz] externs)))
-    (is (false? (ana/has-extern? '[Baz] externs)))))
-
-(deftest test-resolve-extern
-  (let [externs (externs/externs-map)]
-    (is (= '[Number]
-            (-> (ana/resolve-extern '[Number] externs) :resolved)))
-    (is (= '[Number prototype valueOf]
-            (-> (ana/resolve-extern '[Number valueOf] externs) :resolved)))
-    (is (= '[Console]
-            (-> (ana/resolve-extern '[console] externs) :resolved)))
-    (is (= '[Console prototype log]
-            (-> (ana/resolve-extern '[console log] externs) :resolved)))
-    (is (= '[undefined]
-            (-> (ana/resolve-extern '[undefined] externs) :resolved)))
-    (is (= '[webCrypto Crypto prototype subtle]
-            (-> (ana/resolve-extern '[crypto subtle] externs) :resolved)))))
-
-(comment
-  (clojure.test/test-vars [#'test-resolve-extern])
-
-  (def externs (externs/externs-map))
-  ;; succeeds
-  (ana/resolve-extern '[console] externs)
-  (ana/resolve-extern '[console log] externs)
-  (ana/resolve-extern '[undefined] externs)
-  (ana/resolve-extern '[Number] externs)
-  (ana/resolve-extern '[Number isNaN] externs)
-  (ana/resolve-extern '[document] externs)
-
-  )
+  (is (= '[Number]
+         (-> (ana/resolve-extern '[Number] externs) :resolved)))
+  (is (= '[Number prototype valueOf]
+         (-> (ana/resolve-extern '[Number valueOf] externs) :resolved)))
+  (is (= '[Console]
+         (-> (ana/resolve-extern '[console] externs) :resolved)))
+  (is (= '[Console prototype log]
+         (-> (ana/resolve-extern '[console log] externs) :resolved)))
+  (is (= '[undefined]
+         (-> (ana/resolve-extern '[undefined] externs) :resolved)))
+  (is (= '[webCrypto Crypto prototype subtle]
+         (-> (ana/resolve-extern '[crypto subtle] externs) :resolved)))
+  (is (nil? (ana/resolve-extern '[Number gozMethod] externs))))
 
 (deftest test-has-extern?-defaults
-  (let [externs (externs/externs-map)]
-    (is (true? (ana/has-extern? '[console] externs)))
-    (is (true? (ana/has-extern? '[console log] externs)))
-    (is (true? (ana/has-extern? '[Number isNaN] externs)))))
+  (is (true? (ana/has-extern? '[console] externs)))
+  (is (true? (ana/has-extern? '[console log] externs)))
+  (is (true? (ana/has-extern? '[Number isNaN] externs)))
+  (is (false? (ana/has-extern? '[Number gozMethod] externs)))
+  (testing "ClojureScript's own properties"
+    (is (true? (ana/has-extern? '[Object cljs$core$ISeq$_first$arity$1] externs)))))
 
 (deftest test-js-tag
-  (let [externs (externs/externs-map
-                  (closure/load-externs
-                    {:externs ["src/test/externs/test.js"]}))]
-    (is (= 'js/Console (ana/js-tag '[console] :tag externs)))
-    (is (= 'js/Function (ana/js-tag '[console log] :tag externs)))
-    (is (= 'js/undefined (ana/js-tag '[console log] :ret-tag externs)))
-    (is (= 'boolean (ana/js-tag '[Number isNaN] :ret-tag externs)))
-    (is (= 'js/Foo (ana/js-tag '[baz] :ret-tag externs)))))
+  (is (= 'js/Console (ana/js-tag '[console] :tag externs)))
+  (is (= 'js/Function (ana/js-tag '[console log] :tag externs)))
+  (is (= 'js/undefined (ana/js-tag '[console log] :ret-tag externs)))
+  (is (= 'boolean (ana/js-tag '[Number isNaN] :ret-tag externs))))
 
-(comment
-
-  (clojure.test/test-vars [#'test-js-tag])
-
-  )
-
-(defn infer-test-helper
-  [{:keys [forms externs warnings warn js-dependency-index node-module-index with-core? opts]}]
-  (let [test-cenv (atom
-                    (cond->
-                      (if with-core?
-                        (env/default-compiler-env*
-                          (closure/add-externs-sources (merge {:infer-externs true} opts)))
-                        {::ana/externs
-                         (externs/externs-map
-                           (closure/load-externs {:externs (or externs [])}))})
-                      js-dependency-index (assoc :js-dependency-index js-dependency-index)
-                      node-module-index (assoc :node-module-index node-module-index)))
-        wrap      (if with-core?
-                    #(comp/with-core-cljs nil %)
-                    #(do (%)))]
-    (ana/with-warning-handlers [(collecting-warning-handler (or warnings (atom [])))]
-      (binding [ana/*analyze-deps* false
-                ana/*cljs-ns* ana/*cljs-ns*]
-        (env/with-compiler-env test-cenv
-          (wrap
-            (fn []
-              (binding [ana/*analyze-deps* true
-                        ana/*cljs-warnings*
-                        (assoc ana/*cljs-warnings*
-                          :infer-warning (if (nil? warn) true warn))]
-                (ana/analyze-form-seq forms))
-              (with-out-str
-                (comp/emit-externs
-                  (reduce util/map-merge {}
-                    (map (comp :externs second)
-                      (get @test-cenv ::ana/namespaces))))))))))))
+(defn- tag [form]
+  (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
+        (env/with-compiler-env (env/default-compiler-env)
+          (analyze (ana/empty-env) form)))
+      :tag))
 
 (deftest test-externs-type-infer
-  (is (= 'boolean
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env (env/default-compiler-env)
-                (analyze (ana/empty-env) '(.isNaN js/Number 1))))
-          :tag)))
-  (is (= 'boolean
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env (env/default-compiler-env)
-                (analyze (ana/empty-env) '(js/Number.isNaN 1))))
-          :tag)))
-  (is (= 'boolean
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env (env/default-compiler-env)
-                (analyze (ana/empty-env) '(let [x js/Number]
-                                            (.isNaN x 1)))))
-          :tag)))
-  (is (= 'boolean
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-             (env/with-compiler-env (env/default-compiler-env)
-               (analyze (ana/empty-env) '(js/isNaN 1))))
-          :tag)))
-  (is (= 'js/Promise
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env (env/default-compiler-env)
-                (analyze (ana/empty-env) '(.generateKey js/crypto.subtle))))
-          :tag)))
-  (is (= 'string
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env (env/default-compiler-env)
-                (analyze (ana/empty-env) '(.toUpperCase "foo"))))
-          :tag)))
-  (is (= 'boolean
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env (env/default-compiler-env)
-                (analyze (ana/empty-env) '(.isArray js/Array (array)))))
-          :tag)))
-  (is (= 'boolean
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env (env/default-compiler-env)
-                (analyze (ana/empty-env) '(.isSafeInteger js/Number 1))))
-          :tag)))
-  (is (= 'boolean
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env (env/default-compiler-env)
-                (analyze (ana/empty-env) '(js/isFinite 1))))
-          :tag))))
+  (is (= 'boolean (tag '(.isNaN js/Number 1))))
+  (is (= 'boolean (tag '(js/Number.isNaN 1))))
+  (is (= 'boolean (tag '(let [x js/Number] (.isNaN x 1)))))
+  (is (= 'boolean (tag '(js/isNaN 1))))
+  (is (= 'js/Promise (tag '(.generateKey js/crypto.subtle))))
+  (is (= 'string (tag '(.toUpperCase "foo"))))
+  (is (= 'boolean (tag '(.isArray js/Array (array)))))
+  (is (= 'boolean (tag '(.isSafeInteger js/Number 1))))
+  (is (= 'boolean (tag '(js/isFinite 1)))))
 
-(deftest test-externs-infer
-  (is (= 'js/Foo
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env externs-cenv
-                (analyze (ana/empty-env) 'js/baz)))
-          :info :ret-tag)))
-  (is (= 'js/Foo
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env externs-cenv
-                (analyze (ana/empty-env) '(js/baz))))
-          :tag)))
-  (is (= 'js
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env externs-cenv
-                (analyze (ana/empty-env) '(js/woz))))
-          :tag)))
-  (is (= 'js
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env externs-cenv
-                (analyze (ana/empty-env) '(def foo (js/woz)))))
-          :tag)))
-  (is (= 'js
-        (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-              (env/with-compiler-env externs-cenv
-                (analyze (ana/empty-env) '(def foo js/boz))))
-          :tag)))
-  (is (nil? (-> (binding [ana/*cljs-ns* ana/*cljs-ns*]
-                  (ana/no-warn
-                    (env/with-compiler-env externs-cenv
-                      (analyze (ana/empty-env)
-                        '(let [z (.baz ^js/Foo.Bar x)]
-                           z)))))
-              :tag meta :prefix))))
+(defn- infer-warnings
+  "The warnings analyzing forms, with :infer-warning enabled unless warn is
+  false, and with cljs.core analyzed when with-core?."
+  [{:keys [forms warn with-core?]}]
+  (let [ws (atom [])]
+    (ana/with-warning-handlers [(collecting-warning-handler ws)]
+      (binding [ana/*analyze-deps* false
+                ana/*cljs-ns*      ana/*cljs-ns*]
+        (env/with-compiler-env (env/default-compiler-env)
+          ((if with-core? #(comp/with-core-cljs nil %) #(%))
+           (fn []
+             (binding [ana/*analyze-deps* true
+                       ana/*cljs-warnings* (assoc ana/*cljs-warnings*
+                                             :infer-warning (if (nil? warn) true warn))]
+               (ana/analyze-form-seq forms)))))))
+    @ws))
 
-(deftest test-basic-infer
-  (let [res (infer-test-helper
-              {:forms '[(ns foo.core)
-                        (defn bar [a] (js/parseInt a))
-                        (def c js/React.Component)
-                        (js/console.log "Hello world!")
-                        (fn [& args]
-                          (.apply (.-log js/console) js/console (into-array args)))
-                        (js/console.log js/Number.MAX_VALUE)
-                        (js/console.log js/Symbol.iterator)]})]
-    (is (= (unsplit-lines ["var React;" "React.Component;"]) res))))
-
-(deftest test-method-infer
-  (let [res (infer-test-helper
-              {:forms '[(defn foo [^js/React.Component c]
-                          (.render c))]})]
-    (is (= (unsplit-lines ["var React;" "React.Component;" "React.Component.prototype.render;"])
-          res))))
-
-(deftest test-minimal-infer
-  (let [res (infer-test-helper
-              {:forms '[(js/console.log (.wozMethod (js/baz)))]
-               :externs ["src/test/externs/test.js"]})]
-    (is (string/blank? res))))
-
-(deftest test-type-hint-minimal-infer
-  (let [res (infer-test-helper
-              {:forms ''[(defn afun [^js/Foo x]
-                           (.wozMethod x))]
-               :externs ["src/test/externs/test.js"]})]
-    (is (string/blank? res))))
-
-(deftest test-type-hint-infer-unknown-method-in-chain
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(defn afun [^js/Foo.Bar x]
-                          (let [z (.baz x)]
-                            (.wozz z)))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["Foo.Boo.prototype.wozz;"]) res))
-    (is (= 1 (count @ws)))
-    (is (some-> @ws first
-          (string/starts-with?
-            "Cannot resolve property wozz for inferred type js/Foo.Boo")))))
-
-(deftest test-type-hint-infer-unknown-property-in-chain
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(defn afun [^js/Foo.Bar x]
-                          (let [z (.baz x)]
-                            (.-wozz z)))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["Foo.Boo.prototype.wozz;"]) res))
-    (is (= 1 (count @ws)))
-    (is (some-> @ws first
-          (string/starts-with?
-            "Cannot resolve property wozz for inferred type js/Foo.Boo")))))
-
-(deftest test-type-hint-infer-unknown-method
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(defn baz [^js/Foo a]
-                          (.gozMethod a))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["Foo.prototype.gozMethod;"]) res))
-    (is (= 1 (count @ws)))
-    (is (some-> @ws first
-          (string/starts-with?
-            "Cannot resolve property gozMethod for inferred type js/Foo")))))
-
-(comment
-
-  (require '[clojure.java.io :as io]
-           '[cljs.closure :as cc])
-
-  (def externs
-    (-> (cc/js-source-file nil (io/file "src/test/externs/test.js"))
-      externs/parse-externs externs/index-externs))
-
-  (ana/resolve-extern '[Foo gozMethod] externs)
-
-  (clojure.test/test-vars [#'test-type-hint-infer-unknown-method])
-
-  )
-
-(deftest test-infer-unknown-method-from-externs
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(.gozMethod (js/baz))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["Foo.prototype.gozMethod;"]) res))
-    (is (= 1 (count @ws)))
-    (is (some-> @ws first
-          (string/starts-with?
-            "Cannot resolve property gozMethod for inferred type js/Foo")))))
+(deftest test-infer-unknown-method
+  (let [ws (infer-warnings {:forms '[(defn baz [^js/Number a]
+                                       (.gozMethod a))]})]
+    (is (= 1 (count ws)))
+    (is (some-> ws first
+          (string/starts-with? "Cannot resolve property gozMethod for inferred type js/Number")))))
 
 (deftest test-infer-js-require
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns foo.core)
-                        (def React (js/require "react"))
-                        (.log js/console (.-Component React))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws})]
-    (is (= (unsplit-lines ["var require;" "Object.Component;"]) res))
-    (is (= 1 (count @ws)))
-    (is (some-> @ws first
-          (string/starts-with?
-            "Adding extern to Object for property Component")))))
+  (let [ws (infer-warnings {:forms '[(ns foo.core)
+                                     (def React (js/require "react"))
+                                     (.log js/console (.-Component React))]})]
+    (is (= 1 (count ws)))
+    (is (some-> ws first
+          (string/starts-with? "Adding extern to Object for property Component")))))
 
 (deftest test-set-warn-on-infer
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns warn-on-infer-test.app)
-                        (set! *warn-on-infer* true)
-                        (defn wrap-baz [x]
-                          (.baz x))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :warn false
-               :with-core? true})]
-    (is (= 1 (count @ws)))
-    (is (some-> @ws first
-          (string/starts-with?
-            "Cannot infer target type")))))
+  (let [ws (infer-warnings {:forms '[(ns warn-on-infer-test.app)
+                                     (set! *warn-on-infer* true)
+                                     (defn wrap-baz [x]
+                                       (.baz x))]
+                            :warn false
+                            :with-core? true})]
+    (is (= 1 (count ws)))
+    (is (some-> ws first (string/starts-with? "Cannot infer target type")))))
 
-(deftest test-cljs-1970-infer-with-cljs-literals
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-1970.core)
-                        (set! *warn-on-infer* true)
-                        (defn foo [] (list))
-                        (defn bar [] (vector))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (zero? (count @ws)))))
-
-(deftest test-cljs-1918-infer-with-case-keywords
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-1918.core)
-                        (defn foo [x]
-                          (cljs.core/case x
-                            :foo 1
-                            nil))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (zero? (count @ws)))))
+(deftest test-no-infer-warnings
+  (testing "CLJS-1970: ClojureScript literals"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns cjls-1970.core)
+                            (set! *warn-on-infer* true)
+                            (defn foo [] (list))
+                            (defn bar [] (vector))]}))))
+  (testing "CLJS-1918: case of keywords"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns cjls-1918.core)
+                            (defn foo [x]
+                              (cljs.core/case x
+                                :foo 1
+                                nil))]}))))
+  (testing "CLJS-2385: a hinted destructured local"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns cjls-2385.core)
+                            (defn thing [{:as this}]
+                              (.componentDidUpdate ^js/Thing this))]}))))
+  (testing "CLJS-2767: defrecord"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns cjls-2767.core)
+                            (defrecord Foo [])]}))))
+  (testing "CLJS-2767: deftype"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns cjls-2767.core)
+                            (deftype Foo [])]}))))
+  (testing "CLJS-2790: defrecord fields"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns cjls-2790.core)
+                            (defrecord Foo [a b])]}))))
+  (testing "CLJS-3181: a hinted call"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns warn-on-infer-test.app)
+                            (set! *warn-on-infer* true)
+                            (defn f [gfn]
+                              (.then ^js/Promise (gfn (inc 1)) identity))]}))))
+  (testing "CLJS-1924: defrecord with *warn-on-infer*"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(set! *warn-on-infer* true)
+                            (defrecord Foo [])]}))))
+  (testing "CLJS-2862: deftype methods"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns demo.app)
+                            (set! *warn-on-infer* true)
+                            (deftype Foo []
+                              Object
+                              (bar [this] :bar))]}))))
+  (testing "CLJS-2957: an imported Closure Library constructor"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns test.foo
+                              (:import [goog.history Html5History]))
+                            (set! *warn-on-infer* true)
+                            (doto (Html5History.)
+                              (.setUseFragment false))]}))))
+  (testing "CLJS-3236: defprotocol"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns test.foo)
+                            (set! *warn-on-infer* true)
+                            (defprotocol IFoo
+                              (bar [this]))]}))))
+  (testing "CLJS-3257: satisfies?"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns app.core)
+                            (set! *warn-on-infer* true)
+                            (defprotocol IFoo
+                              (bar [this]))
+                            (defn not-ok? [v]
+                              (satisfies? IFoo v))]}))))
+  (testing "CLJS-3408: inherited methods of JavaScript types"
+    (is (empty? (infer-warnings
+                  {:with-core? true
+                   :forms '[(ns foo.core)
+                            (.querySelectorAll js/document "div")]})))))
 
 (deftest test-cljs-2247
   (let [ws (atom [])]
     (try
       (ana/with-warning-handlers [(collecting-warning-handler ws)]
-        (env/with-compiler-env (assoc @test-cenv :repl-env {})
+        (env/with-compiler-env test-cenv
           (ana/analyze (ana/empty-env)
             '(defn -foo []))
           (ana/analyze (ana/empty-env)
             '(defprotocol IAlpha (-foo [this])))))
       (catch Exception _))
     (is (= ["Protocol IAlpha is overwriting function -foo"] @ws))))
-
-(deftest test-cljs-2385-infer-priority
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-1918.core)
-                        (defn thing [{:as this}]
-                          (.componentDidUpdate ^js/Thing this))]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (string/includes? res "Thing.prototype.componentDidUpdate;"))
-    (is (zero? (count @ws)))))
-
-(deftest test-cljs-2392-broken-inferred-externs
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-1918.core
-                          (:require [cljs.nodejs]
-                                    [cljs.nodejscli]))]
-               :warnings ws
-               :with-core? true
-               :opts {:target :nodejs}})]
-    (not (string/includes? res "COMPILED"))
-    (not (string/includes? res "goog"))
-    (is (zero? (count @ws)))))
-
-(deftest test-cljs-2678-global-exports-infer
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:js-dependency-index {"react" {:global-exports '{react React}}}
-               :forms '[(ns foo.core
-                          (:require [react :as react]))
-                        (.log js/console react/Component)]
-               :warnings ws
-               :warn false})]
-    (is (= (unsplit-lines ["Object.Component;"]) res))))
-
-(deftest test-cljs-2767-deftype-defrecord
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-2767.core)
-                        (defrecord Foo [])]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (empty? @ws))
-    (is (not (string/includes? res "cljs.core"))))
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-2767.core)
-                        (deftype Foo [])]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (empty? @ws))
-    (is (not (string/includes? res "cljs.core")))))
-
-(deftest test-cljs-2790-defrecord-fields
-  (let [ws  (atom [])
-        res (infer-test-helper
-              {:forms '[(ns cjls-2790.core)
-                        (defrecord Foo [a b])]
-               :externs ["src/test/externs/test.js"]
-               :warnings ws
-               :with-core? true})]
-    (is (empty? @ws))
-    (is (not (string/includes? res "cljs.core")))))
-
-(deftest test-cljs-3181
-  (let [ws  (atom [])
-        res (binding [ana/*cljs-static-fns* true]
-              (infer-test-helper
-                {:forms '[(ns warn-on-infer-test.app)
-                          (set! *warn-on-infer* true)
-                          (defn f [gfn]
-                            (.then ^js/Promise (gfn (inc 1)) identity))]
-                 :externs ["src/test/externs/test.js"]
-                 :warnings ws
-                 :warn false
-                 :with-core? true}))]
-    (is (empty? @ws))))
-
-(deftest test-cljs-1924
-  (let [ws  (atom [])
-        res (binding [ana/*cljs-static-fns* true]
-              (infer-test-helper
-                {:forms '[(set! *warn-on-infer* true)
-                          (defrecord Foo [])]
-                 :warnings ws
-                 :warn true
-                 :with-core? true}))]
-    (is (empty? @ws))))
-
-(deftest test-cljs-2862
-  (let [ws  (atom [])
-        res (binding [ana/*cljs-static-fns* true]
-              (infer-test-helper
-                {:forms '[(ns demo.app)
-                          (set! *warn-on-infer* true)
-                          (deftype Foo []
-                            Object
-                            (bar [this] :bar))]
-                 :warnings ws
-                 :warn true
-                 :with-core? true}))]
-    (is (empty? @ws))))
-
-(deftest test-cljs-2957
-  (let [ws  (atom [])
-        res (binding [ana/*cljs-static-fns* true]
-              (infer-test-helper
-                {:forms '[(ns test.foo
-                            (:import [goog.history Html5History]))
-                          (set! *warn-on-infer* true)
-                          (doto (Html5History.)
-                            (.setUseFragment false))]
-                 :warnings ws
-                 :warn true
-                 :with-core? true}))]
-    (is (empty? @ws))))
-
-(deftest test-cljs-3236
-  (let [ws  (atom [])
-        res (binding [ana/*cljs-static-fns* true]
-              (infer-test-helper
-                {:forms '[(ns test.foo)
-                          (set! *warn-on-infer* true)
-                          (defprotocol IFoo
-                            (bar [this]))]
-                 :warnings ws
-                 :warn true
-                 :with-core? true}))]
-    (is (empty? @ws))))
-
-(deftest test-cljs-3257
-  (let [ws  (atom [])
-        res (binding [ana/*cljs-static-fns* true]
-              (infer-test-helper
-                {:forms '[(ns app.core)
-                          (set! *warn-on-infer* true)
-                          (defprotocol IFoo
-                            (bar [this]))
-                          (defn not-ok? [v]
-                            (satisfies? IFoo v))]
-                 :warnings ws
-                 :warn true
-                 :with-core? true}))]
-    (is (empty? @ws))))
-
-(deftest test-cljs-3373
-  (testing "var from foreign libraries that are invoked as fn should propagate 'js hints"
-    (let [ws  (atom [])
-          res (infer-test-helper
-                {:js-dependency-index {"firebase" {:global-exports '{firebase Firebase}}}
-                 :forms '[(ns foo.core
-                            (:require [firebase :refer [getAuth]]))
-                          (def auth
-                            (doto (getAuth)
-                              (.useDeviceLanguage)
-                              (.onAuthStateChanged (fn [user]))))]
-                 :warnings ws
-                 :warn true
-                 :with-core? false})]
-      (is (= (unsplit-lines
-               ["Object.getAuth;"
-                "Object.useDeviceLanguage;"
-                "Object.onAuthStateChanged;"])
-              res)))))
-
-(deftest test-cljs-3377
-  (testing "constructors from foreign libraries that used via `new` should propagate 'js hints"
-    (let [ws  (atom [])
-          res (infer-test-helper
-                {:js-dependency-index {"firebase" {:global-exports '{firebase Firebase}}}
-                 :forms '[(ns foo.core
-                            (:require [firebase :refer [GoogleAuthProvider]]))
-                          (def goog-provider
-                            (GoogleAuthProvider.))
-                          (.someMethod goog-provider)
-                          (.-someProperty goog-provider)]
-                 :warnings ws
-                 :warn true
-                 :with-core? false})]
-      (is (= (unsplit-lines
-               ["Object.GoogleAuthProvider;"
-                "Object.someMethod;"
-                "Object.someProperty;"])
-            res)))))
-
-(deftest test-cljs-3381
-  (testing "invokeable js namespaces not hinted properly"
-    (let [ws  (atom [])
-          res (infer-test-helper
-                {:node-module-index #{"markdown-it"}
-                 :forms '[(ns foo.core
-                            (:require [markdown-it]))
-                          (defonce mdi
-                            (doto (new markdown-it
-                                    (js-obj
-                                      "linkify" true
-                                      "typographer" true))
-                              (.renderInline mdi "hi")))]
-                 :warnings ws
-                 :warn true
-                 :with-core? false
-                 :target :nodejs})]
-      (is (= (unsplit-lines
-               ["Object.renderInline;"])
-            res)))))
-
-(deftest test-cljs-3408
-  (testing "inheritance of JS Types is inferred"
-    (let [ws  (atom [])
-          res (infer-test-helper
-                {:forms '[(ns foo.core)
-                          (.querySelectorAll js/document "div")]
-                 :warnings ws
-                 :warn true
-                 :with-core? true})]
-      (is (empty? @ws)))))
-
-(comment
-  (binding [ana/*cljs-ns* ana/*cljs-ns*]
-    (ana/no-warn
-      (env/with-compiler-env externs-cenv
-        (analyze (ana/empty-env)
-          '(let [React (js/require "react")]
-             React)))))
-
-  ;; FIXME: we don't preserve tag information
-  (binding [ana/*cljs-ns* ana/*cljs-ns*]
-    (ana/no-warn
-      (env/with-compiler-env externs-cenv
-        (let [aenv (ana/empty-env)
-              _ (analyze aenv '(ns foo.core))
-              aenv' (assoc-in aenv [:ns :name] 'foo.core)
-              _ (ana/analyze aenv' '(def x 1))]
-          (dissoc (ana/analyze-symbol (assoc-in aenv [:ns :name] 'foo.core) 'x) :env)
-          ;(get-in @externs-cenv [::ana/namespaces 'foo.core])
-          ))))
-  )

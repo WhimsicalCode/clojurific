@@ -10,7 +10,6 @@
   (:use clojure.test)
   (:require [cljs.analyzer :as ana]
             [cljs.compiler :as comp]
-            [cljs.compiler.api :as comp-api]
             [cljs.env :as env]
             [cljs.util :as util]
             [cljs.tagged-literals :as tags]
@@ -42,7 +41,7 @@
    (with-out-str
      (binding [ana/*cljs-ns* 'cljs.user]
        (doseq [form forms]
-         (comp/emit (ana/analyze (ana/empty-env) form)))))))
+         (emit (ana/analyze (ana/empty-env) form)))))))
 
 (defn compile-simple-form
   [form]
@@ -50,21 +49,6 @@
     (comp/with-core-cljs {}
       (fn []
         (compile-form-seq [form])))))
-
-#_(deftest should-recompile
-    (let [src (File. "test/hello.cljs")
-          dst (File/createTempFile "compilertest" ".cljs")
-          opt {:optimize-constants true}
-          optmod {:optimize-constants true :elide-asserts false}]
-      (with-redefs [util/*clojurescript-version* {:major 0 :minor 0 :qualifier 42}]
-        (env/with-compiler-env (env/default-compiler-env)
-          (.setLastModified dst (- (.lastModified src) 100))
-          (is (comp/requires-compilation? src dst opt))
-          (comp/compile-file src dst opt)
-          (is (not (comp/requires-compilation? src dst opt)))
-          (is (comp/requires-compilation? src dst optmod))
-          (comp/compile-file src dst optmod)
-          (is (not (comp/requires-compilation? src dst optmod)))))))
 
 (deftest fn-scope-munge
   (is (= (comp/munge
@@ -262,48 +246,51 @@
 
 
 (deftest test-optimized-invoke-emit
-  (let [out-file
-        (io/file "target/invoke_test.js")]
-    (comp-api/with-core-cljs
-      (comp-api/compile-file
-        (io/file "src/test/cljs/cljs/invoke_test.cljs")
-        out-file
-        {:static-fns true}))
-
+  (let [dir      (doto (java.nio.file.Files/createTempDirectory "invoke-test" (make-array java.nio.file.attribute.FileAttribute 0))
+                   (-> .toFile .deleteOnExit))
+        out-file (io/file (str dir) "cljs" "invoke_test.js")
+        opts     {:static-fns true :output-dir (str dir)}]
+    (env/with-compiler-env (env/default-compiler-env opts)
+      (comp/with-core-cljs opts
+        (fn []
+          (comp/compile-file
+            (io/file "src/test/cljs/cljs/invoke_test.cljs")
+            out-file
+            opts))))
     (let [content (slurp out-file)]
       ;; test for fn( not fn.call(, omitting arguments in test because they are not relevant
       ;; should emit variadic invokes
-      (is (str/includes? content "cljs.invoke_test.variadic_fn.cljs$core$IFn$_invoke$arity$variadic("))
+      (is (str/includes? content "cljs$invoke_test$variadic_fn.cljs$core$IFn$_invoke$arity$variadic("))
       ;; should emit optimized invokes
-      (is (str/includes? content "cljs.invoke_test.multi_fn.cljs$core$IFn$_invoke$arity$1("))
+      (is (str/includes? content "cljs$invoke_test$multi_fn.cljs$core$IFn$_invoke$arity$1("))
       ;; closure js code must never use .call(
-      (is (str/includes? content "goog.string.urlEncode("))
-      ;; js/goog.string.urlDecode should not use .call
-      (is (str/includes? content "goog.string.urlDecode("))
+      (is (str/includes? content "goog$string$.urlEncode("))
+      ;; js/goog.string.urlDecode should not use .call, the shim doesn't have
+      ;; it: the Closure Library's, run by the compatibility layer
+      (is (str/includes? content "goog$string$.urlDecode("))
       ;; We should NOT emit a let binding for simple (:dont-bind-this js/x)
       (is (str/includes? content
-                         (str "new cljs.core.Keyword(null,\"dont-bind-this\",\"dont-bind-this\","
-                              "-140451389).cljs$core$IFn$_invoke$arity$1(x);")))
+                         (str "new cljs$core.Keyword(null,\"dont-bind-this\",\"dont-bind-this\","
+                              "-140451389,-1).cljs$core$IFn$_invoke$arity$1(x);")))
       ;; CLJS-2046: Emit bindings for expressions like: (@m a0) or ((:x m) a0)
       ;; The test: ((complement funexpr0) normal-arg)
-      (is (re-find #"(?m)^.*var fexpr.*=.*cljs.core.complement\(funexpr0\);$"
+      (is (re-find #"(?m)^const fexpr__\d+ = cljs\$core\.complement\(funexpr0\);$"
                    content))
       ;; CLJS-855: Emit binding for expressions like:
       ;; (hofinvoke (inv-arg0))
-      (is (re-find #"(?m)^.*var .*=.*inv_arg0.cljs.core.IFn._invoke.arity.0 \?.*$"
+      (is (re-find #"(?m)^const G__\d+ = \(inv_arg0\.cljs\$core\$IFn\$_invoke\$arity\$0 \?.*$"
                    content))
 
       ;; Now test both (855,2046) together:
       ;; ((complement funexpr1) (inv-arg1))
-      (is (re-find #"(?m)^.*var fexpr.*=.*cljs.core.complement\(funexpr1\);$"
+      (is (re-find #"(?m)^const fexpr__\d+ = cljs\$core\.complement\(funexpr1\);$"
                    content))
-      (is (re-find #"(?m)^.*var .*=.*inv_arg1.cljs.core.IFn._invoke.arity.0 \?.*$"
+      (is (re-find #"(?m)^const G__\d+ = \(inv_arg1\.cljs\$core\$IFn\$_invoke\$arity\$0 \?.*$"
                    content))
       ;; CLJS-1871: A declare hinted with :arglists meta should result in static dispatch
-      (is (str/includes? content "cljs.invoke_test.declared_fn("))
+      (is (str/includes? content "cljs$invoke_test$declared_fn("))
       ;; CLJS-2950: Direct field access for keyword lookup on records
-      (is (str/includes? content "cljs.invoke_test.foo_record.foo_field_a;")))))
-#_(test-vars [#'test-optimized-invoke-emit])
+      (is (str/includes? content "cljs$invoke_test$foo_record.foo_field_a;")))))
 
 (deftest let-without-iife
   (testing "in a fn body, a let in expression position and a let local a loop initializes need no IIFE"
@@ -315,7 +302,7 @@
       (is (not (str/includes? expr-let "(function (){")))))
   (testing "at the top level, a let local a loop initializes is assigned from an IIFE: its locals stay a fn's"
     (let [top (compile-simple-form '(let [x (loop [i 0] (if (< i 3) (recur (inc i)) i))] (println x)))]
-      (is (re-find #"var x_\d+ = \(function \(\)\{var i = " top)))))
+      (is (re-find #"const x_\d+ = \(function \(\)\{let i = " top)))))
 
 (deftest test-cljs-3077
   (let [opts {}
@@ -353,31 +340,26 @@
 
     ;; FIXME: not exactly a clean way to test if function wrappers are created or not
     ;; captures foo, the only loop local inner refers to (not x)
-    (is (str/includes? snippet1 "(function (foo){"))
-    (is (not (str/includes? snippet1 "(function (foo,x){")))
+    (is (str/includes? snippet1 "((function (foo){"))
+    (is (not (str/includes? snippet1 "((function (foo,x){")))
     ;; captures x
-    (is (str/includes? snippet2 "(function (x){"))
+    (is (str/includes? snippet2 "((function (x){"))
     ;; no capture, no loop or recur
-    (is (not (str/includes? snippet3 "(function (foo,x){")))
-    (is (not (str/includes? snippet3 "(function (foo){")))
-    (is (not (str/includes? snippet3 "(function (x){")))
-    ))
+    (is (not (str/includes? snippet3 "((function (foo,x){")))
+    (is (not (str/includes? snippet3 "((function (foo){")))
+    (is (not (str/includes? snippet3 "((function (x){")))))
 
 (deftest test-goog-ctor-import-gen
-  (is (true? (str/includes?
-               (env/with-compiler-env (env/default-compiler-env)
-                 (compile-form-seq
-                   '[(ns test.foo
-                       (:import [goog.history Html5History]))
-                     (defn bar [] Html5History)]))
-               "return goog.history.Html5History;")))
-  (is (true? (str/includes?
-               (env/with-compiler-env (env/default-compiler-env)
-                 (compile-form-seq
-                   '[(ns test.foo
-                       (:import [goog.history Html5History]))
-                     (def hist (Html5History.))]))
-               "(new goog.history.Html5History());"))))
+  (let [code (env/with-compiler-env (env/default-compiler-env)
+               (compile-form-seq
+                 '[(ns test.foo
+                     (:import [goog.history Html5History]))
+                   (defn bar [] Html5History)
+                   (def hist (Html5History.))]))]
+    ;; the Closure Library file, run by the compatibility layer
+    (is (str/includes? code "import \"../goog-lib/ns/goog.history.Html5History.js\";"))
+    (is (str/includes? code ".history.Html5History;"))
+    (is (str/includes? code ".history.Html5History());"))))
 
 (deftest emit-source-ns*-retains-ns-name ;; CLJS-3273
   (let [input   (java.io.File/createTempFile "foo" ".cljs")
@@ -400,25 +382,6 @@
     (let [code (env/with-compiler-env (env/default-compiler-env)
                  (compile-form-seq
                    '[(if (.isNaN js/Number 1) true false)]))]
-      (is (nil? (re-find #"truth_" code))))))
-
-(deftest test-goog-lib-infer-boolean
-  (testing "Can infer goog.string/contains returns boolean"
-    (let [code (env/with-compiler-env (env/default-compiler-env)
-                 (compile-form-seq
-                   '[(ns test.foo
-                       (:require [goog.string :as gstring]))
-                     (if (gstring/contains "foobar" "foo") true false)]))]
-      (is (nil? (re-find #"truth_" code))))))
-
-(deftest test-goog-module-infer-cljs-3438
-  (testing "goog.object/containKey requires correct handling of vars from
-  goog.module namespace"
-    (let [code (env/with-compiler-env (env/default-compiler-env)
-                 (compile-form-seq
-                   '[(ns test.foo
-                       (:require [goog.object :as gobject]))
-                     (if (gobject/containsKey nil nil) true false)]))]
       (is (nil? (re-find #"truth_" code))))))
 
 (deftest test-amp-as-local-clj-2954

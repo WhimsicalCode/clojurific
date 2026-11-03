@@ -1,6 +1,6 @@
 
 // goog.math.Long and goog.math.Integer as an ES module, mechanically converted
-// from the Closure Library sources for :module-format :esm.
+// from the Closure Library sources.
 
 function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);

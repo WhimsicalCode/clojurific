@@ -1,9 +1,9 @@
 ;; Writes src/main/clojure/cljs/externs/default.edn, Closure's default
 ;; (browser) externs as cljs.externs/externs-map parses them, without docs and
-;; source locations. cljs.env reads it when a build has no :externs-sources,
-;; so the compiler doesn't need the Closure Compiler to get the types of
-;; JavaScript's standard and browser APIs. Run script/gen-default-externs
-;; after updating com.google.javascript/closure-compiler.
+;; source locations. cljs.env reads it, so the compiler doesn't need the
+;; Closure Compiler to get the types of JavaScript's standard and browser
+;; APIs. Run script/gen-default-externs after updating
+;; com.google.javascript/closure-compiler in deps.edn (the :closure alias).
 
 (require '[cljs.externs :as externs]
          '[clojure.edn :as edn]

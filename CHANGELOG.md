@@ -16,6 +16,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ### Changed
 
+- **BREAKING CHANGE:** ES modules are the only output: the classic compiler (`goog.provide` output, the Closure Compiler's optimizations, `cljs.build.api`, `cljs.main`, the classic REPLs) and self-hosted `cljs.js` were removed, see the README's known gaps.
 - **BREAKING CHANGE:** `#x` props aren't renamed, their keys are the JavaScript names as written (`:className`, `:onClick`, `:style {:fontSize 12}`), so components destructure the keys they're passed, and keyword values reach components as keywords: rename `:class`, `:for` and kebab-case keys to React's names.
 
 ### Fixed

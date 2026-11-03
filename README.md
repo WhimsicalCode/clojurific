@@ -17,7 +17,7 @@
 
 Clojurific is a fork of the [ClojureScript](https://github.com/clojure/clojurescript) compiler by [Whimsical](https://whimsical.com), optimized for interoperability with modern JavaScript tooling, runtime performance and build speed.
 
-* Compiles ClojureScript to ES modules
+* Compiles ClojureScript to ES modules, without the Closure Compiler
 * Based on ClojureScript 1.12.145, compatible with existing ClojureScript libraries
 * Runs as a Vite plugin, no need for shadow-cljs
 * Browser and backend support
@@ -92,7 +92,7 @@ Clojurific is based on ClojureScript 1.12.145, and replaces it: stock ClojureScr
                                                             :deps/root "no-clojurescript"}}}}
 ```
 
-The artifact doesn't depend on the Closure Compiler, which `cljf.esm` doesn't need. To use the classic compiler (`cljs.build.api`, `cljs.main`) too, add `com.google.javascript/closure-compiler` to the project's dependencies.
+The artifact doesn't depend on the Closure Compiler. It has no classic compiler: ClojureScript's `goog.provide` output, the Closure Compiler's optimizations (`:advanced`) and the namespaces running them (`cljs.closure`, `cljs.build.api`, `cljs.main`, the classic REPLs and their servers, self-hosted `cljs.js`) aren't in it, so tools calling them (figwheel, piggieback) don't work with it (see [Known gaps](#known-gaps)).
 
 JavaScript package.json, from [npm](https://npmjs.com/package/clojurific):
 
@@ -132,7 +132,7 @@ Options are EDN maps, `@file.edn` to read them from a file, and `:profile` keywo
 | `:npm-interop :shadow` | `["pkg" :as x]` binds CommonJS packages' `module.exports`, like shadow-cljs; needs the Vite plugin |
 | `:closure-defines {goog.DEBUG false}` | `goog.DEBUG` and `goog-define`s are compile time constants. `goog.DEBUG` is `false` in `:release` builds (the `:release` profile, and `build` without a profile), like shadow-cljs' release mode, unless `:closure-defines` sets it |
 | `:build-hooks` | `[[fn-sym & args]]`, called with the build (`:compiler-env`, `:namespaces` in dependency order, `:mode`, `:options`, `:trigger` and `:changed-namespaces`) after a build (`:trigger :build`), every watch recompile (`:watch`) and REPL forms changing a namespace's analysis (`:repl-eval`) |
-| `:warnings` | a map of warning types (`true`, `false`, `:warning`, `:error`, `:off`), or one of them for the undeclared var warnings, like `cljs.closure` |
+| `:warnings` | a map of warning types (`true`, `false`, `:warning`, `:error`, `:off`), or one of them for the undeclared var warnings, as ClojureScript's `:warnings` |
 | `:warnings-as-errors true` | every enabled warning fails the compile, like shadow-cljs |
 | `:optimize-constants true` | keyword and symbol constants are exports of one module, `cljs/core/constants.js`, instead of allocated at each use (`cljs.core` keeps its own) |
 | `:checked-set-literals false` | set literals of runtime values collapse duplicates instead of throwing (before CLJS-3415) |
@@ -394,7 +394,7 @@ Keywords, `get`, `get-in`, `contains?`, `find`, `select-keys` and map destructur
   (get-in user [:address :city]))
 ```
 
-Other objects (class instances) aren't read, nor inherited properties (`(:toString #js {})` is `nil`). Writes (`assoc`, `update`) and `keys`, `vals` and `seq` don't take JavaScript objects. The classic compiler's output reads none, see [Known gaps](#known-gaps).
+Other objects (class instances) aren't read, nor inherited properties (`(:toString #js {})` is `nil`). Writes (`assoc`, `update`) and `keys`, `vals` and `seq` don't take JavaScript objects. ClojureScript reads none, see [Known gaps](#known-gaps).
 
 ### Classes
 
@@ -413,7 +413,7 @@ Other objects (class instances) aren't read, nor inherited properties (`(:toStri
   (fetch [this request] ...))
 ```
 
-`this` is bound once `(super ...)` has called the base class' constructor, which a constructor without a `(super ...)` call does first with its params. The methods and protocol implementations are `extend-type`'s. It isn't specific to `:module-format :esm`.
+`this` is bound once `(super ...)` has called the base class' constructor, which a constructor without a `(super ...)` call does first with its params. The methods and protocol implementations are `extend-type`'s.
 
 ### JSX literals
 
@@ -490,20 +490,20 @@ Clojurific's build uses `:optimize-constants` and `:static-fns`, shadow-cljs's i
 
 On the Whimsical app's performance suite (rendering, layout, text editing, syntax highlighting and data validation of its boards and docs), the ES module build takes about 30% less time than its shadow-cljs build (Closure advanced): the geometric mean of the median time ratios is 0.70, down from 1.04 before the optimizations below. The two builds run interleaved on the same machine.
 
-The main changes, in ES module output (see [`CHANGELOG.md`](CHANGELOG.md) for all of them):
+The main changes (see [`CHANGELOG.md`](CHANGELOG.md) for all of them):
 
 - `let` and `do` in expression position are comma expressions with locals hoisted to the start of the function instead of IIFEs. The app's output had about 14,000 IIFEs (shadow-cljs's about 70), which caused most of the original gap and extra garbage collection.
 - Call site dispatch: `get`, keyword invokes, `nth`, `seq` / `first` / `next`, `count`, `=`, `empty?`, `not-empty`, `vector?`, `map?` and map destructuring of a local call the protocol method at the call site when the value has it, instead of going through one megamorphic shared dispatcher. Anything else goes through the function as before.
 - Array map lookups of a keyword first check the index the keyword was last found at, before scanning the keys (about 4%).
 - `cljs.core` fast paths: keyword and string paths in `hash`, `=`, `str` and `compare`, a one-entry cache in multimethods, fixed arities of `merge` and `assoc`, and vector walks by index in `some`, `every?`, `get-in`, `last` and `second`.
 
-Call site dispatch adds code: about 5% more minified and 3% more gzipped JavaScript on the Whimsical app. Classic builds' code is unchanged.
+Call site dispatch adds code: about 5% more minified and 3% more gzipped JavaScript on the Whimsical app.
 
 ### Build speed and bundle size
 
 Measured on the 400K LOC Whimsical app (~3,100 namespaces) on an 18-core Apple Silicon laptop, fastest of three runs:
 
-| | shadow-cljs release (Closure advanced) | `:module-format :esm` + Vite 8, `:optimize-constants` |
+| | shadow-cljs release (Closure advanced) | Clojurific + Vite 8, `:optimize-constants` |
 |---|---|---|
 | production build | 62–64s | 11–12s (compile and bundle), 17s with empty per-user caches |
 | dev server, cold start (no output directory) | | 7.3s |
@@ -525,8 +525,8 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`, which keeps them in every bundle.
 - Closure Library files run whole: `goog.i18n`'s locale data (from `goog.date`, e.g. cljs-time) has every locale, which Closure's advanced compilation reduces to `goog.LOCALE`'s, about 340 KB of a bundle.
 - Closure's `:modules` aren't supported; lazy loading uses `import()`.
-- Self-hosted ClojureScript (`cljs.js`) doesn't emit ES modules.
-- Keywords, `get` and map destructuring read plain JavaScript objects ([JavaScript objects](#javascript-objects)) only in ES module output: a library relying on `(:k js-obj)` being `nil` sees the property there, and `nil` in classic output.
+- There's no classic compiler (`goog.provide` output, Closure's `:advanced` optimizations): `cljs.closure`, `cljs.build.api`, `cljs.compiler.api`, `cljs.main`, the classic REPLs (`cljs.repl/repl`, `cljs.repl.node`, `cljs.repl.browser`, `cljs.server.*`), `cljs.module-graph` and `cljs.loader` were removed, and so was self-hosted ClojureScript (`cljs.js`), which emits classic code. Tools calling them (figwheel, piggieback, `cljs.main` scripts) fail with a missing namespace; `cljs.repl` keeps its `doc`, `source`, `dir`, `apropos` and `find-doc` macros.
+- Keywords, `get` and map destructuring read plain JavaScript objects ([JavaScript objects](#javascript-objects)): a library relying on `(:k js-obj)` being `nil`, as in ClojureScript, sees the property.
 
 ## Design
 
@@ -557,7 +557,7 @@ Other code using the Closure Library (cljs-time's `goog.date`, re-frame's `goog.
 
 ### Externs
 
-Externs aren't needed: `:externs` and `:infer-externs` aren't used by `cljf.esm`. The analyzer still reads the types of JavaScript's standard and browser APIs from Closure's default externs, e.g. that `isNaN` returns a boolean, so `(if (js/isNaN x) ...)` compiles to `if(isNaN(x))` rather than a `cljs.core.truth_` call. A build without `:externs-sources` (all `cljf.esm` builds) reads them from `cljs/externs/default.edn` (see [Default externs](#default-externs)), the map `cljs.externs/externs-map` parses, without docs and source locations (`cljs.analyzer.api/resolve-extern`'s `:info` has no `:doc`). Only builds with `:externs-sources` (the classic compiler's, with `:infer-externs`) parse externs with the Closure Compiler. The classic REPLs (`cljs.main`, `cljs.repl/repl`, `cljs.server.*`) don't set `:externs-sources` either, so they get the same map: `(doc js/isNaN)` prints no JSDoc text.
+Externs aren't needed: `:externs` and `:infer-externs` aren't used. The analyzer still reads the types of JavaScript's standard and browser APIs from Closure's default externs, e.g. that `isNaN` returns a boolean, so `(if (js/isNaN x) ...)` compiles to `if(isNaN(x))` rather than a `cljs.core.truth_` call. It reads them from `cljs/externs/default.edn` (see [Default externs](#default-externs)), the map `cljs.externs/externs-map` parses, without docs and source locations (`cljs.analyzer.api/resolve-extern`'s `:info` has no `:doc`, and `(doc js/isNaN)` prints no JSDoc text).
 
 ### Hot reloading
 
@@ -581,7 +581,7 @@ The npm package `clojurific` is `src/main/js`: the launcher (`src/main/js/cljf`)
 
 ### Closure compiler
 
-`deps.edn` has the fork's dependencies, which don't include the Closure Compiler (`com.google.javascript/closure-compiler`): `cljf.esm`, its REPL and the analyzer (`cljs.analyzer.api`) don't need it. The classic compiler (`cljs.closure`, `cljs.build.api`, `cljs.main` and the classic REPLs) does, and fails with a `ClassNotFoundException` for `com.google.javascript.jscomp` classes without it. Add the `:closure` alias to every alias running them, e.g. `clojure -M:closure:compiler.test:compiler.test.run` for the compiler tests and `clojure -M:closure:cljs-repl` for `cljs.main`'s Node.js REPL (`:cljs-brepl` and `:cljs-lite-repl` too). `cljs.repl` loads `cljs.closure` on first use, so namespaces requiring `cljs.repl` (its macros) compile without it. `pom.template.xml` and `project.clj` are upstream's publishing setup and still list the Closure Compiler.
+`deps.edn` has the fork's dependencies, which don't include the Closure Compiler (`com.google.javascript/closure-compiler`): the compiler doesn't use it. Only `script/gen-default-externs` does, with the `:closure` alias, which also adds the externs parser `cljs.externs` (`script/gen_default_externs/`).
 
 ### Resolver lock
 
@@ -589,7 +589,7 @@ The jars of the launcher's resolver (`clojurific.resolve`, run with tools.deps) 
 
 ### Default externs
 
-`script/gen-default-externs` regenerates `src/main/clojure/cljs/externs/default.edn`; run it after updating the Closure Compiler. CI's `compiler` suite (`.github/workflows/test.yaml`) fails when the file is out of date.
+`script/gen-default-externs` regenerates `src/main/clojure/cljs/externs/default.edn`; run it after updating the Closure Compiler in the `:closure` alias. CI's `default-externs` suite (`.github/workflows/test.yaml`) fails when the file is out of date.
 
 ## Questions and feedback
 
