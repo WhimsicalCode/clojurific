@@ -115,4 +115,9 @@
     (is (nil? (get #js {"sym" 1} 'sym)))
     (is (nil? (:x (js/Date.))))
     (is (nil? (find (js/Date.) :x)))
-    (is (nil? (:a (js/Object.create #js {:a 1}))))))
+    (is (nil? (:a (js/Object.create #js {:a 1})))))
+  (testing "find agrees with get and contains? on JavaScript arrays and strings: indexed"
+    (is (= [0 10] (find #js [10] 0)))
+    (is (= [0 "a"] (find "a" 0)))
+    (is (nil? (find #js [10] 1)))
+    (is (nil? (find "a" 1)))))
