@@ -448,7 +448,11 @@
                                          (reset! buffer (.pop lines))
                                          (doseq [line lines
                                                  :when (and (current?) (not= "" line))]
-                                           (handle! (js/JSON.parse line) send!)))))
+                                           ;; not the plugin's socket (another server took
+                                           ;; its port): close, connect again later
+                                           (if-let [msg (try (js/JSON.parse line) (catch :default _ nil))]
+                                             (handle! msg send!)
+                                             (.destroy s))))))
                        ;; close follows
                        (.on s "error" (fn [_]))
                        (.on s "close" (fn []
