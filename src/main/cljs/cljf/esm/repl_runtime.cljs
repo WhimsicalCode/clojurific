@@ -393,12 +393,16 @@
 
 (def ^:private tab-key-key "cljs-esm-repl-tab")
 
-(defn- random-key []
-  (if-let [^js c (.-crypto js/globalThis)]
-    (if (fn? (.-randomUUID c))
-      (.randomUUID c)
-      (str (js/Math.random)))
-    (str (js/Math.random))))
+(defn- random-key
+  "128 random bits as hex, from crypto.getRandomValues (also in pages of
+  insecure contexts, which lack randomUUID), nil without it: a tab key is
+  what keeps a page's runtime id, a guessable one would let another client
+  take it."
+  []
+  (when-let [^js c (.-crypto js/globalThis)]
+    (when (fn? (.-getRandomValues c))
+      (let [bytes (.getRandomValues c (js/Uint8Array. 16))]
+        (.join (.map (js/Array.from bytes) #(.padStart (.toString % 16) 2 "0")) "")))))
 
 (defn- tab-key
   "The page's key in sessionStorage, which keeps its runtime id when it's
@@ -408,7 +412,7 @@
   []
   (when-let [storage (and (.-document js/globalThis) (session-storage))]
     (or (.getItem storage tab-key-key)
-        (let [k (random-key)]
+        (when-let [k (random-key)]
           (.setItem storage tab-key-key k)
           k))))
 

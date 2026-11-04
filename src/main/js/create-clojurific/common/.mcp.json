@@ -2,7 +2,7 @@
   "mcpServers": {
     "clojurific": {
       "command": "npx",
-      "args": ["cljf", "mcp"]
+      "args": ["--no", "cljf", "mcp"]
     }
   }
 }

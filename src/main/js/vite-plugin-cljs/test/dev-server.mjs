@@ -64,7 +64,7 @@ async function until(what, f, timeout = 60000) {
 // An MCP client of `npx cljf mcp`, the bridge to the dev server's MCP
 // server: request(method, params) resolves to the result
 function mcpClient() {
-  const proc = spawn('npx', ['cljf', 'mcp'], { stdio: ['pipe', 'pipe', 'inherit'], detached: true });
+  const proc = spawn('npx', ['--no', 'cljf', 'mcp'], { stdio: ['pipe', 'pipe', 'inherit'], detached: true });
   groups.add(proc.pid);
   let buffer = '';
   let id = 0;

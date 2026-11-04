@@ -477,6 +477,10 @@ export default function cljf(options) {
   // the other, with a copy of its sessionStorage), which gets a new id and
   // key.
   const tabIds = new Map();
+  // tab keys are 32 hex digits (cljf.esm.repl-runtime/random-key), kept for
+  // as many tabs as a session opens, the oldest dropped past that
+  const MAX_TAB_IDS = 1000;
+  const tabKeyOf = data => (typeof data.tabKey === 'string' && /^[0-9a-f-]{8,64}$/i.test(data.tabKey) ? data.tabKey : undefined);
   const toRepl = msg => proc?.stdin.writable && proc.stdin.write(`repl ${JSON.stringify(msg)}\n`);
   // A runtime's connection: receive takes the data of its cljs:repl events
   // for the REPL, close says bye. send replies to it, consoleAllowed whether
@@ -488,14 +492,17 @@ export default function cljf(options) {
       if (!runtimeMessage(data)) return;
       let tabKey;
       if (data.op === 'hello' && id === undefined) {
-        const known = typeof data.tabKey === 'string' ? tabIds.get(data.tabKey) : undefined;
+        const key = tabKeyOf(data);
+        const known = key !== undefined ? tabIds.get(key) : undefined;
         if (known !== undefined && !runtimes.has(known)) {
           id = known;
         } else {
           id = ++lastRuntimeId;
-          if (typeof data.tabKey === 'string') {
-            if (known !== undefined) tabKey = `${data.tabKey.slice(0, 64)}-${id}`;
-            tabIds.set(tabKey ?? data.tabKey, id);
+          if (key !== undefined) {
+            // a page opened by another has a copy of its key: a key of its own
+            if (known !== undefined) tabKey = `${key.slice(0, 40)}-${id}`;
+            tabIds.set(tabKey ?? key, id);
+            if (tabIds.size > MAX_TAB_IDS) tabIds.delete(tabIds.keys().next().value);
           }
         }
         runtimes.set(id, send);

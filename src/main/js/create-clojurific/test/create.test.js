@@ -68,14 +68,14 @@ for (const template of TEMPLATES) {
     assert.match(viteConfig, /repl: \{ nreplPort: 0, mcpPort: 0, middleware: \["'cider\.nrepl\/cider-middleware"\] \}/);
     // coding agents' MCP server
     assert.deepEqual(JSON.parse(readFileSync(path.join(root, '.mcp.json'), 'utf8')),
-      { mcpServers: { clojurific: { command: 'npx', args: ['cljf', 'mcp'] } } });
+      { mcpServers: { clojurific: { command: 'npx', args: ['--no', 'cljf', 'mcp'] } } });
     const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
     assert.match(agents, /`src\/my_app\/`/);
     assert.match(agents, template === 'hono' ? /in the server \(and its worker threads\)/ : /in the browser tabs/);
     assert.doesNotMatch(agents, /\{\{/);
     const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
     assert.match(readme, /\n## Coding agents\n/);
-    assert.match(readme, /`npx cljf mcp`/);
+    assert.match(readme, /`npx --no cljf mcp`/);
     assert.match(readme, template === 'hono' ? /in the server \(and its worker threads\) running/ : /and open its page/);
     assert.doesNotMatch(readme, /\{\{/);
     assert.ok(!existsSync(path.join(root, 'README-agents.md')));

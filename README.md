@@ -329,7 +329,7 @@ The launcher and the Vite plugin start the compiler with `cljf.main`, `cljf.esm`
 The REPL's MCP server gives coding agents the REPL's tools: `:repl {:mcp-port 0}` (`compilerOptions: { repl: { mcpPort: 0 } }`, with `nreplPort` too or alone) starts it in the watcher's JVM. It's MCP's Streamable HTTP on `127.0.0.1`, and its port goes in `.cljf/mcp-port`. `cljf mcp` connects an agent to it over stdio:
 
 ```json
-{ "mcpServers": { "clojurific": { "command": "npx", "args": ["cljf", "mcp"] } } }
+{ "mcpServers": { "clojurific": { "command": "npx", "args": ["--no", "cljf", "mcp"] } } }
 ```
 
 - **Tools:**

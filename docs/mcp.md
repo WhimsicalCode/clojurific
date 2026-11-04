@@ -32,8 +32,10 @@ agent ──stdio──▶ cljf mcp ──HTTP──▶ watcher's JVM: cljf.esm.
 - **`cljf mcp`** (`src/main/js/cljf/mcp.js`) is a stdio bridge, which is how agents are configured:
 
   ```json
-  { "mcpServers": { "clojurific": { "command": "npx", "args": ["cljf", "mcp"] } } }
+  { "mcpServers": { "clojurific": { "command": "npx", "args": ["--no", "cljf", "mcp"] } } }
   ```
+
+  `--no`: npx runs the project's own `cljf` (the `clojurific` package's bin), never a registry package named `cljf`, which it would install and run, without asking, while the project's `node_modules` is missing.
 
   - It reads `.cljf/mcp-port` for every request, so it reconnects across dev server restarts.
   - It lists the tools before the dev server is up, from its copy `mcp-tools.json`.

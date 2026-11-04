@@ -7,7 +7,7 @@ ClojureScript dependencies in `deps.edn`. See `README.md`.
 ## The REPL's MCP server
 
 The dev server (`npm run dev`) runs an MCP server, the `clojurific` server of `.mcp.json`
-(`npx cljf mcp`), whose tools evaluate in the {{runtimes}} running the app:
+(`npx --no cljf mcp`), whose tools evaluate in the {{runtimes}} running the app:
 
 - `build_status`, `runtimes`: the last compile (its error or warnings) and the runtimes
   connected.{{openPage}}
