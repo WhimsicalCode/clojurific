@@ -8,6 +8,7 @@ import net from 'node:net';
 import path from 'node:path';
 import readline from 'node:readline';
 import { LauncherError } from './errors.js';
+import { highlight, highlightInput } from './highlight.js';
 
 // bencode, nREPL's encoding: dicts, lists, integers and (UTF-8) strings
 
@@ -346,6 +347,9 @@ export async function repl({
   output = process.stdout,
   errorOutput = process.stderr,
   terminal = Boolean(input.isTTY && output.isTTY),
+  // highlighting the input and the values, in a terminal with colours
+  // (not with NO_COLOR or TERM=dumb)
+  color = terminal && Boolean(output.hasColors?.()),
   historyFile = path.join(cwd, '.cljf', 'repl-history'),
 } = {}) {
   const socket = await connectToServer({ cwd, port, host, log: line => errorOutput.write(`${line}\n`) });
@@ -390,6 +394,9 @@ export async function repl({
         .catch(() => {});
     });
   }
+  // the lines of the form read so far tell whether the line starts in a
+  // string
+  if (color) highlightInput(rl, () => pending);
 
   let evaluating = null;
   let interrupted = false;
@@ -469,7 +476,7 @@ export async function repl({
         await conn.request({ op: 'eval', session, code, ns, id: evaluating }, msg => {
           write(output, msg.out);
           write(errorOutput, msg.err);
-          if (msg.value !== undefined) output.write(`${msg.value}\n`);
+          if (msg.value !== undefined) output.write(`${color ? highlight(msg.value) : msg.value}\n`);
           if (msg.ns) ns = msg.ns;
         }).catch(() => {});
         evaluating = null;

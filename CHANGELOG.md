@@ -13,6 +13,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 - `create-clojurific`'s browser templates (Vanilla, React, Reagent, UIx) depend on cljs-devtools and preload it in the dev server's pages: Chrome's and Firefox's consoles format ClojureScript values (with custom formatters enabled in the browser's DevTools settings). Bundles don't include it.
 - `create-clojurific` asks whether to add [uni.style](https://github.com/WhimsicalCode/uni.style) to a React, Reagent or UIx project (`--unistyle`): the app is styled with its compile-time atomic CSS, which its build hook writes to `public/css/bundle.css`, with light and dark themes following the system's.
 - For scripts running the dev server themselves, the Vite plugin's `api.ready()` resolves once its first compile is done (with whether it succeeded), and `api.compiled()` once a compile succeeded.
+- `cljf repl` highlights the syntax of the line being typed (strings, keywords, numbers, comments, special forms, unmatched brackets) and of the values it prints, in a terminal with colours (not with `NO_COLOR` or `TERM=dumb`).
 - Node.js runtimes say which process and thread they are: `(cljf.esm.repl/runtimes)` lists them with a `node://<pid>/<threadId>` URL and a title (`main thread (pid …)`, `worker thread 2 (pid …)`, or `globalThis.CLJF_REPL_TITLE`), instead of no URL. Worker threads aren't visible, so the REPL evaluates in their process' main thread (or a page) by default.
 
 ### Changed

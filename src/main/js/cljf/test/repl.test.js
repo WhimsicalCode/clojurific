@@ -247,6 +247,37 @@ test('repl completes on Tab in a terminal, in the namespace of the last form', a
   }
 });
 
+test('repl highlights the input and the values in a terminal with colours', async () => {
+  const server = await fakeServer(code => [{ value: code.includes('kw') ? ':done' : 'nil', ns: 'cljs.user' }], cider(['kwote']));
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let out = '';
+  output.on('data', d => (out += d));
+  output.columns = 80;
+  const done = repl({ port: server.port, input, output, errorOutput: new PassThrough(), terminal: true, color: true, historyFile: path.join(tmpDir(), 'history') });
+  const typed = async text => {
+    input.write(text);
+    await new Promise(resolve => setTimeout(resolve, 150));
+  };
+  try {
+    await typed('');
+    // the string the line before opened
+    await typed('(str "a\r');
+    await typed('b" :k)\r');
+    await typed('(kwo\t');
+    await typed(')\r');
+    assert.equal(server.requests.filter(r => r.op === 'eval').at(-1).code, '(kwote)\n');
+    assert.match(out, /\x1b\[32m"a\x1b\[39m/);
+    assert.match(out, /\x1b\[32mb"\x1b\[39m \x1b\[36m:k\x1b\[39m\)/);
+    assert.match(out, /\n\x1b\[36m:done\x1b\[39m\n/);
+    input.write(':cljs/quit\r');
+    assert.equal(await within(done, 5000), 0);
+  } finally {
+    input.end();
+    server.close();
+  }
+});
+
 test('repl fails when the server has no ClojureScript REPL', async () => {
   const server = await fakeServer(() => [{ err: 'Could not resolve var: cljf.esm.repl/repl\n' }, { ex: 'class clojure.lang.Compiler$CompilerException' }]);
   try {
