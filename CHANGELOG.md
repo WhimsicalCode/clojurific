@@ -3,11 +3,15 @@
 Changes since Clojurific was forked from ClojureScript. For ClojureScript's own
 releases, see its [changelog](https://github.com/clojure/clojurescript/blob/master/changes.md).
 
-## 0.12.15 [Next]
+## 0.12.15 [2026-11-04]
 
 ### Added
 
 - The REPL's MCP server for coding agents: with `:repl {:mcp-port 0}` the watcher serves MCP on `127.0.0.1` (port in `.cljf/mcp-port`), and `cljf mcp` connects agents to it over stdio. Its tools evaluate in a runtime given by id or tag, wait for edits to be compiled and hot reloaded, report the build's status, read a runtime's console log and the dev server's own errors, and look up namespaces and vars and expand macros. Browser tabs keep their runtime id when reloaded. `create-clojurific`'s projects start it, with `.mcp.json` and an `AGENTS.md`. `cljf mcp --dir <dir>` connects an agent started in another directory, i.e. a monorepo's root. Its clients authenticate with a token of the server's run, in the owner-only port file.
+
+### Changed
+
+- `create-clojurific` lists the Vanilla template last and adds uni.style to the React, Reagent and UIx templates unless declined.
 
 ### Fixed
 
