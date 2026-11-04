@@ -28,11 +28,11 @@ Options:
   npm create clojurific@latest my-app -- --template reagent`;
 
 const FRAMEWORKS = [
-  { value: 'vanilla', label: 'Vanilla', color: c.yellow },
   { value: 'react', label: 'React', color: c.blue, hint: '#x literals, https://react.dev/' },
   { value: 'reagent', label: 'Reagent', color: c.cyan, hint: 'https://reagent-project.github.io/' },
   { value: 'uix', label: 'UIx', color: c.magenta, hint: 'https://uix-cljs.dev/' },
   { value: 'hono', label: 'Hono (backend only)', color: c.red, hint: 'https://hono.dev/' },
+  { value: 'vanilla', label: 'Vanilla', color: c.yellow },
 ];
 
 function parse(argv) {
@@ -156,7 +156,7 @@ async function main() {
     throw new Error(`--unistyle is for the ${ADDONS.unistyle.join(', ')} templates, not ${template}`);
   }
   const unistyle = args.unistyle ?? (interactive && ADDONS.unistyle.includes(template)
-    && cancelled(await confirm({ message: 'Add uni.style (compile-time atomic CSS)?', initialValue: false })));
+    && cancelled(await confirm({ message: 'Add uni.style (compile-time atomic CSS, https://github.com/WhimsicalCode/uni.style)?' })));
   const addons = unistyle ? ['unistyle'] : [];
 
   const immediate = args.immediate
