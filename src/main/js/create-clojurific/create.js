@@ -16,6 +16,16 @@ export const TEMPLATES = ['vanilla', 'react', 'reagent', 'uix', 'hono'];
 
 export const DEFAULT_PROJECT = 'clojurific-project';
 
+export const addonsDir = path.join(packageRoot, 'addons');
+
+// Add-ons scaffolded over a template: the templates each applies to
+export const ADDONS = {
+  unistyle: ['react', 'reagent', 'uix'],
+};
+
+// The uni.style version the unistyle add-on depends on
+export const UNISTYLE_VERSION = '1.0.0';
+
 // Trimmed, without trailing slashes
 export function formatTargetDir(dir) {
   return dir.trim().replace(/[/\\]+$/g, '');
@@ -76,16 +86,58 @@ async function copy(src, dest, replace) {
   }
 }
 
+// Replaces the text matching pattern in root's file, which must match
+async function patch(root, file, pattern, replacement) {
+  const to = path.join(root, file);
+  const content = await fs.readFile(to, 'utf8');
+  if (!pattern.test(content)) throw new Error(`${file} has no ${pattern}`);
+  await fs.writeFile(to, content.replace(pattern, replacement));
+}
+
+// uni.style: its dependency, the build hook writing the CSS its macros
+// compile, which index.html loads instead of src/style.css, and the
+// add-on's sources (core.cljs styled with it, and theme.cljs)
+async function unistyle({ root, template, replace }) {
+  const dir = path.join(addonsDir, 'unistyle');
+  await copy(path.join(dir, 'common'), root, replace);
+  await copy(path.join(dir, template), root, replace);
+  // the last of :deps, the map closing deps.edn's
+  await patch(root, 'deps.edn', /\}\}\n?$/, `
+        ;; compile-time atomic CSS, see vite.config.ts
+        com.whimsical/uni.style {:mvn/version "${UNISTYLE_VERSION}"}}}
+`);
+  await patch(root, 'vite.config.ts', /^( *)compilerOptions: \{\n/m, (m, indent) => `${m}${indent}  `
+    + '// writes the CSS of uni.style\'s macros after every compile, which\n'
+    + `${indent}  // index.html loads (and the dev server's pages reload)\n`
+    + `${indent}  buildHooks: [["'uni.style.build/esm-hook", { outputTo: 'public/css/bundle.css' }]],\n`);
+  await patch(root, 'index.html', /<link rel="stylesheet" href="\/src\/style\.css" \/>/,
+    '<link id="bundle-css" rel="stylesheet" href="/css/bundle.css" />');
+  await fs.rm(path.join(root, 'src', 'style.css'));
+  await fs.appendFile(path.join(root, '.gitignore'), '# uni.style\'s CSS, written by the build\npublic/css\n');
+  await fs.appendFile(path.join(root, 'README.md'), replace(await fs.readFile(path.join(dir, 'README.md'), 'utf8')));
+}
+
+const addons = { unistyle };
+
 /**
  * Writes the template into root (created if missing): {{name}}, {{ns}} and
  * {{nsDir}} in files and paths are the package's name and namespace, and
- * package.json gets the name and clojurific's version.
+ * package.json gets the name and clojurific's version. Then the add-ons
+ * (ADDONS' keys) over it.
  */
-export async function scaffold({ root, template, name = packageName(path.basename(root)) }) {
+export async function scaffold({ root, template, name = packageName(path.basename(root)), addons: selected = [] }) {
   if (!TEMPLATES.includes(template)) throw new Error(`Unknown template ${template}, expected one of ${TEMPLATES.join(', ')}`);
+  for (const addon of selected) {
+    if (!ADDONS[addon]) throw new Error(`Unknown add-on ${addon}, expected one of ${Object.keys(ADDONS).join(', ')}`);
+    if (!ADDONS[addon].includes(template)) throw new Error(`The ${addon} add-on is for the ${ADDONS[addon].join(', ')} templates, not ${template}`);
+  }
   const vars = { name, ...namespace(name) };
+  // the add-ons' sources also name the app's my-app.theme namespace
+  const names = { ...vars, themeNs: vars.ns.replace(/\.core$/, '.theme') };
+  const replace = s => s.replace(/\{\{(\w+)\}\}/g, (m, v) => names[v] ?? m);
   await fs.mkdir(root, { recursive: true });
-  await copy(path.join(templatesDir, template), root, s => s.replace(/\{\{(\w+)\}\}/g, (m, v) => vars[v] ?? m));
+  await copy(path.join(templatesDir, template), root, replace);
+  for (const addon of selected) await addons[addon]({ root, template, replace });
   const pkgFile = path.join(root, 'package.json');
   const pkg = JSON.parse(await fs.readFile(pkgFile, 'utf8'));
   pkg.name = name;

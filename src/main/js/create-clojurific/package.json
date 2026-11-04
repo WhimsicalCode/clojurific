@@ -16,7 +16,8 @@
     "index.js",
     "create.js",
     "prompts.js",
-    "templates"
+    "templates",
+    "addons"
   ],
   "engines": {
     "node": ">=20"

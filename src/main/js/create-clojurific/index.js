@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  DEFAULT_PROJECT, TEMPLATES, emptyDir, formatTargetDir, isEmpty, packageManager, packageName, scaffold, version,
+  ADDONS, DEFAULT_PROJECT, TEMPLATES, emptyDir, formatTargetDir, isEmpty, packageManager, packageName, scaffold, version,
 } from './create.js';
 import { CANCEL, c, cancel, confirm, log, outro, select, text } from './prompts.js';
 
@@ -18,9 +18,11 @@ Asks for what the options don't say.
 
 Options:
   -t, --template <name>   ${TEMPLATES.join(', ')}
+  --unistyle              style with uni.style (${ADDONS.unistyle.join(', ')})
   --overwrite             remove the target directory's files
   -i, --immediate         install the dependencies and start the dev server
-  --no-interactive        don't ask, use the defaults (vanilla, no install)
+  --no-interactive        don't ask, use the defaults (vanilla, no add-ons,
+                          no install)
 
   npm create clojurific@latest
   npm create clojurific@latest my-app -- --template reagent`;
@@ -40,6 +42,8 @@ function parse(argv) {
     if (arg === '-t' || arg === '--template') args.template = argv[++i];
     else if (arg.startsWith('--template=')) args.template = arg.slice('--template='.length);
     else if (arg === '--overwrite') args.overwrite = true;
+    else if (arg === '--unistyle') args.unistyle = true;
+    else if (arg === '--no-unistyle') args.unistyle = false;
     else if (arg === '-i' || arg === '--immediate') args.immediate = true;
     else if (arg === '--no-immediate') args.immediate = false;
     else if (arg === '--interactive') args.interactive = true;
@@ -148,13 +152,20 @@ async function main() {
     template = interactive ? cancelled(await select({ message: 'Select a framework:', options: FRAMEWORKS })) : 'vanilla';
   }
 
+  if (args.unistyle && !ADDONS.unistyle.includes(template)) {
+    throw new Error(`--unistyle is for the ${ADDONS.unistyle.join(', ')} templates, not ${template}`);
+  }
+  const unistyle = args.unistyle ?? (interactive && ADDONS.unistyle.includes(template)
+    && cancelled(await confirm({ message: 'Add uni.style (compile-time atomic CSS)?', initialValue: false })));
+  const addons = unistyle ? ['unistyle'] : [];
+
   const immediate = args.immediate
     ?? (interactive && cancelled(await confirm({ message: `Install with ${pm.name} and start now?` })));
 
   log.step(`Scaffolding project in ${root}...`);
   if (overwrite === 'yes' && existsSync(root)) await emptyDir(root);
   const name = packageName(path.basename(root));
-  await scaffold({ root, template, name });
+  await scaffold({ root, template, name, addons });
 
   const cd = path.relative(process.cwd(), root);
   const next = [...(cd ? [`cd ${cd.includes(' ') ? `"${cd}"` : cd}`] : []), pm.install.join(' '), pm.dev.join(' ')];

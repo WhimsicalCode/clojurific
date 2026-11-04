@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { TEMPLATES, namespace, packageManager, packageName, scaffold, version } from '../create.js';
+import { ADDONS, TEMPLATES, namespace, packageManager, packageName, scaffold, version } from '../create.js';
 
 const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.js');
 
@@ -98,6 +98,40 @@ for (const template of TEMPLATES) {
   });
 }
 
+for (const template of ADDONS.unistyle) {
+  test(`scaffold ${template} with uni.style`, async () => {
+    const root = path.join(tmpDir(), 'my-app');
+    await scaffold({ root, template, addons: ['unistyle'] });
+    const deps = readFileSync(path.join(root, 'deps.edn'), 'utf8');
+    assert.match(deps, /com\.whimsical\/uni\.style \{:mvn\/version "[\d.]+"\}\}\}\n$/);
+    assert.match(deps, /cider\/cider-nrepl/);
+    const viteConfig = readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
+    assert.match(viteConfig, /compilerOptions: \{\n(?: *\/\/.*\n)* *buildHooks: \[\["'uni\.style\.build\/esm-hook", \{ outputTo: 'public\/css\/bundle\.css' \}\]\],\n *\/\/ the dev server/);
+    const html = readFileSync(path.join(root, 'index.html'), 'utf8');
+    assert.match(html, /<link id="bundle-css" rel="stylesheet" href="\/css\/bundle\.css" \/>/);
+    assert.doesNotMatch(html, /style\.css/);
+    assert.ok(!existsSync(path.join(root, 'src', 'style.css')));
+    assert.match(readFileSync(path.join(root, '.gitignore'), 'utf8'), /^public\/css$/m);
+    assert.match(readFileSync(path.join(root, 'README.md'), 'utf8'), /src\/my_app\/theme\.cljs/);
+    const theme = readFileSync(path.join(root, 'src', 'my_app', 'theme.cljs'), 'utf8');
+    assert.match(theme, /^\(ns my-app\.theme\b/);
+    const source = readFileSync(path.join(root, 'src', 'my_app', 'core.cljs'), 'utf8');
+    assert.match(source, /^\(ns my-app\.core\n  \(:require[^)]*\[my-app\.theme :as theme\]/);
+    assert.match(source, /\[uni\.style\.core :as s\]/);
+    assert.match(source, /src\/my_app\/core\.cljs/);
+    assert.doesNotMatch(source, /\{\{/);
+  });
+}
+
+test('scaffold rejects an add-on its template has none of', async () => {
+  for (const template of TEMPLATES.filter(t => !ADDONS.unistyle.includes(t))) {
+    await assert.rejects(scaffold({ root: path.join(tmpDir(), 'my-app'), template, addons: ['unistyle'] }),
+      new RegExp(`not ${template}`));
+  }
+  await assert.rejects(scaffold({ root: path.join(tmpDir(), 'my-app'), template: 'react', addons: ['tailwind'] }),
+    /Unknown add-on tailwind/);
+});
+
 test('the CLI scaffolds the template the options name', () => {
   const cwd = tmpDir();
   const result = create(cwd, 'my-app', '--template', 'reagent', '--no-interactive');
@@ -105,6 +139,20 @@ test('the CLI scaffolds the template the options name', () => {
   assert.match(result.stdout, /Scaffolding project in .*my-app/);
   assert.match(result.stdout, /cd my-app\n\s+npm install\n\s+npm run dev/);
   assert.match(readFileSync(path.join(cwd, 'my-app', 'deps.edn'), 'utf8'), /reagent\/reagent/);
+});
+
+test('the CLI adds uni.style with --unistyle, only to its templates', () => {
+  const cwd = tmpDir();
+  const result = create(cwd, 'my-app', '--template', 'uix', '--unistyle', '--no-interactive');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(readFileSync(path.join(cwd, 'my-app', 'deps.edn'), 'utf8'), /com\.whimsical\/uni\.style/);
+  const plain = create(cwd, 'plain', '--template', 'uix', '--no-interactive');
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.doesNotMatch(readFileSync(path.join(cwd, 'plain', 'deps.edn'), 'utf8'), /uni\.style/);
+  const vanilla = create(cwd, 'vanilla', '--template', 'vanilla', '--unistyle', '--no-interactive');
+  assert.notEqual(vanilla.status, 0);
+  assert.match(vanilla.stdout, /--unistyle is for the react, reagent, uix templates, not vanilla/);
+  assert.ok(!existsSync(path.join(cwd, 'vanilla')));
 });
 
 test('the CLI defaults to vanilla in the default directory without prompts', () => {
