@@ -6,7 +6,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { bridge, tools } from '../mcp.js';
+import { absolutePaths, bridge, tools } from '../mcp.js';
 import { tmpDir } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -142,4 +142,42 @@ test('messages that aren\'t objects are invalid requests, the bridge keeps answe
   const responses = await b.responses();
   assert.equal(responses.filter(r => r.error?.code === -32600).length, 4);
   assert.deepEqual(responses.find(r => r.id === 1).result, {});
+});
+
+test('paths relative to the agent\'s directory are passed absolute, others as they are', () => {
+  const dir = tmpDir();
+  mkdirSync(path.join(dir, 'app', 'src'), { recursive: true });
+  writeFileSync(path.join(dir, 'app', 'src', 'a.cljs'), '');
+  const call = args => ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'x', arguments: args } });
+  assert.deepEqual(absolutePaths(call({ files: ['app/src/a.cljs', 'src/a.cljs'], runtime_id: 1 }), dir).params.arguments,
+    { files: [path.join(dir, 'app', 'src', 'a.cljs'), 'src/a.cljs'], runtime_id: 1 });
+  assert.equal(absolutePaths(call({ path: 'app/src/a.cljs' }), dir).params.arguments.path, path.join(dir, 'app', 'src', 'a.cljs'));
+  assert.equal(absolutePaths(call({ path: '/abs.cljs' }), dir).params.arguments.path, '/abs.cljs');
+  const ping = { jsonrpc: '2.0', id: 2, method: 'ping' };
+  assert.equal(absolutePaths(ping, dir), ping);
+});
+
+test('--dir: the port file of another directory', async () => {
+  const root = tmpDir();
+  const project = path.join(root, 'app');
+  mkdirSync(path.join(project, '.cljf'), { recursive: true });
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', chunk => (body += chunk));
+    req.on('end', () => {
+      const msg = JSON.parse(body);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { from: 'app' } }));
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  writeFileSync(path.join(project, '.cljf', 'mcp-port'), String(server.address().port));
+  try {
+    const b = start({ cwd: project });
+    b.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const [list] = await b.responses();
+    assert.deepEqual(list.result, { from: 'app' });
+  } finally {
+    server.close();
+  }
 });

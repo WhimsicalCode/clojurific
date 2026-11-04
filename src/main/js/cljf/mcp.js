@@ -79,6 +79,23 @@ async function sleep(ms) {
 }
 
 /**
+ * tools/call message msg with the file paths of its arguments (load_file's
+ * path, wait_for_reload's files) absolute, relative ones resolved against
+ * dir, the agent's directory, when the file is there: the server resolves
+ * them against its project's, which an agent started elsewhere (a
+ * monorepo's root, cljf mcp --dir) doesn't see paths relative to.
+ */
+export function absolutePaths(msg, dir) {
+  const args = msg?.method === 'tools/call' ? msg.params?.arguments : null;
+  if (!args || typeof args !== 'object') return msg;
+  const resolve = p => (typeof p === 'string' && !path.isAbsolute(p) && existsSync(path.resolve(dir, p)) ? path.resolve(dir, p) : p);
+  const resolved = { ...args };
+  if ('path' in args) resolved.path = resolve(args.path);
+  if (Array.isArray(args.files)) resolved.files = args.files.map(resolve);
+  return { ...msg, params: { ...msg.params, arguments: resolved } };
+}
+
+/**
  * The bridge: reads JSON-RPC messages from input, writes the responses to
  * output. initialize waits up to waitMs for the server (an agent starting
  * with the dev server), then answers itself, saying how to start it.
@@ -99,6 +116,7 @@ export async function bridge({
   // read) answers the request.
   const forward = async msg => {
     const p = await serverPort({ cwd, port });
+    msg = absolutePaths(msg, process.cwd());
     if (!p) return null;
     try {
       const response = await post(p, msg, { host });

@@ -342,6 +342,7 @@ The REPL's MCP server gives coding agents the REPL's tools: `:repl {:mcp-port 0}
 - **Every tool of a runtime takes its `runtime_id`, an id or a tag:** agents can't see which tab is focused. A browser tab keeps its id when it's reloaded.
 - **Session start:** the server's instructions list the build's status and the runtimes connected when the agent starts.
 - **Dev server not running:** `cljf mcp` still lists the tools, and their calls say how to start it.
+- **An agent started elsewhere,** i.e. at a monorepo's root: `cljf mcp --dir app` reads `app/.cljf/mcp-port`, and passes the files the agent names relative to its own directory (`app/src/...`) as absolute paths.
 - **Security:** the server accepts only this machine's clients, with a loopback `Host`, and JSON requests without an `Origin`: browsers' pages can't use it, those of this machine included.
 
 `create-clojurific`'s projects start it and have `.mcp.json` and an `AGENTS.md` explaining its tools. See [`docs/mcp.md`](docs/mcp.md) for the design.

@@ -87,7 +87,7 @@
       "properties": {
         "path": {
           "type": "string",
-          "description": "The file, relative to the project's directory."
+          "description": "The file: absolute, or relative to the project's directory."
         },
         "runtime_id": {
           "type": [
@@ -122,7 +122,7 @@
           "items": {
             "type": "string"
           },
-          "description": "The files edited, relative to the project's directory."
+          "description": "The files edited: absolute, or relative to the project's directory."
         },
         "timeout_ms": {
           "type": "integer",

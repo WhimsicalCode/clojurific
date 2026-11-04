@@ -18,9 +18,12 @@ Commands:
   repl [--port <port>]   a ClojureScript REPL into the pages running the dev
                          server's (or watch's) build, through its nREPL server
                          (:repl {:nrepl-port 0}, port from .nrepl-port)
-  mcp [--port <port>]    an MCP server on stdio for coding agents, into the
+  mcp [--port <port>] [--dir <dir>]
+                         an MCP server on stdio for coding agents, into the
                          dev server's (or watch's) REPL (:repl {:mcp-port 0},
-                         port from .cljf/mcp-port)
+                         port from <dir>/.cljf/mcp-port, the current
+                         directory by default: --dir for an agent started
+                         elsewhere, i.e. a monorepo's root)
   setup-java [version]   download Eclipse Temurin (the latest LTS by default)
                          into cljf's cache, for machines without Java
 
@@ -87,8 +90,13 @@ async function main() {
       break;
     }
     case 'mcp': {
-      const i = args.indexOf('--port');
-      await bridge({ port: i >= 0 ? Number(args[i + 1]) : undefined });
+      const option = name => {
+        const i = args.indexOf(name);
+        return i >= 0 ? args[i + 1] : undefined;
+      };
+      const port = option('--port');
+      const dir = option('--dir');
+      await bridge({ port: port ? Number(port) : undefined, cwd: dir ? path.resolve(dir) : process.cwd() });
       break;
     }
     case 'setup-java': {

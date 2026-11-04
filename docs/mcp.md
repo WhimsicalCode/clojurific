@@ -39,6 +39,7 @@ agent ──stdio──▶ cljf mcp ──HTTP──▶ watcher's JVM: cljf.esm.
   - It lists the tools before the dev server is up, from its copy `mcp-tools.json`.
   - Without a server, it answers `initialize` itself, saying how to start one, and tool calls fail with the same message.
   - With a fixed `:mcp-port`, agents can use `http://127.0.0.1:<port>/mcp` directly.
+  - `--dir <dir>` reads `<dir>/.cljf/mcp-port`, for an agent started in another directory (a monorepo's root, with a server per project). Files the agent names relative to its own directory are passed as absolute paths.
 - **Security:** the tools compile forms in the JVM, running their macros, so only this machine may connect:
   - the server binds a loopback address;
   - it accepts loopback clients only;

@@ -75,7 +75,7 @@
     :title       "Load file"
     :description "Loads a ClojureScript file into a runtime: the watcher compiles it and the tool returns once the runtime applied its hot reload (or with the warnings holding it back). A file outside the source directories is evaluated form by form."
     :inputSchema {:type       "object"
-                  :properties {:path       {:type "string" :description "The file, relative to the project's directory."}
+                  :properties {:path       {:type "string" :description "The file: absolute, or relative to the project's directory."}
                                :runtime_id runtime-id-schema}
                   :required   ["path" "runtime_id"]}}
    {:name        "wait_for_reload"
@@ -84,7 +84,7 @@
     :inputSchema {:type       "object"
                   :properties {:runtime_id runtime-id-schema
                                :files      {:type "array" :items {:type "string"}
-                                            :description "The files edited, relative to the project's directory."}
+                                            :description "The files edited: absolute, or relative to the project's directory."}
                                :timeout_ms {:type "integer" :description "Give up after these ms, default 10000."}}
                   :required   ["runtime_id"]}}
    {:name        "tag_runtime"
