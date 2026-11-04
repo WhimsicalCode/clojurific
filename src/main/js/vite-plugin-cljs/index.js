@@ -18,6 +18,7 @@ import { pruneChunks, propertyRenames } from './prune.js';
 import { ednValue } from './edn.js';
 import { watchWarnings } from './warnings.js';
 import { listenReplSocket } from './repl-socket.js';
+import { runtimeMessage } from './runtime-ops.js';
 import { WORKER_ENV, devWorkers, entryModule, importVite, workerHotChannel } from './dev-workers.js';
 
 const EVENT_PREFIX = '[cljf.esm] ';
@@ -483,6 +484,8 @@ export default function cljf(options) {
   const connectRuntime = (send, consoleAllowed) => {
     let id;
     const receive = data => {
+      // a page can't send the plugin's own messages, see runtimeMessage
+      if (!runtimeMessage(data)) return;
       let tabKey;
       if (data.op === 'hello' && id === undefined) {
         const known = typeof data.tabKey === 'string' ? tabIds.get(data.tabKey) : undefined;

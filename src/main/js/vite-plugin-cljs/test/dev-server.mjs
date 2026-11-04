@@ -141,7 +141,7 @@ for (;;) {
         if (evaluated.isError || evaluated.structuredContent.results[0] !== '"one"') {
           throw new Error(`MCP eval: ${JSON.stringify(evaluated)}`);
         }
-        const reload = await mcp.call('wait_for_reload', { runtime_id: server.runtime_id });
+        const reload = await mcp.call('wait_for_reload', { runtime_id: server.runtime_id, files: [brokenFile] });
         if (reload.structuredContent?.status !== 'warnings') throw new Error(`MCP wait_for_reload: ${JSON.stringify(reload)}`);
       } finally {
         mcp.close();

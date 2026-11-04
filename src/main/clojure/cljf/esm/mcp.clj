@@ -35,7 +35,11 @@
            [java.io File]
            [java.net InetAddress InetSocketAddress URI URL]
            [java.nio.charset StandardCharsets]
+           [java.nio.file Files]
+           [java.nio.file.attribute PosixFilePermissions]
+           [java.security MessageDigest SecureRandom]
            [java.time Instant]
+           [java.util Base64]
            [java.util.concurrent Executors ThreadFactory]))
 
 ;; Tools
@@ -80,16 +84,16 @@
                   :required   ["path" "runtime_id"]}}
    {:name        "wait_for_reload"
     :title       "Wait for hot reload"
-    :description "After editing source files: compiles them unless the watcher did already, then waits until the runtime runs the build's last compile, i.e. applied the hot reloads. Returns reloaded, error (the build failed: the error and where), warnings (they hold back hot reloads), timeout or no-runtime."
+    :description "After editing source files, pass them: compiles them unless the watcher did already (it may not have seen the edit yet), then waits until the runtime runs the build's last compile, i.e. applied the hot reloads. Returns reloaded, error (the build failed: the error and where), warnings (they hold back hot reloads), timeout or no-runtime."
     :inputSchema {:type       "object"
                   :properties {:runtime_id runtime-id-schema
                                :files      {:type "array" :items {:type "string"}
                                             :description "The files edited: absolute, or relative to the project's directory."}
                                :timeout_ms {:type "integer" :description "Give up after these ms, default 10000."}}
-                  :required   ["runtime_id"]}}
+                  :required   ["runtime_id" "files"]}}
    {:name        "tag_runtime"
     :title       "Tag runtime"
-    :description "Tags a runtime, taking the tag from any other: tools take the tag as runtime_id. A browser tab keeps its tag when reloaded. A null tag removes the runtime's."
+    :description "Tags a runtime, taking the tag from any other: tools take the tag as runtime_id. A tag isn't all digits, which is a runtime id. A browser tab keeps its tag when reloaded. A null tag removes the runtime's."
     :inputSchema {:type       "object"
                   :properties {:runtime_id runtime-id-schema
                                :tag        {:type ["string" "null"]}}
@@ -142,14 +146,14 @@
     :annotations {:readOnlyHint true}}
    {:name        "macroexpand"
     :title       "Macroexpand"
-    :description "Expands a ClojureScript form's macros in a namespace of the build, with its aliases and refers: once (macroexpand-1), until the form's head isn't a macro (macroexpand), or all the forms in it (all)."
+    :description "Expands a ClojureScript form's macros, running them in the compiler's JVM as compiling does, in a namespace of the build, with its aliases and refers: once (macroexpand-1), until the form's head isn't a macro (macroexpand), or all the forms in it (all)."
     :inputSchema {:type       "object"
                   :properties {:form {:type "string"}
                                :ns   {:type "string" :description "The namespace expanding it, default cljs.user."}
                                :mode {:type "string" :enum ["macroexpand-1" "macroexpand" "all"]
                                       :description "Default macroexpand."}}
                   :required   ["form"]}
-    :annotations {:readOnlyHint true}}
+    :annotations {:readOnlyHint false}}
    {:name        "apropos"
     :title       "Apropos"
     :description "The public vars of the build's namespaces whose name contains a string (case-insensitive)."
@@ -441,9 +445,17 @@
     (fn [{:keys [opts runtime]}]
       (let [files (get args "files")
             missing (remove #(.isFile (io/file %)) files)]
-        (if (seq missing)
+        (cond
+          ;; without them, an edit the watcher hasn't seen yet would pass for
+          ;; reloaded: the runtime runs the last compile, the edit's isn't one
+          (not (seq files))
+          (tool-error "files is required: the source files edited, which the watcher may not have seen yet")
+
+          (seq missing)
           (tool-error (str "No file " (string/join ", " (map pr-str missing))
                         " (paths are relative to " (.getCanonicalPath (io/file ".")) ")"))
+
+          :else
           (let [{:keys [status runtimes error errors warnings compiled skipped]}
                 (repl/wait-for-reload files (assoc opts :timeout (get args "timeout_ms" 10000)))
                 rstatus (get runtimes (:runtime_id runtime))
@@ -482,18 +494,25 @@
             (cond-> (text-result text data)
               (not= "reloaded" status) (assoc :isError true))))))))
 
+(defn- tag-runtime!
+  "Tags the runtime of opts with tag, a tool's result."
+  [opts runtime tag]
+  ;; the runtime acknowledges the tag with its printed value, nil when it
+  ;; didn't reply (disconnected, timed out)
+  (if (= (pr-str tag) (repl/tag! (:runtime-id opts) tag))
+    (text-result (str (if tag (str "Tagged " (pr-str tag) ": ") "Untagged: ") "runtime " (:runtime_id runtime))
+      {:runtime (assoc runtime :tag tag)})
+    (tool-error (str "Runtime " (:runtime_id runtime) " didn't acknowledge the tag: it may have disconnected or be busy, see runtimes")
+      {:runtime runtime})))
+
 (defn- tag-runtime-tool [args]
   (with-runtime args
     (fn [{:keys [opts runtime]}]
-      (let [tag   (get args "tag")
-            acked (repl/tag! (:runtime-id opts) tag)]
-        ;; the runtime acknowledges the tag with its printed value, nil
-        ;; when it didn't reply (disconnected, timed out)
-        (if (= (pr-str tag) acked)
-          (text-result (str (if tag (str "Tagged " (pr-str tag) ": ") "Untagged: ") "runtime " (:runtime_id runtime))
-            {:runtime (assoc runtime :tag tag)})
-          (tool-error (str "Runtime " (:runtime_id runtime) " didn't acknowledge the tag: it may have disconnected or be busy, see runtimes")
-            {:runtime runtime}))))))
+      (let [tag (get args "tag")]
+        (if (and (string? tag) (re-matches #"\d+" tag))
+          ;; runtime_id would read it as a runtime's id
+          (tool-error (str "A tag can't be all digits, which runtime_id reads as a runtime id: " (pr-str tag)))
+          (tag-runtime! opts runtime tag))))))
 
 (defn- runtimes-tool [_]
   (let [rs (current-runtimes)
@@ -872,6 +891,14 @@
 (defn- origin-host [^String origin]
   (try (.getHost (URI. origin)) (catch Exception _ nil)))
 
+(defn- token-matches?
+  "Whether token is the server's, compared in constant time."
+  [expected token]
+  (boolean
+    (and expected token
+         (MessageDigest/isEqual (.getBytes ^String expected StandardCharsets/UTF_8)
+           (.getBytes ^String token StandardCharsets/UTF_8)))))
+
 (defn allowed?
   "Whether a request of these headers, from a loopback address or not, may
   use the server: only this machine's clients, with a Host of a loopback
@@ -880,12 +907,21 @@
   (cljf mcp, agents) don't. A page of this machine, of any port (another
   dev server's, a script in the app's page), would run code otherwise.
   Requests also have to be JSON (see json-request?), which a page can't
-  send without the preflight the server refuses."
-  [{:keys [loopback? host origin]}]
+  send without the preflight the server refuses.
+
+  With the server's token (expected-token), the request's Authorization
+  has to be Bearer <token>: only the user who can read the port file,
+  written owner-only, reaches the server, not other local processes (other
+  users', ones sandboxed without the project's files)."
+  [{:keys [loopback? host origin authorization expected-token]}]
   (boolean
     (and loopback?
-         (or (nil? host) (loopback-name? (host-name host)))
-         (nil? origin))))
+         (some? host)
+         (loopback-name? (host-name host))
+         (nil? origin)
+         (or (nil? expected-token)
+             (token-matches? expected-token
+               (some->> authorization (re-matches #"(?i)Bearer\s+(\S+)") second))))))
 
 (defn json-request?
   "Whether a request's Content-Type is JSON's."
@@ -902,12 +938,14 @@
         (.write out bytes)))
     (.close ex)))
 
-(defn- handle-exchange [^HttpExchange ex]
+(defn- handle-exchange [^HttpExchange ex token]
   (try
     (let [headers (.getRequestHeaders ex)
-          ok?     (allowed? {:loopback? (.isLoopbackAddress (.getAddress (.getRemoteAddress ex)))
-                             :host      (.getFirst headers "Host")
-                             :origin    (.getFirst headers "Origin")})]
+          ok?     (allowed? {:loopback?      (.isLoopbackAddress (.getAddress (.getRemoteAddress ex)))
+                             :host           (.getFirst headers "Host")
+                             :origin         (.getFirst headers "Origin")
+                             :authorization  (.getFirst headers "Authorization")
+                             :expected-token token})]
       (cond
         (not ok?)
         (respond! ex 403 (write-json (rpc-error nil -32600 "Forbidden: only for this machine's clients")))
@@ -941,26 +979,70 @@
       (doto (Thread. ^Runnable r "cljf-mcp")
         (.setDaemon true)))))
 
+(defn- new-token []
+  (let [bytes (byte-array 32)]
+    (.nextBytes (SecureRandom.) bytes)
+    (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) bytes)))
+
+(defn- write-owner-only!
+  "Writes text to file f (creating its directories), readable only by its
+  owner where the file system has POSIX permissions: created with them,
+  not changed after, so no one else reads it meanwhile."
+  [^File f ^String text]
+  (io/make-parents f)
+  (let [path (.toPath f)
+        tmp  (.toPath (io/file (.getParentFile f) (str "." (.getName f) "." (System/nanoTime) ".tmp")))
+        perms (try (PosixFilePermissions/asFileAttribute (PosixFilePermissions/fromString "rw-------"))
+                (catch Exception _ nil))]
+    (if (and perms (contains? (.supportedFileAttributeViews (.getFileSystem path)) "posix"))
+      (Files/createFile tmp (into-array [perms]))
+      (Files/createFile tmp (make-array java.nio.file.attribute.FileAttribute 0)))
+    (spit (.toFile tmp) text)
+    (Files/move tmp path (into-array [java.nio.file.StandardCopyOption/REPLACE_EXISTING
+                                      java.nio.file.StandardCopyOption/ATOMIC_MOVE]))))
+
+(defn- write-port-files!
+  "Writes the port (first line) and the token (second) to the port files,
+  owner-only, deletes them on exit, if they still have this server's port.
+  The project's own files: written whatever they had, i.e. the port of a
+  server killed before it deleted them, which another process may have
+  taken since. Returns the files written."
+  [port token files]
+  (let [written (doall
+                  (for [path files
+                        :let [f (io/file path)]]
+                    (do (write-owner-only! f (str port "\n" token "\n"))
+                        f)))]
+    (.addShutdownHook (Runtime/getRuntime)
+      (Thread. (fn []
+                 (doseq [^File f written]
+                   (when (and (.exists f)
+                              (= (str port) (first (string/split-lines (slurp f)))))
+                     (.delete f))))))
+    written))
+
 (defn start-server!
   "Starts the MCP server of :repl options, {:mcp-port 0 (a free port)
   :mcp-host \"127.0.0.1\" :mcp-port-files [\".cljf/mcp-port\"]}, MCP's
   Streamable HTTP at /mcp. Only a loopback host: the tools compile forms in
-  this JVM, running their macros. Returns the server, its port in :port of
-  its meta."
+  this JVM, running their macros. Its clients authenticate with a token of
+  the server's run (see allowed?), in the port files after its port.
+  Returns {:server :port :token}."
   [{:keys [mcp-port mcp-host mcp-port-files] :or {mcp-host "127.0.0.1" mcp-port-files [".cljf/mcp-port"]}}]
   (when-not (.isLoopbackAddress (InetAddress/getByName mcp-host))
     (throw (ex-info (str ":mcp-host " mcp-host " isn't a loopback address: the MCP server is for this machine only") {})))
-  (let [server (HttpServer/create (InetSocketAddress. ^String mcp-host (int (if (true? mcp-port) 0 mcp-port))) 0)]
-    (.createContext server "/mcp" (reify HttpHandler (handle [_ ex] (handle-exchange ex))))
+  (let [server (HttpServer/create (InetSocketAddress. ^String mcp-host (int (if (true? mcp-port) 0 mcp-port))) 0)
+        token  (new-token)]
+    (.createContext server "/mcp" (reify HttpHandler (handle [_ ex] (handle-exchange ex token))))
     (.setExecutor server (Executors/newCachedThreadPool daemon-threads))
     (.start server)
     (let [port  (.getPort (.getAddress server))
-          files (repl/write-port-files! port mcp-port-files)]
+          files (write-port-files! port token mcp-port-files)]
       (println (str "[cljf.esm.repl] MCP server on http://" mcp-host ":" port "/mcp"
                  (when (seq files) (str " (" (string/join ", " files) ")"))
                  ", `npx cljf mcp` connects agents to it"))
       (flush)
-      {:server server :port port})))
+      {:server server :port port :token token})))
 
 (defn stop-server! [{:keys [^HttpServer server]}]
   (.stop server 0))

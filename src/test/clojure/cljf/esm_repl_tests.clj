@@ -292,16 +292,22 @@
 
 ;; The MCP server
 
+(def ^:private mcp-token
+  "The token of the MCP server mcp-server started, which mcp-post sends."
+  (atom nil))
+
 (defn- mcp-post
-  "Posts body to the MCP server on port with headers, returns [status
-  parsed body]."
+  "Posts body to the MCP server on port with headers (and the server's
+  token), returns [status parsed body]."
   ([port body] (mcp-post port body {}))
   ([port body headers]
    (let [req  (.build ^java.net.http.HttpRequest$Builder
                 (reduce (fn [^java.net.http.HttpRequest$Builder b [^String k ^String v]] (.header b k v))
                         (-> (HttpRequest/newBuilder (URI. (str "http://127.0.0.1:" port "/mcp")))
                             (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body))))
-                        (merge {"Content-Type" "application/json"} headers)))
+                        (merge {"Content-Type" "application/json"}
+                          (when @mcp-token {"Authorization" (str "Bearer " @mcp-token)})
+                          headers)))
          resp (.send (HttpClient/newHttpClient) req (HttpResponse$BodyHandlers/ofString))]
      [(.statusCode resp) (some-> (not-empty (.body resp)) json/read-str)])))
 
@@ -313,11 +319,17 @@
     (let [out (.getOutputStream sock)
           bytes (.getBytes ^String body "UTF-8")]
       (.write out (.getBytes (str "POST /mcp HTTP/1.1\r\nHost: " host "\r\nContent-Type: application/json\r\n"
+                                  "Authorization: Bearer " @mcp-token "\r\n"
                                   "Content-Length: " (count bytes) "\r\nConnection: close\r\n\r\n") "UTF-8"))
       (.write out bytes)
       (.flush out)
       (let [line (.readLine (BufferedReader. (InputStreamReader. (.getInputStream sock))))]
         (Long/parseLong (second (string/split line #" ")))))))
+
+(def ^:private app-source
+  "The build's source, which wait_for_reload compiles (the fixture's
+  compile! builds again)."
+  "src/test/esm_repl/esm_repl/app.cljs")
 
 (deftest mcp-tools
   (testing "runtime tools take a runtime id"
@@ -352,10 +364,14 @@
       (is (string/includes? (:text (first content)) "- 1 server"))))
   (testing "tags"
     (is (not (:isError (mcp/call "tag_runtime" {"runtime_id" 1 "tag" "srv"}))))
+    (testing "not all digits, which runtime_id reads as an id"
+      (is (:isError (mcp/call "tag_runtime" {"runtime_id" 1 "tag" "2"}))))
     (is (= ["2"] (:results (:structuredContent (mcp/call "eval" {"code" "(inc 1)" "runtime_id" "srv"})))))
     (mcp/call "tag_runtime" {"runtime_id" 1 "tag" nil}))
   (testing "wait_for_reload"
-    (let [{:keys [isError structuredContent]} (mcp/call "wait_for_reload" {"runtime_id" 1})]
+    (testing "needs the files edited: without them, an edit the watcher hasn't seen would pass for reloaded"
+      (is (:isError (mcp/call "wait_for_reload" {"runtime_id" 1}))))
+    (let [{:keys [isError structuredContent]} (mcp/call "wait_for_reload" {"runtime_id" 1 "files" [app-source]})]
       (is (not isError) (pr-str structuredContent))
       (is (= "reloaded" (:status structuredContent))))
     (let [{:keys [status warnings]} @@#'repl/build
@@ -364,7 +380,7 @@
         (swap! status assoc :errors {"a" {:type "error" :message "boom" :file "esm_repl/app.cljs" :at 2}
                                      "b" {:type "error" :message "older" :file "esm_repl/extra.cljs" :at 1}})
         (try
-          (let [{:keys [isError structuredContent content]} (mcp/call "wait_for_reload" {"runtime_id" 1})]
+          (let [{:keys [isError structuredContent content]} (mcp/call "wait_for_reload" {"runtime_id" 1 "files" [app-source]})]
             (is isError)
             (is (= "boom" (get-in structuredContent [:error :message])) "the most recent")
             (is (= ["boom" "older"] (map :message (:errors structuredContent))))
@@ -381,10 +397,10 @@
       (testing "warnings hold back hot reloads"
         (reset! warnings {"out.js" [warning]})
         (try
-          (is (= "warnings" (:status (:structuredContent (mcp/call "wait_for_reload" {"runtime_id" 1})))))
+          (is (= "warnings" (:status (:structuredContent (mcp/call "wait_for_reload" {"runtime_id" 1 "files" [app-source]})))))
           (testing "unless the dev server ignores them"
             (repl/handle-message! (json/write-str {:op "dev-server" :urls [] :ignoreWarnings true}))
-            (let [{:keys [isError structuredContent]} (mcp/call "wait_for_reload" {"runtime_id" 1})]
+            (let [{:keys [isError structuredContent]} (mcp/call "wait_for_reload" {"runtime_id" 1 "files" [app-source]})]
               (is (not isError) (pr-str structuredContent))
               (is (= "reloaded" (:status structuredContent)))
               (is (= ["Use of undeclared Var esm-repl.app/x"] (map :message (:warnings structuredContent)))))
@@ -475,10 +491,25 @@
 
 (deftest mcp-server
   (let [dir    (temp-dir)
-        port-file (io/file dir ".cljf" "mcp-port")
-        {:keys [port] :as server} (mcp/start-server! {:mcp-port 0 :mcp-port-files [(.getPath port-file)]})]
+        port-file (doto (io/file dir ".cljf" "mcp-port") io/make-parents)
+        ;; a port file a server killed left, with the port of another
+        ;; process now: overwritten
+        other  (java.net.ServerSocket. 0)
+        _      (spit port-file (str (.getLocalPort other) "\n"))
+        {:keys [port token] :as server} (try (mcp/start-server! {:mcp-port 0 :mcp-port-files [(.getPath port-file)]})
+                                          (finally (.close other)))]
+    (reset! mcp-token token)
     (try
-      (is (= (str port) (slurp port-file)))
+      (testing "the port file has the port and the token, owner-only"
+        (is (= (str port "\n" token "\n") (slurp port-file)))
+        (is (= "rw-------" (java.nio.file.attribute.PosixFilePermissions/toString
+                             (java.nio.file.Files/getPosixFilePermissions (.toPath port-file)
+                               (make-array java.nio.file.LinkOption 0))))))
+      (testing "requests need the token"
+        (is (= 403 (first (mcp-post port {:jsonrpc "2.0" :id 9 :method "tools/list"} {"Authorization" "Bearer nope"}))))
+        (is (= 403 (first (with-redefs-fn {#'mcp-token (atom nil)}
+                            #(mcp-post port {:jsonrpc "2.0" :id 9 :method "tools/list"})))))
+        (is (= 200 (first (mcp-post port {:jsonrpc "2.0" :id 9 :method "tools/list"})))))
       (testing "initialize, with the build and its runtimes in the instructions"
         (let [[status {:strs [result]}] (mcp-post port {:jsonrpc "2.0" :id 1 :method "initialize"
                                                          :params {:protocolVersion "2025-06-18" :capabilities {}
@@ -507,6 +538,7 @@
         (is (= -32602 (get-in (second (mcp-post port {:jsonrpc "2.0" :id 6 :method "tools/call" :params {:name "nope"}}))
                         ["error" "code"]))))
       (finally
+        (reset! mcp-token nil)
         (mcp/stop-server! server)))))
 
 (defn- wrap-test

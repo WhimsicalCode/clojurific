@@ -106,7 +106,7 @@
   {
     "name": "wait_for_reload",
     "title": "Wait for hot reload",
-    "description": "After editing source files: compiles them unless the watcher did already, then waits until the runtime runs the build's last compile, i.e. applied the hot reloads. Returns reloaded, error (the build failed: the error and where), warnings (they hold back hot reloads), timeout or no-runtime.",
+    "description": "After editing source files, pass them: compiles them unless the watcher did already (it may not have seen the edit yet), then waits until the runtime runs the build's last compile, i.e. applied the hot reloads. Returns reloaded, error (the build failed: the error and where), warnings (they hold back hot reloads), timeout or no-runtime.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -130,14 +130,15 @@
         }
       },
       "required": [
-        "runtime_id"
+        "runtime_id",
+        "files"
       ]
     }
   },
   {
     "name": "tag_runtime",
     "title": "Tag runtime",
-    "description": "Tags a runtime, taking the tag from any other: tools take the tag as runtime_id. A browser tab keeps its tag when reloaded. A null tag removes the runtime's.",
+    "description": "Tags a runtime, taking the tag from any other: tools take the tag as runtime_id. A tag isn't all digits, which is a runtime id. A browser tab keeps its tag when reloaded. A null tag removes the runtime's.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -309,7 +310,7 @@
   {
     "name": "macroexpand",
     "title": "Macroexpand",
-    "description": "Expands a ClojureScript form's macros in a namespace of the build, with its aliases and refers: once (macroexpand-1), until the form's head isn't a macro (macroexpand), or all the forms in it (all).",
+    "description": "Expands a ClojureScript form's macros, running them in the compiler's JVM as compiling does, in a namespace of the build, with its aliases and refers: once (macroexpand-1), until the form's head isn't a macro (macroexpand), or all the forms in it (all).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -335,7 +336,7 @@
       ]
     },
     "annotations": {
-      "readOnlyHint": true
+      "readOnlyHint": false
     }
   },
   {

@@ -22,13 +22,18 @@ const NOT_RUNNING =
   "The dev server isn't running: start it (npm run dev, or cljf watch) with the REPL's MCP server, " +
   ":repl {:mcp-port 0} (compilerOptions: { repl: { mcpPort: 0 } } in the Vite plugin's options)";
 
-/** The port of the REPL's MCP server: port, or the one in cwd's .cljf/mcp-port. */
+/**
+ * The REPL's MCP server, { port, token }: cwd's .cljf/mcp-port has its port
+ * (the first line) and the token of its run (the second), which its clients
+ * authenticate with; port overrides the file's port (its token still comes
+ * from the file, if it has one). null without either.
+ */
 export async function serverPort({ cwd = process.cwd(), port } = {}) {
-  if (port) return port;
   const file = path.join(cwd, '.cljf', 'mcp-port');
-  if (!existsSync(file)) return null;
-  const p = Number((await fs.readFile(file, 'utf8')).trim());
-  return Number.isInteger(p) && p > 0 ? p : null;
+  const [line, token] = existsSync(file) ? (await fs.readFile(file, 'utf8')).split('\n').map(s => s.trim()) : [];
+  const p = port ?? Number(line);
+  if (!(Number.isInteger(p) && p > 0)) return null;
+  return { port: p, token: token || undefined };
 }
 
 /** An error of a request to a server that isn't there (not listening). */
@@ -40,7 +45,7 @@ export class NotRunning extends Error {}
  * as they're asked to (an eval's timeout_ms), which fetch's 300s headers
  * timeout would cut short. Rejects with NotRunning when nothing listens.
  */
-export function post(port, msg, { host = '127.0.0.1' } = {}) {
+export function post(port, msg, { host = '127.0.0.1', token } = {}) {
   const body = JSON.stringify(msg);
   return new Promise((resolve, reject) => {
     const req = http.request({
@@ -52,6 +57,7 @@ export function post(port, msg, { host = '127.0.0.1' } = {}) {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
         'content-length': Buffer.byteLength(body),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
     }, res => {
       let text = '';
@@ -115,11 +121,11 @@ export async function bridge({
   // without the request's id (the server's errors of a request it couldn't
   // read) answers the request.
   const forward = async msg => {
-    const p = await serverPort({ cwd, port });
+    const server = await serverPort({ cwd, port });
     msg = absolutePaths(msg, process.cwd());
-    if (!p) return null;
+    if (!server) return null;
     try {
-      const response = await post(p, msg, { host });
+      const response = await post(server.port, msg, { host, token: server.token });
       if (response && msg.id !== undefined && (response.id === null || response.id === undefined)) {
         response.id = msg.id;
       }

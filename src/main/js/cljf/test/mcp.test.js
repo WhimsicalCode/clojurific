@@ -57,7 +57,7 @@ test('without the dev server, it lists the tools and says how to start it', asyn
   assert.deepEqual(ping.result, {});
 });
 
-test('forwards to the server in .cljf/mcp-port', async () => {
+test('forwards to the server in .cljf/mcp-port, with its token', async () => {
   const cwd = tmpDir();
   const received = [];
   const server = http.createServer((req, res) => {
@@ -66,6 +66,10 @@ test('forwards to the server in .cljf/mcp-port', async () => {
     req.on('end', () => {
       const msg = JSON.parse(body);
       received.push(msg);
+      if (req.headers.authorization !== 'Bearer s3cret') {
+        res.writeHead(403).end();
+        return;
+      }
       if (msg.id === undefined) {
         res.writeHead(202).end();
         return;
@@ -76,7 +80,7 @@ test('forwards to the server in .cljf/mcp-port', async () => {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   mkdirSync(path.join(cwd, '.cljf'));
-  writeFileSync(path.join(cwd, '.cljf', 'mcp-port'), String(server.address().port));
+  writeFileSync(path.join(cwd, '.cljf', 'mcp-port'), `${server.address().port}\ns3cret\n`);
   try {
     const b = start({ cwd });
     b.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });

@@ -24,7 +24,7 @@ cljf({ compilerOptions: { repl: { mcpPort: 0 } } })
 
 ```
 agent ──stdio──▶ cljf mcp ──HTTP──▶ watcher's JVM: cljf.esm.mcp ──▶ cljf.esm.repl ──▶ runtimes
-      └─(fixed port: HTTP directly)──▲
+      └─(fixed port, with the token: HTTP directly)──▲
 ```
 
 - **The server runs in the watcher's JVM** (`cljf.esm.mcp`), which `cljf.esm.repl/start!` starts under `:mcp-port`. It runs alongside the REPL, the compiler environment and the build's status. It serves MCP's Streamable HTTP at `/mcp`, with JSON responses only (no tool streams), on the JDK's own HTTP server. That means no dependencies, and no nREPL.
@@ -38,14 +38,17 @@ agent ──stdio──▶ cljf mcp ──HTTP──▶ watcher's JVM: cljf.esm.
   - It reads `.cljf/mcp-port` for every request, so it reconnects across dev server restarts.
   - It lists the tools before the dev server is up, from its copy `mcp-tools.json`.
   - Without a server, it answers `initialize` itself, saying how to start one, and tool calls fail with the same message.
-  - With a fixed `:mcp-port`, agents can use `http://127.0.0.1:<port>/mcp` directly.
+  - With a fixed `:mcp-port`, agents can use `http://127.0.0.1:<port>/mcp` directly, with the token (`Authorization: Bearer <token>`, the port file's second line).
   - `--dir <dir>` reads `<dir>/.cljf/mcp-port`, for an agent started in another directory (a monorepo's root, with a server per project). Files the agent names relative to its own directory are passed as absolute paths.
 - **Security:** the tools compile forms in the JVM, running their macros, so only this machine may connect:
   - the server binds a loopback address;
   - it accepts loopback clients only;
   - it rejects a `Host` header naming anything other than a loopback name, which blocks pages of other sites through DNS rebinding;
   - it rejects every request with an `Origin` header, which browsers send and MCP clients don't: a page of this machine, on any port (another dev server's, a script in the app's page), could run code otherwise;
-  - it only accepts JSON (`Content-Type: application/json`), which a page can't send without a preflight request, which the server refuses.
+  - it only accepts JSON (`Content-Type: application/json`), which a page can't send without a preflight request, which the server refuses;
+  - requests need the token of the server's run (`Authorization: Bearer <token>`), which the port file has on its second line. The file is written owner-only, so other users' processes, and processes that can't read the project's files, can't use the server. `cljf mcp` reads it with the port.
+- **The port file** (`.cljf/mcp-port`) is the server's own: it's always written, also over a port file a killed server left, whose port another process may have taken since. With `:mcp-port-files`, list only files of this server.
+- **Messages of the plugin:** a runtime's connection (a page's websocket) only forwards the messages runtimes send (`hello`, `focus`, `result`, `console-eval`), not the plugin's own (`dev-server`, `vite-error`, `vite-update`), which tell agents of the dev server and its errors.
 
 ## Runtimes
 
@@ -129,5 +132,5 @@ Its templates start the MCP server (`mcpPort: 0`), and every project gets `.mcp.
 ## Several dev servers
 
 - Projects in separate directories already work: each one has its own `.cljf/mcp-port` and its own entry in the agent's config.
-- Two dev servers in the same directory: the second can't take the port file (it warns, as nREPL does) and is reached with `cljf mcp --port <port>`.
+- Two dev servers in the same directory: the one started last writes the port file. The other is reached with `cljf mcp --port <port>` and a port file of its own (`:mcp-port-files`), whose token `cljf mcp` can't read otherwise.
 - Each server's instructions name its Vite config file, so the agent knows which build it's talking to.
