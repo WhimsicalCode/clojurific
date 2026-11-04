@@ -1090,11 +1090,16 @@
       (false? x)
       (number? x)))
 
-(defn get-define [mname jsdoc]
+(defn get-define
+  "The value :closure-defines sets var mname to, printed, if it's a define:
+  a goog-define (its :goog-define type, of which emit* :def writes the
+  @define comment) or a def with a @define jsdoc."
+  [mname jsdoc goog-define]
   (let [opts (get @env/*compiler* :options)]
-    (and (some #?(:clj #(.startsWith ^String % "@define")
-                  :cljs #(gstring/startsWith % "@define"))
-           jsdoc)
+    (and (or goog-define
+             (some #?(:clj #(.startsWith ^String % "@define")
+                      :cljs #(gstring/startsWith % "@define"))
+               jsdoc))
          opts
          (let [define (get-in opts [:closure-defines (str mname)])]
            (when (valid-define-value? define)
@@ -1131,7 +1136,7 @@
       (emits var)
       (when init
         (emits " = "
-          (if-let [define (get-define mname jsdoc)]
+          (if-let [define (get-define mname jsdoc goog-define)]
             define
             (if (and goog-define (= :invoke (:op init)))
               ;; no override, the default value of (goog/define name default)

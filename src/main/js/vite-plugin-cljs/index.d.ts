@@ -65,8 +65,18 @@ export interface CompilerOptions {
   /**
    * The dev server's nREPL server: `{ nreplPort: 0 }` picks a free port, written to the port files.
    * `middleware` adds nREPL middleware, by var name: `["'cider.nrepl/cider-middleware"]`.
+   * `mcpPort` starts the MCP server for coding agents (`0` picks a free port, written to
+   * `.cljf/mcp-port`, which `cljf mcp` reads), on a loopback `mcpHost`.
    */
-  repl?: false | { nreplPort?: number; nreplHost?: string; portFiles?: string[]; middleware?: CljSymbol[] };
+  repl?: false | {
+    nreplPort?: number;
+    nreplHost?: string;
+    portFiles?: string[];
+    middleware?: CljSymbol[];
+    mcpPort?: number;
+    mcpHost?: string;
+    mcpPortFiles?: string[];
+  };
   /** A generated test runner requiring the test namespaces. */
   testRunner?: { ns: CljSymbol; nsRegexp?: string; runner: CljSymbol };
   [option: string]: EdnValue | undefined;

@@ -14,6 +14,7 @@
             [cljs.compiler :as comp]
             [cljs.env :as env]
             [cljf.esm :as esm]
+            [cljf.esm.mcp :as mcp]
             [cljf.esm.repl :as repl]
             [cljf.esm.repl.nrepl :as repl.nrepl]
             [cljs.vendor.clojure.data.json :as json]
@@ -24,6 +25,8 @@
             [nrepl.middleware]
             [nrepl.transport])
   (:import [java.io BufferedReader File InputStreamReader]
+           [java.net URI]
+           [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers]
            [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]
            [java.util.concurrent.locks ReentrantLock]))
@@ -37,6 +40,8 @@
   {:main       'esm-repl.app
    :output-dir (str (io/file dir "out"))
    :esm-repl   true
+   ;; the console's log, for console_logs, as the watcher's under :mcp-port
+   :closure-defines {"cljf.esm.repl_runtime.CONSOLE_LOG" true}
    ::esm/repl-mains (atom #{})})
 
 (defn- emit
@@ -91,11 +96,13 @@
 ;; stdout.
 
 (def ^:private node-harness
-  "import * as runtime from './out/cljf/esm/repl_runtime.js';
-   import './out/esm_repl/app.js';
-   import readline from 'node:readline';
-   // stdout is the REPL's
-   console.log = console.error;
+  "import readline from 'node:readline';
+   import util from 'node:util';
+   // stdout is the REPL's: the console's levels print to stderr, before the
+   // runtime records them (its console_logs)
+   for (const level of ['log', 'info', 'debug']) console[level] = (...args) => process.stderr.write(util.format(...args) + '\\n');
+   const runtime = await import('./out/cljf/esm/repl_runtime.js');
+   await import('./out/esm_repl/app.js');
    const send = msg => process.stdout.write(JSON.stringify({ ...msg, runtime: 1 }) + '\\n');
    globalThis.cljs_eval = (code, opts) => runtime.console_eval(send, code, opts ?? null);
    readline.createInterface({ input: process.stdin })
@@ -150,6 +157,8 @@
                       :lock         (ReentrantLock.)
                       :compile!     (fn [_] (build!))
                       :warnings     (atom {})
+                      :status       (atom {:compiling false
+                                           :last {:type "compiled" :namespaces 3 :ms 5 :at 0}})
                       :watch-dirs   [(.getCanonicalPath dir)]
                       :run-hooks!   (fn [_])
                       :send!        send!})
@@ -166,7 +175,8 @@
 
 (deftest evaluates-forms-in-the-runtime
   (is (= [{:runtime-id 1 :url "node" :title nil :tag nil :visible true :user-agent nil}]
-         (map #(dissoc % :focused-at) (repl/runtimes))))
+         (map #(dissoc % :focused-at :connected-at) (repl/runtimes))))
+  (is (number? (:connected-at (first (repl/runtimes)))))
   (is (= ["3"] (:results (repl/cljs-eval "(+ 1 2)"))))
   (testing "output"
     (is (= "hi\n" (:out (repl/cljs-eval "(println \"hi\")")))))
@@ -279,6 +289,225 @@
       (finally
         (hello {})))
     (is (= [nil] (map :hmr (repl/runtimes))))))
+
+;; The MCP server
+
+(defn- mcp-post
+  "Posts body to the MCP server on port with headers, returns [status
+  parsed body]."
+  ([port body] (mcp-post port body {}))
+  ([port body headers]
+   (let [req  (.build ^java.net.http.HttpRequest$Builder
+                (reduce (fn [^java.net.http.HttpRequest$Builder b [^String k ^String v]] (.header b k v))
+                        (-> (HttpRequest/newBuilder (URI. (str "http://127.0.0.1:" port "/mcp")))
+                            (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body))))
+                        (merge {"Content-Type" "application/json"} headers)))
+         resp (.send (HttpClient/newHttpClient) req (HttpResponse$BodyHandlers/ofString))]
+     [(.statusCode resp) (some-> (not-empty (.body resp)) json/read-str)])))
+
+(defn- raw-status
+  "The status of a POST of body to the MCP server on port with a Host
+  header, which HttpClient doesn't set."
+  [port host body]
+  (with-open [sock (java.net.Socket. "127.0.0.1" (int port))]
+    (let [out (.getOutputStream sock)
+          bytes (.getBytes ^String body "UTF-8")]
+      (.write out (.getBytes (str "POST /mcp HTTP/1.1\r\nHost: " host "\r\nContent-Type: application/json\r\n"
+                                  "Content-Length: " (count bytes) "\r\nConnection: close\r\n\r\n") "UTF-8"))
+      (.write out bytes)
+      (.flush out)
+      (let [line (.readLine (BufferedReader. (InputStreamReader. (.getInputStream sock))))]
+        (Long/parseLong (second (string/split line #" ")))))))
+
+(deftest mcp-tools
+  (testing "runtime tools take a runtime id"
+    (let [{:keys [isError content structuredContent]} (mcp/call "eval" {"code" "(+ 1 2)"})]
+      (is isError)
+      (is (string/starts-with? (:text (first content)) "runtime_id is required"))
+      (is (= [1] (map :runtime_id (:runtimes structuredContent))))))
+  (testing "eval"
+    (let [{:keys [isError structuredContent]} (mcp/call "eval" {"code" "(+ 1 2) (println \"hi\")" "runtime_id" 1})]
+      (is (not isError))
+      (is (= ["3" "nil"] (:results structuredContent)))
+      (is (= "hi\n" (:out structuredContent)))
+      (is (= 1 (get-in structuredContent [:runtime :runtime_id])))
+      (is (= "server" (get-in structuredContent [:runtime :kind])))
+      (is (string? (get-in structuredContent [:runtime :connected_at]))))
+    (testing "values bounded by default"
+      (is (= ["(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 ...)"]
+             (:results (:structuredContent (mcp/call "eval" {"code" "(range)" "runtime_id" "1"})))))))
+  (testing "errors and warnings are tool errors"
+    (let [{:keys [isError structuredContent]} (mcp/call "eval" {"code" "(nope)" "runtime_id" 1})]
+      (is isError)
+      (is (= "Use of undeclared Var cljs.user/nope" (:message (first (:warnings structuredContent))))))
+    (let [{:keys [isError structuredContent]} (mcp/call "eval" {"code" "(esm-repl.app/fail)" "runtime_id" 1})]
+      (is isError)
+      (is (= "failed" (:error structuredContent)))))
+  (testing "a disconnected runtime, which a page reloading is for a moment"
+    (repl/handle-message! (json/write-str {:op "hello" :runtime 9 :url "http://localhost:5173/" :kind "browser"}))
+    (repl/handle-message! (json/write-str {:op "bye" :runtime 9}))
+    (let [{:keys [isError content]} (mcp/call "eval" {"code" "1" "runtime_id" 9})]
+      (is isError)
+      (is (re-find #"^Runtime 9 disconnected \d+s ago \(http://localhost:5173/\), the page may be reloading" (:text (first content))))
+      (is (string/includes? (:text (first content)) "- 1 server"))))
+  (testing "tags"
+    (is (not (:isError (mcp/call "tag_runtime" {"runtime_id" 1 "tag" "srv"}))))
+    (is (= ["2"] (:results (:structuredContent (mcp/call "eval" {"code" "(inc 1)" "runtime_id" "srv"})))))
+    (mcp/call "tag_runtime" {"runtime_id" 1 "tag" nil}))
+  (testing "wait_for_reload"
+    (let [{:keys [isError structuredContent]} (mcp/call "wait_for_reload" {"runtime_id" 1})]
+      (is (not isError) (pr-str structuredContent))
+      (is (= "reloaded" (:status structuredContent))))
+    (let [{:keys [status warnings]} @@#'repl/build
+          warning {:message "Use of undeclared Var esm-repl.app/x" :file "esm_repl/app.cljs" :line 1}]
+      (testing "the build's error, until a compile of its sources succeeds"
+        (swap! status assoc :errors {"a" {:type "error" :message "boom" :file "esm_repl/app.cljs" :at 2}
+                                     "b" {:type "error" :message "older" :file "esm_repl/extra.cljs" :at 1}})
+        (try
+          (let [{:keys [isError structuredContent content]} (mcp/call "wait_for_reload" {"runtime_id" 1})]
+            (is isError)
+            (is (= "boom" (get-in structuredContent [:error :message])) "the most recent")
+            (is (= ["boom" "older"] (map :message (:errors structuredContent))))
+            (is (string/includes? (:text (first content)) "Also failed: older")))
+          (is (= "paused: the build failed" (:hot_reload (:structuredContent (mcp/call "build_status" {})))))
+          (finally
+            (swap! status assoc :errors {}))))
+      (testing "only Clojure and ClojureScript files are compiled"
+        (let [ts (doto (io/file @runtime-dir "main.ts") (spit "const x = 1;"))
+              {:keys [structuredContent content]} (mcp/call "wait_for_reload" {"runtime_id" 1 "files" [(.getPath ts)]})]
+          (is (= "reloaded" (:status structuredContent)))
+          (is (= 1 (count (:skipped structuredContent))))
+          (is (string/includes? (:text (first content)) "Not compiled (Vite reloads them)"))))
+      (testing "warnings hold back hot reloads"
+        (reset! warnings {"out.js" [warning]})
+        (try
+          (is (= "warnings" (:status (:structuredContent (mcp/call "wait_for_reload" {"runtime_id" 1})))))
+          (testing "unless the dev server ignores them"
+            (repl/handle-message! (json/write-str {:op "dev-server" :urls [] :ignoreWarnings true}))
+            (let [{:keys [isError structuredContent]} (mcp/call "wait_for_reload" {"runtime_id" 1})]
+              (is (not isError) (pr-str structuredContent))
+              (is (= "reloaded" (:status structuredContent)))
+              (is (= ["Use of undeclared Var esm-repl.app/x"] (map :message (:warnings structuredContent)))))
+            (is (= "on" (:hot_reload (:structuredContent (mcp/call "build_status" {}))))))
+          (finally
+            (reset! warnings {})
+            (reset! @#'repl/dev-server- nil))))))
+  (testing "build_status"
+    (let [{:keys [structuredContent]} (mcp/call "build_status" {})]
+      (is (= "on" (:hot_reload structuredContent)))
+      (is (= "compiled" (get-in structuredContent [:last_compile :result])))
+      (is (= [1] (map :runtime_id (:runtimes structuredContent))))))
+  (testing "console_logs"
+    (mcp/call "eval" {"code" "(js/console.log \"logged\" #js {:a 1} [1 2]) (js/console.warn \"careful\")" "runtime_id" 1})
+    (let [{:keys [isError structuredContent]} (mcp/call "console_logs" {"runtime_id" 1})
+          entries (:entries structuredContent)
+          logged  (first (filter #(= "log" (:level %)) (filter #(string/starts-with? (:text %) "logged") entries)))]
+      (is (not isError) (pr-str structuredContent))
+      (is (= "logged {\"a\":1} [1 2]" (:text logged)))
+      (is (some #(= {:level "warn" :text "careful"} (select-keys % [:level :text])) entries))
+      (testing "JavaScript objects previewed, bounded"
+        (mcp/call "eval" {"code" "(js/console.log #js {:a #js {:b #js {:c 1}} :xs (into-array (range 20))})" "runtime_id" 1})
+        (is (some #{"{\"a\":{\"b\":{…}},\"xs\":[0,1,2,3,4,5,6,7,8,9,…]}"}
+              (map :text (:entries (:structuredContent (mcp/call "console_logs" {"runtime_id" 1})))))))
+      (testing "since and levels"
+        (let [cursor (:cursor structuredContent)]
+          (mcp/call "eval" {"code" "(js/console.error \"later\") (js/console.log \"also\")" "runtime_id" 1})
+          (is (= ["later"] (map :text (:entries (:structuredContent
+                                                  (mcp/call "console_logs" {"runtime_id" 1 "since" cursor "levels" ["error"]}))))))
+          (testing "a cursor of another page load (the page reloaded since) gets all of them"
+            (let [r (:structuredContent (mcp/call "console_logs" {"runtime_id" 1 "since" "other:100000"}))]
+              (is (:reloaded r))
+              (is (some #(= "logged" (subs (:text %) 0 (min 6 (count (:text %))))) (:entries r))))))))
+    (testing "uncaught errors and unhandled rejections, recorded without changing Node.js' handling of them (it would end the harness' process), the stack mapped to the sources"
+      ;; as Node.js' uncaughtExceptionMonitor would: the runtime's listener
+      (mcp/call "eval" {"code" "(doseq [[e origin] [[(js/Error. \"thrown\") \"uncaughtException\"] [(try (esm-repl.app/fail) (catch :default e e)) \"unhandledRejection\"]]] (.emit js/process \"uncaughtExceptionMonitor\" e origin))" "runtime_id" 1})
+      (let [errors (:entries (:structuredContent (mcp/call "console_logs" {"runtime_id" 1 "levels" ["error"]})))
+            [thrown rejected] (take-last 2 errors)]
+        (is (string/starts-with? (:text thrown) "Uncaught Error: thrown") (pr-str errors))
+        (is (string/starts-with? (:text rejected) "Unhandled rejection Error: failed") (pr-str errors))
+        (is (string/includes? (str (:text rejected) (:stack rejected)) "esm_repl/app.cljs:16") (pr-str rejected)))
+      (testing "no unhandledRejection listener, which would turn Node.js' handling of them off"
+        (is (= ["0"] (:results (repl/cljs-eval "(.listenerCount js/process \"unhandledRejection\")")))))))
+  (testing "vite_errors"
+    (is (:isError (mcp/call "vite_errors" {})) "without a dev server")
+    (repl/handle-message! (json/write-str {:op "dev-server" :urls ["http://localhost:5173/"]}))
+    (is (= "No errors" (-> (mcp/call "vite_errors" {}) :content first :text)))
+    (repl/handle-message! (json/write-str {:op "vite-error" :source "overlay" :message "Unexpected token"
+                                           :file "src/main.ts" :line 3 :plugin "vite:oxc"}))
+    (repl/handle-message! (json/write-str {:op "vite-error" :source "log" :message "Error when evaluating SSR module"}))
+    (repl/handle-message! (json/write-str {:op "vite-error" :source "log" :message "Internal server error: Unexpected token"}))
+    (let [{:keys [overlay log]} (:structuredContent (mcp/call "vite_errors" {}))]
+      (is (= [{:message "Unexpected token" :file "src/main.ts" :line 3 :plugin "vite:oxc"}]
+             (map #(select-keys % [:message :file :line :plugin]) overlay)))
+      (is (= ["Error when evaluating SSR module"] (map :message log)) "the overlay's error logged again is left out"))
+    (testing "an overlay error without a message hides no logged one"
+      (repl/handle-message! (json/write-str {:op "vite-error" :source "overlay" :message ""}))
+      (is (= 2 (count (:log (:structuredContent (mcp/call "vite_errors" {})))))))
+    (testing "an update replaces the overlay's error"
+      (repl/handle-message! (json/write-str {:op "vite-update"}))
+      (is (empty? (:overlay (:structuredContent (mcp/call "vite_errors" {}))))))
+    (reset! @#'repl/dev-server- nil))
+  (testing "ns_info"
+    (let [{:keys [structuredContent]} (mcp/call "ns_info" {"ns" "esm-repl.app"})]
+      (is (= "src/test/esm_repl/esm_repl/app.cljs" (:file structuredContent)))
+      (is (some #{{:name "call-g" :arglists ["[]"]}} (:publics structuredContent)))
+      (is (some #{"goog.string"} (:requires structuredContent)))
+      (is (:in_build structuredContent))))
+  (testing "macroexpand"
+    (is (= "(if 1 (do 2))" (:expansion (:structuredContent (mcp/call "macroexpand" {"form" "(when 1 2)" "mode" "macroexpand-1"})))))
+    (is (string/includes? (:expansion (:structuredContent (mcp/call "macroexpand" {"form" "(when-not (when 1 2) 3)" "mode" "all"})))
+          "(if 1 (do 2))"))
+    (is (:isError (mcp/call "macroexpand" {"form" "(when"}))))
+  (testing "doc, source, apropos and namespaces"
+    (is (= "esm-repl.app/call-g" (:name (:structuredContent (mcp/call "doc" {"symbol" "call-g" "ns" "esm-repl.app"})))))
+    (is (= "macro" (:kind (:structuredContent (mcp/call "doc" {"symbol" "when"})))))
+    (is (= "(defn call-g [] (g))" (:source (:structuredContent (mcp/call "source" {"symbol" "esm-repl.app/call-g"})))))
+    (is (some #{"esm-repl.app/call-g"} (:matches (:structuredContent (mcp/call "apropos" {"query" "CALL-"})))))
+    (let [nses (:namespaces (:structuredContent (mcp/call "namespaces" {"prefix" "esm-repl"})))]
+      (is (some #{{:ns "esm-repl.app" :file "src/test/esm_repl/esm_repl/app.cljs"}} nses) (pr-str nses))
+      (is (every? #(string/starts-with? (:ns %) "esm-repl") nses)))))
+
+(deftest mcp-tools-copy
+  (testing "the launcher's bridge lists the tools cljf.esm.mcp has"
+    (is (= (json/read-str (json/write-str mcp/tools))
+           (json/read-str (slurp "src/main/js/cljf/mcp-tools.json")))
+        "run script/gen-mcp-tools")))
+
+(deftest mcp-server
+  (let [dir    (temp-dir)
+        port-file (io/file dir ".cljf" "mcp-port")
+        {:keys [port] :as server} (mcp/start-server! {:mcp-port 0 :mcp-port-files [(.getPath port-file)]})]
+    (try
+      (is (= (str port) (slurp port-file)))
+      (testing "initialize, with the build and its runtimes in the instructions"
+        (let [[status {:strs [result]}] (mcp-post port {:jsonrpc "2.0" :id 1 :method "initialize"
+                                                         :params {:protocolVersion "2025-06-18" :capabilities {}
+                                                                  :clientInfo {:name "test" :version "1"}}})]
+          (is (= 200 status))
+          (is (= "2025-06-18" (get result "protocolVersion")))
+          (is (string/includes? (get result "instructions") "- 1 server"))))
+      (testing "notifications are accepted"
+        (is (= [202 nil] (mcp-post port {:jsonrpc "2.0" :method "notifications/initialized"}))))
+      (testing "tools/list and tools/call"
+        (let [[_ {:strs [result]}] (mcp-post port {:jsonrpc "2.0" :id 2 :method "tools/list"})]
+          (is (= (map :name mcp/tools) (map #(get % "name") (get result "tools")))))
+        (let [[_ {:strs [result]}] (mcp-post port {:jsonrpc "2.0" :id 3 :method "tools/call"
+                                                   :params {:name "eval" :arguments {:code "(* 6 7)" :runtime_id 1}}})]
+          (is (= ["42"] (get-in result ["structuredContent" "results"])))))
+      (testing "pages of other sites can't use it (DNS rebinding)"
+        (is (= 403 (first (mcp-post port {:jsonrpc "2.0" :id 4 :method "tools/list"} {"Origin" "http://evil.example"}))))
+        (is (= 403 (raw-status port "evil.example" (json/write-str {:jsonrpc "2.0" :id 4 :method "tools/list"}))))
+        (is (= 200 (raw-status port (str "localhost:" port) (json/write-str {:jsonrpc "2.0" :id 4 :method "tools/list"}))))
+        (testing "nor pages of this machine, of any port"
+          (is (= 403 (first (mcp-post port {:jsonrpc "2.0" :id 4 :method "tools/list"} {"Origin" "http://localhost:5173"})))))
+        (testing "nor requests that aren't JSON, which a page sends without a preflight"
+          (is (= 415 (first (mcp-post port {:jsonrpc "2.0" :id 4 :method "tools/list"} {"Content-Type" "text/plain"}))))))
+      (testing "unknown methods and tools"
+        (is (= -32601 (get-in (second (mcp-post port {:jsonrpc "2.0" :id 5 :method "nope"})) ["error" "code"])))
+        (is (= -32602 (get-in (second (mcp-post port {:jsonrpc "2.0" :id 6 :method "tools/call" :params {:name "nope"}}))
+                        ["error" "code"]))))
+      (finally
+        (mcp/stop-server! server)))))
 
 (defn- wrap-test
   "Middleware the tests name, answering a test op."

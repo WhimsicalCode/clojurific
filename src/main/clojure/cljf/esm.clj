@@ -1384,7 +1384,38 @@
     (cond-> opts
       (or (true? (:esm-repl opts))
           (and (:esm-hmr opts) (not (false? (:esm-repl opts)))))
-      (assoc :esm-repl true ::repl-mains (atom #{})))))
+      (assoc :esm-repl true ::repl-mains (atom #{}))
+
+      ;; the REPL runtime records the console's log for the MCP server's
+      ;; console_logs only when there's one: wrapping the console makes
+      ;; browsers show the wrapper as the source of every message
+      (and (map? (:repl opts)) (:mcp-port (:repl opts))
+           (not (contains? (:closure-defines opts) "cljf.esm.repl_runtime.CONSOLE_LOG")))
+      (assoc-in [:closure-defines "cljf.esm.repl_runtime.CONSOLE_LOG"] true))))
+
+(defn compiled-status
+  "The watcher's build status (see watch's status-) after a compile ended
+  with event, the whole build's if full?. compiled are the canonical paths
+  of the files the compile compiled successfully: its changed files and the
+  sources of the namespaces it compiled (dependents included).
+
+  :errors are the errors outstanding, {key error}, by their file's
+  canonical path (:file-key, see watch's status!), else :no-file: a failed
+  compile's error stays until a compile of its file succeeds (a later
+  compile of other files succeeding doesn't fix it, the watcher compiles a
+  file again only once it changes), an error without a file until any
+  compile succeeds, all of them until the whole build does."
+  [{:keys [errors] :as status} event compiled full?]
+  (assoc status
+    :compiling false
+    :last event
+    :errors (cond
+              (= "error" (:type event))
+              (assoc errors (or (:file-key event) :no-file) event)
+
+              full? {}
+
+              :else (apply dissoc errors :no-file compiled))))
 
 (defn- reuse-inputs
   "The build's inputs after files changed, if finding them again would find
@@ -1452,6 +1483,24 @@
         ;; events report them as :outstanding, the Vite plugin holds back hot
         ;; reloads while there are any
         warnings-    (atom {})
+        ;; the REPL's build status: whether a compile runs, the last compile's
+        ;; event (compiled or error, with :at, when it ended), and the errors
+        ;; outstanding by file, see compiled-status
+        status-      (atom {:compiling false :last nil :errors {}})
+        status!      (fn [event files full?]
+                       (let [path    #(try (canonical-path (io/file %)) (catch Exception _ (str %)))
+                             ;; the sources of the namespaces compiled
+                             sources (keep (fn [ns]
+                                             (some #(when (= ns (:ns %)) (some-> (:source-file %) str path))
+                                               @inputs-))
+                                       (:compiled event))
+                             event   (cond-> (assoc event :at (System/currentTimeMillis))
+                                       (:file event) (assoc :file-key (path (:file event))))]
+                         (swap! status- compiled-status event
+                           (when-not (= "error" (:type event))
+                             (concat (map canonical-path files) sources))
+                           full?))
+                       event)
         outstanding! (fn [event inputs]
                        (let [outputs (into #{} (map #(.getPath (output-file (:ns %) opts))) inputs)
                              [kept outstanding] (outstanding-warnings @warnings- event outputs)]
@@ -1549,19 +1598,23 @@
                                  (swap! compiled- into
                                    (map (fn [^File f] [(canonical-path f) (.lastModified f)]))
                                    files)
+                                 (swap! status- assoc :compiling true)
                                  (event! "compiling" {})
                                  (try
-                                   (if-not @built?
-                                     (build!)
-                                     ;; lookups of sources and their ns forms cached
-                                     ;; for the recompile, not across them: files
-                                     ;; may be added or removed in between
-                                     (binding [util/*ns-source-cache* (java.util.concurrent.ConcurrentHashMap.)
-                                               ana/*parse-ns-cache*  (java.util.concurrent.ConcurrentHashMap.)]
-                                       (recompile-changes! files nses)))
-                                   (catch Throwable e
-                                     (doto (assoc (error-data e) :type "error")
-                                       (->> (event! "error"))))
+                                   (let [full?   (not @built?)
+                                         event   (try
+                                                   (if full?
+                                                     (build!)
+                                                     ;; lookups of sources and their ns forms cached
+                                                     ;; for the recompile, not across them: files
+                                                     ;; may be added or removed in between
+                                                     (binding [util/*ns-source-cache* (java.util.concurrent.ConcurrentHashMap.)
+                                                               ana/*parse-ns-cache*  (java.util.concurrent.ConcurrentHashMap.)]
+                                                       (recompile-changes! files nses)))
+                                                   (catch Throwable e
+                                                     (doto (assoc (error-data e) :type "error")
+                                                       (->> (event! "error")))))]
+                                     (status! event files full?))
                                    (finally
                                      ;; the REPL's tools (cider-nrepl) answer
                                      ;; from this value during the next one
@@ -1570,12 +1623,19 @@
     (when (:exit-with-parent opts)
       (start-stdin-reader! queue))
     (event! "watch-dirs" {:dirs dirs})
+    ;; before the first build, which a cold start takes minutes of: agents
+    ;; connecting meanwhile hear it's compiling
+    (when (:esm-repl opts)
+      ((requiring-resolve 'cljf.esm.repl/start-mcp!) opts))
     (locking* lock
       (fn []
-        (try
-          (build!)
-          (catch Throwable e
-            (event! "error" (error-data e))))))
+        (status!
+          (try
+            (build!)
+            (catch Throwable e
+              (doto (assoc (error-data e) :type "error")
+                (->> (event! "error")))))
+          [] true)))
     (when (:esm-repl opts)
       ((requiring-resolve 'cljf.esm.repl/start!)
        {:compiler-env compiler-env
@@ -1584,6 +1644,7 @@
         :compile!     compile!
         :inputs       inputs-
         :warnings     warnings-
+        :status       status-
         :watch-dirs   dirs
         :run-hooks!   (fn [nses]
                         (locking* lock

@@ -470,19 +470,38 @@ export default function cljf(options) {
   // runtime of their runtime id, runtimes[id](data).
   const runtimes = new Map();
   let lastRuntimeId = 0;
-  const toRepl = msg => proc.stdin.writable && proc.stdin.write(`repl ${JSON.stringify(msg)}\n`);
+  // A page's runtime id by its tab key (sessionStorage, see
+  // cljf.esm.repl-runtime/tab-key): a reloaded page keeps its id, which the
+  // MCP server's tools take, unless a live runtime has it (a page opened by
+  // the other, with a copy of its sessionStorage), which gets a new id and
+  // key.
+  const tabIds = new Map();
+  const toRepl = msg => proc?.stdin.writable && proc.stdin.write(`repl ${JSON.stringify(msg)}\n`);
   // A runtime's connection: receive takes the data of its cljs:repl events
   // for the REPL, close says bye. send replies to it, consoleAllowed whether
   // it may cljs_eval.
   const connectRuntime = (send, consoleAllowed) => {
     let id;
     const receive = data => {
+      let tabKey;
       if (data.op === 'hello' && id === undefined) {
-        id = ++lastRuntimeId;
+        const known = typeof data.tabKey === 'string' ? tabIds.get(data.tabKey) : undefined;
+        if (known !== undefined && !runtimes.has(known)) {
+          id = known;
+        } else {
+          id = ++lastRuntimeId;
+          if (typeof data.tabKey === 'string') {
+            if (known !== undefined) tabKey = `${data.tabKey.slice(0, 64)}-${id}`;
+            tabIds.set(tabKey ?? data.tabKey, id);
+          }
+        }
         runtimes.set(id, send);
       }
       if (id === undefined) return;
-      if (data.op === 'hello') send({ op: 'welcome', runtime: id });
+      if (data.op === 'hello') {
+        send({ op: 'welcome', runtime: id, ...(tabKey ? { tabKey } : {}) });
+        if (tabKey) data = { ...data, tabKey };
+      }
       if (data.op === 'console-eval' && !consoleAllowed) {
         send({
           op: 'console-result',
@@ -710,6 +729,20 @@ export default function cljf(options) {
         compiler = [launched.command, ...launched.args];
       }
       const result = {};
+      // The REPL runtime wraps the console (its log for the MCP server's
+      // console_logs): ignore-listed, browsers' consoles show the code
+      // logging as a message's source rather than the wrapper, and debuggers
+      // step over it. With Vite's default, the node_modules.
+      if (env.command === 'serve') {
+        const userIgnore = userConfig.server?.sourcemapIgnoreList;
+        if (userIgnore !== false) {
+          const ignore = typeof userIgnore === 'function' ? userIgnore : file => file.includes('/node_modules/');
+          result.server = {
+            sourcemapIgnoreList: (file, map) =>
+              /[\\/]cljf[\\/]esm[\\/]repl_runtime\.(?:cljs|js)$/.test(file) || ignore(file, map),
+          };
+        }
+      }
       // the project's page, an input of builds and the dev server's /
       const indexHtml = existsSync(path.join(root, 'index.html')) ? path.join(root, 'index.html') : null;
       const userInput = userConfig.build?.rolldownOptions?.input ?? userConfig.build?.rollupOptions?.input;
@@ -1093,6 +1126,59 @@ export default function cljf(options) {
 
     configureServer(devServer) {
       server = devServer;
+      // The dev server for the REPL's MCP server: its config, whether it
+      // ignores warnings, once the compiler runs (in middleware mode there's
+      // no httpServer), then its URLs once it listens, which tell agents
+      // which page to open
+      const devServerInfo = () => toRepl({
+        op: 'dev-server',
+        urls: server.resolvedUrls ? [...server.resolvedUrls.local, ...server.resolvedUrls.network] : [],
+        config: config.configFile ? path.relative(cwd, config.configFile) : undefined,
+        ignoreWarnings: !!options.ignoreWarnings,
+      });
+      server.httpServer?.once('listening', () => setTimeout(devServerInfo, 0));
+      // Vite's own errors for the REPL's MCP server (vite_errors): those the
+      // dev server's overlay shows (transforms, i.e. TypeScript or CSS),
+      // until an update replaces them, and those it logs (i.e. the ssr
+      // environment's), not the plugin's (build_status has the compiler's)
+      const stripAnsi = text => String(text).replace(/\u001b\[[\d;]*m/g, '');
+      const viteError = (source, err) => {
+        toRepl({
+          op: 'vite-error',
+          source,
+          message: stripAnsi(err.message ?? ''),
+          ...(err.id ? { file: err.loc?.file ?? err.id } : {}),
+          ...(err.loc ? { line: err.loc.line, column: err.loc.column } : {}),
+          ...(err.plugin ? { plugin: err.plugin } : {}),
+          ...(err.frame ? { frame: stripAnsi(err.frame) } : {}),
+          ...(err.stack ? { stack: stripAnsi(err.stack) } : {}),
+        });
+      };
+      const wsSend = server.ws.send.bind(server.ws);
+      server.ws.send = (payload, ...rest) => {
+        if (payload?.type === 'error' && payload.err?.plugin !== 'cljf') viteError('overlay', payload.err);
+        else if (payload?.type === 'update' || payload?.type === 'full-reload') toRepl({ op: 'vite-update' });
+        return wsSend(payload, ...rest);
+      };
+      // the compiler's errors are logged with it: build_status has them
+      const loggerError = config.logger.error.bind(config.logger);
+      config.logger.error = (msg, opts) => {
+        const text = stripAnsi(msg);
+        // not the runtimes' errors Vite 8 forwards from the pages ([Unhandled
+        // error], [Unhandled rejection]): console_logs has them, with their
+        // runtime. The plugin's own (an ssrEntries or worker failing to run)
+        // are recorded.
+        if (!/^\[Unhandled (?:error|rejection)\]/.test(text)) {
+          // an Error's message and stack aren't enumerable, spreading it
+          // would lose them
+          const e = opts?.error;
+          viteError('log', {
+            message: text,
+            ...(e ? { stack: e.stack, id: e.id, loc: e.loc, plugin: e.plugin, frame: e.frame } : {}),
+          });
+        }
+        return loggerError(msg, opts);
+      };
       let compiled = () => {};
       let readyResolve;
       const initialBuild = new Promise(resolve => (readyResolve = resolve));
@@ -1201,6 +1287,8 @@ export default function cljf(options) {
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
         if (event.type === 'repl-send') return replSend(event);
         if (event.type === 'watch-dirs') {
+          // the compiler reads its stdin now, before its first build
+          devServerInfo();
           // Vite's watcher (native file events) reports changes in the
           // compiler's source directories, polling them is expensive
           const dirs = event.dirs.map(dir => dir + path.sep);
@@ -1267,7 +1355,7 @@ export default function cljf(options) {
           await refreshDevInfo();
           ready(true);
         } else if (event.type === 'error') {
-          config.logger.error(`[cljf] ${event.message}`, { timestamp: true });
+          loggerError(`[cljf] ${event.message}`, { timestamp: true });
           showProblem({
             message: event.message,
             id: event.file,

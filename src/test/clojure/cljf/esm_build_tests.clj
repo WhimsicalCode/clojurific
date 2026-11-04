@@ -408,6 +408,21 @@
         (remove-ns 'test.mreload.impl)
         (dosync (alter @#'clojure.core/*loaded-libs* disj 'test.mreload.core 'test.mreload.impl))))))
 
+(deftest closure-defines-set-goog-defines
+  (let [dir     (temp-dir)
+        ms      (- (System/currentTimeMillis) 60000)
+        sources (into {} [(write-source! dir 'test.gdef
+                            "(ns test.gdef) (goog-define FLAG false) (goog-define NAME \"x\") (goog-define N 1)" ms)])
+        values  (fn [opts]
+                  (binding [esm/*generated-sources* sources]
+                    (esm/build (merge {:main 'test.gdef :output-dir (str (io/file dir (str "out" (hash opts))))} opts)))
+                  (let [out (slurp (io/file dir (str "out" (hash opts)) "test" "gdef.js"))]
+                    (mapv #(second (re-find (re-pattern (str "var test\\$gdef\\$" % " = ([^;]+);")) out))
+                      ["FLAG" "NAME" "N"])))]
+    (is (= ["false" "\"x\"" "(1)"] (values {})))
+    (testing "by symbol or by name"
+      (is (= ["true" "\"y\"" "2"] (values {:closure-defines '{test.gdef/FLAG true "test.gdef.NAME" "y" test.gdef/N 2}}))))))
+
 (deftest release-builds-define-goog-debug-false
   (let [dir     (temp-dir)
         ms      (- (System/currentTimeMillis) 60000)
@@ -760,3 +775,35 @@
     (binding [esm/*generated-sources* sources]
       (esm/build {:main 'test.nul :output-dir (str (io/file dir "out"))}))
     (is (= "[1 2 [2 3]]\n" (run-node (io/file dir "out" "test" "nul.js"))))))
+
+(deftest watch-build-status
+  (let [compiled {:type "compiled"}
+        failed   (fn [file msg] {:type "error" :message msg :file-key file})
+        after    (fn [& steps]
+                   (reduce (fn [s [event compiled full?]] (esm/compiled-status s event compiled full?))
+                     {:compiling true :errors {}} steps))
+        messages #(set (map :message (vals (:errors %))))]
+    (testing "a failed compile's error is outstanding"
+      (is (= #{"A"} (messages (after [(failed "a.cljs" "A") nil])))))
+    (testing "a compile of other files succeeding doesn't fix it"
+      (let [s (after [(failed "a.cljs" "A") nil] [compiled ["b.cljs"]])]
+        (is (= #{"A"} (messages s)))
+        (is (= compiled (:last s)))
+        (is (false? (:compiling s)))))
+    (testing "a compile of its file does, or of the whole build"
+      (is (empty? (messages (after [(failed "a.cljs" "A") nil] [compiled ["b.cljs" "a.cljs"]]))))
+      (is (empty? (messages (after [(failed "a.cljs" "A") nil] [compiled [] true])))))
+    (testing "each file's error stays until its file compiles, fixed one at a time"
+      (let [s (after [(failed "a.cljs" "A") nil] [(failed "b.cljs" "B") nil])]
+        (is (= #{"A" "B"} (messages s)))
+        (is (= #{"A"} (messages (esm/compiled-status s compiled ["b.cljs"] false))))
+        (is (empty? (messages (-> s
+                                  (esm/compiled-status compiled ["b.cljs"] false)
+                                  (esm/compiled-status compiled ["a.cljs"] false)))))))
+    (testing "a dependent's error, which its changed file didn't cause: fixed by compiling the dependent"
+      (let [s (after [(failed "b.cljs" "B, a dependent of a.cljs") nil])]
+        (is (empty? (messages (esm/compiled-status s compiled ["b.cljs"] false))))))
+    (testing "an error without a file, until any compile succeeds"
+      (let [s (after [{:type "error" :message "X"} nil])]
+        (is (= #{"X"} (messages s)))
+        (is (empty? (messages (esm/compiled-status s compiled ["c.cljs"] false))))))))

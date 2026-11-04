@@ -15,8 +15,10 @@ export default defineConfig({
         // #x literals are elements of Hono's JSX
         jsxImportSource: 'hono/jsx',
         // the dev server starts an nREPL server, its port in .nrepl-port, with
-        // cider-nrepl's middleware: completion and lookup
-        repl: { nreplPort: 0, middleware: ["'cider.nrepl/cider-middleware"] },
+        // cider-nrepl's middleware: completion and lookup; and an MCP server
+        // for coding agents, its port in .cljf/mcp-port (npx cljf mcp, see
+        // .mcp.json and AGENTS.md)
+        repl: { nreplPort: 0, mcpPort: 0, middleware: ["'cider.nrepl/cider-middleware"] },
       },
       // the dev server runs the backend once compiled, not on its first
       // request: the REPL evaluates in it

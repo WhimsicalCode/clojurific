@@ -26,6 +26,7 @@
   },
   "files": [
     "cljf/*.js",
+    "cljf/mcp-tools.json",
     "cljf/resolver.lock.json",
     "cljf/resolver/deps.edn",
     "cljf/resolver/clojurific",

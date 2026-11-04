@@ -36,6 +36,7 @@
             [clojure.java.io :as io]
             [clojure.string :as string])
   (:import [java.io File StringReader]
+           [java.net InetSocketAddress Socket]
            [java.util Base64]
            [java.util.concurrent TimeUnit]
            [java.util.concurrent.atomic AtomicLong]
@@ -53,8 +54,30 @@
 
 (defonce ^:private runtimes-
   ;; {runtime-id {:runtime-id :url :title :user-agent :visible :focused-at
-  ;; :connected-at :tag :hmr}}, :hmr false for a bundle's runtime (see
-  ;; cljf.esm.repl-runtime/connect-socket!), which doesn't hot reload
+  ;; :connected-at :tag :hmr :kind}}, :hmr false for a bundle's runtime (see
+  ;; cljf.esm.repl-runtime/connect-socket!), which doesn't hot reload, :kind
+  ;; "browser", "ssr", "worker" or "bundle" (see
+  ;; cljf.esm.repl-runtime/hello)
+  (atom {}))
+
+(defonce ^:private departed-
+  ;; the runtimes disconnected last, {runtime-id {:runtime-id :url :title
+  ;; :kind :at}}, to tell why a runtime id isn't connected (see departed)
+  (atom {}))
+
+(defonce ^:private dev-server-
+  ;; what the Vite plugin says of its dev server, {:urls [url] :config
+  ;; :ignore-warnings bool}, nil without one (i.e. cljf watch)
+  (atom nil))
+
+(defonce ^:private vite-errors-
+  ;; the Vite plugin's dev server's own errors, {:overlay [error] :log
+  ;; [error]}: the overlay's last (an update replaces it) and the last 50
+  ;; logged, each {:message :file :line :column :plugin :frame :stack :at}
+  (atom {:overlay [] :log []}))
+
+(defonce ^:private servers
+  ;; the servers start! started, {:mcp server}
   (atom {}))
 
 (defonce ^:private pending
@@ -68,11 +91,14 @@
 (defn- default-send! [runtime-id msg]
   (esm/event! "repl-send" {:runtime runtime-id :msg msg}))
 
+(declare start-mcp!)
+
 (defn start!
   "Called by the watcher once it built, b is the build: :compiler-env,
   :options, :lock, :compile! (see cljf.esm/watch), and :send!, sending
   messages to runtimes, the Vite plugin's by default. Starts an nREPL server
-  under :repl {:nrepl-port 0}, see cljf.esm.repl.nrepl."
+  under :repl {:nrepl-port 0}, see cljf.esm.repl.nrepl, and the MCP server
+  under {:mcp-port 0} unless it runs, see start-mcp!."
   [b]
   (reset! env-snapshot (some-> (:compiler-env b) (#(vector % @%))))
   (reset! build b)
@@ -83,14 +109,42 @@
           ((requiring-resolve 'cljf.esm.repl.nrepl/start-server!) repl)
           (catch Throwable e
             (binding [*out* *err*]
-              (println "cljf.esm.repl: nREPL server not started:" (.getMessage e)))))))))
+              (println "cljf.esm.repl: nREPL server not started:" (.getMessage e)))))))
+    (start-mcp! (:options b))))
+
+(defn start-mcp!
+  "Starts the MCP server under :repl {:mcp-port 0} of options opts, unless
+  it runs: the watcher does before its first build (a cold one can take
+  minutes), whose tools answer that it's compiling until start!. It needs
+  no library, the JDK's HTTP server serves it."
+  [opts]
+  (let [{:keys [repl]} opts]
+    (when (and (map? repl) (:mcp-port repl))
+      (locking servers
+        (when-not (:mcp @servers)
+          (try
+            (let [server ((requiring-resolve 'cljf.esm.mcp/start-server!) repl)]
+              (swap! servers assoc :mcp server))
+            (catch Throwable e
+              (binding [*out* *err*]
+                (println "cljf.esm.repl: MCP server not started:" (.getMessage e))))))))))
+
+(defn built?
+  "Whether the watcher's build is done, the REPL started."
+  []
+  (some? @build))
 
 (defn stop!
-  "Forgets the build and its runtimes."
+  "Forgets the build and its runtimes, stops the MCP server."
   []
+  (when-let [mcp (:mcp @servers)]
+    (swap! servers dissoc :mcp)
+    ((requiring-resolve 'cljf.esm.mcp/stop-server!) mcp))
   (reset! build nil)
   (reset! env-snapshot nil)
-  (reset! runtimes- {}))
+  (reset! runtimes- {})
+  (reset! departed- {})
+  (reset! vite-errors- {:overlay [] :log []}))
 
 (defn- fail-pending! [runtime-id message]
   (doseq [[_ {:keys [promise runtime]}] @pending
@@ -120,6 +174,7 @@
                                        :tag          (when-not taken? tag)
                                        :root         (:root msg)
                                        :hmr          (not (false? (:hmr msg)))
+                                       :kind         (:kind msg)
                                        :connected-at (or (:connected-at r) now)})
                        (:focused msg) (assoc :focused-at now))))
                  (when taken?
@@ -131,8 +186,26 @@
                                                      :title (:title msg))
                                            (:focused msg) (assoc :focused-at now)))
                      rs)))
-      "bye"    (do (swap! runtimes- dissoc runtime)
+      "bye"    (do (when-let [r (get @runtimes- runtime)]
+                     (swap! departed- #(-> (if (< 50 (count %)) {} %)
+                                           (assoc runtime (-> (select-keys r [:runtime-id :url :title :kind])
+                                                              (assoc :at now))))))
+                   (swap! runtimes- dissoc runtime)
                    (fail-pending! runtime (str "Runtime " runtime " disconnected")))
+      ;; Vite's own errors (vite_errors)
+      "vite-error" (let [e (-> (select-keys msg [:message :file :line :column :plugin :frame :stack])
+                               (assoc :at now))]
+                     (swap! vite-errors-
+                       (fn [m]
+                         (if (= "overlay" (:source msg))
+                           (assoc m :overlay [e])
+                           (update m :log #(vec (take-last 50 (conj % e))))))))
+      ;; an update replaces the overlay's error
+      "vite-update" (swap! vite-errors- assoc :overlay [])
+      ;; the Vite plugin's dev server, once it listens
+      "dev-server" (reset! dev-server- {:urls            (vec (:urls msg))
+                                       :config          (:config msg)
+                                       :ignore-warnings (boolean (:ignoreWarnings msg))})
       ;; a runtime only answers its own requests
       "result" (when-let [{:keys [promise] :as req} (get @pending (:id msg))]
                  (when (= runtime (:runtime req))
@@ -145,8 +218,61 @@
   []
   (->> (vals @runtimes-)
        (sort-by :runtime-id)
-       (mapv #(cond-> (select-keys % [:runtime-id :url :title :tag :visible :focused-at :user-agent])
-                (false? (:hmr %)) (assoc :hmr false)))))
+       (mapv #(cond-> (select-keys % [:runtime-id :url :title :tag :visible :focused-at :connected-at :user-agent])
+                (false? (:hmr %)) (assoc :hmr false)
+                (:kind %) (assoc :kind (:kind %))))))
+
+(defn departed
+  "The runtime runtime-id if it disconnected lately, {:runtime-id :url :title
+  :kind :at}, :at when (System/currentTimeMillis), nil otherwise."
+  [runtime-id]
+  (when-not (contains? @runtimes- runtime-id)
+    (get @departed- runtime-id)))
+
+(defn dev-server
+  "The Vite plugin's dev server, {:urls :config :ignore-warnings}, :config
+  its Vite config file, nil without one."
+  []
+  @dev-server-)
+
+(defn vite-errors
+  "The dev server's own errors: {:overlay [the overlay's error, until an
+  update] :log [the last ones logged]}, nil without the Vite plugin's dev
+  server."
+  []
+  (when @dev-server-
+    @vite-errors-))
+
+(defn live-port?
+  "Whether a server accepts connections on port of this machine."
+  [port]
+  (try
+    (with-open [s (Socket.)]
+      (.connect s (InetSocketAddress. "127.0.0.1" (int port)) 200)
+      true)
+    (catch Exception _ false)))
+
+(defn write-port-files!
+  "Writes port to the port files (creating their directories), unless
+  another live server's port is in one, deletes them on exit. Returns the
+  files written."
+  [port files]
+  (let [written (doall
+                  (for [path files
+                        :let [f (io/file path)
+                              other (when (.exists f)
+                                      (try (Long/parseLong (string/trim (slurp f)))
+                                        (catch NumberFormatException _ nil)))]
+                        :when (not (and other (not= other port) (live-port? other)))]
+                    (do (io/make-parents f)
+                        (spit f (str port))
+                        f)))]
+    (.addShutdownHook (Runtime/getRuntime)
+      (Thread. (fn []
+                 (doseq [^File f written]
+                   (when (and (.exists f) (= (str port) (string/trim (slurp f))))
+                     (.delete f))))))
+    written))
 
 (defn- default-runtime
   "The runtime focused last, visible ones first, else the one connected
@@ -669,6 +795,18 @@
                :else                                         source)
           ":" line ":" column)))))
 
+(defn- map-locations
+  "Text of runtime runtime-id (a stack trace) with the locations in it
+  mapped to the ClojureScript sources."
+  [runtime-id text]
+  (when text
+    (string/replace text #"((?:https?://|file://|cljs-repl/)[^\s()]+):(\d+):(\d+)"
+      (fn [[match url line column]]
+        (or (try
+              (map-location runtime-id url (Long/parseLong line) (Long/parseLong column))
+              (catch Exception _ nil))
+            match)))))
+
 (defn- map-stack
   "Stack trace stack of runtime runtime-id with its locations mapped to the
   ClojureScript sources, without the frames of the REPL's evaluation after
@@ -678,14 +816,7 @@
     (let [lines (string/split-lines stack)
           ;; mapped to its source already in Vite's ssr module runner
           lines (take-while #(not (re-find #"/cljf/esm/repl_runtime\.(?:js|cljs):" %)) lines)]
-      (->> lines
-           (map #(string/replace % #"((?:https?://|file://|cljs-repl/)[^\s()]+):(\d+):(\d+)"
-                   (fn [[match url line column]]
-                     (or (try
-                           (map-location runtime-id url (Long/parseLong line) (Long/parseLong column))
-                           (catch Exception _ nil))
-                         match))))
-           (string/join "\n")))))
+      (map-locations runtime-id (string/join "\n" lines)))))
 
 (defn- eval-js*
   "Evaluates a compiled form in the runtime, waiting up to :timeout ms."
@@ -885,6 +1016,128 @@
                           (await-hot-reload (:runtime-id runtime) [ns] (:hot-reload-timeout opts 10000)))]
               (cond-> {:value "nil" :warnings (vec warnings)}
                 error (assoc :error error)))))))))
+
+;; Build status
+
+(defn build-status
+  "The build's status: {:compiling whether a compile runs, :last the last
+  compile's event (compiled or error, :at when it ended), :errors the errors
+  outstanding, most recent first (a compile failed, and no compile of its
+  file succeeded since, see cljf.esm/compiled-status), :outstanding the
+  warnings, :ignore-warnings whether the dev server hot reloads despite
+  them}."
+  []
+  (let [{:keys [status]} (the-build)
+        {:keys [compiling last errors]} (some-> status deref)]
+    {:compiling       (boolean (or compiling (compiling?)))
+     :last            last
+     :errors          (->> (vals errors) (sort-by :at) reverse (mapv #(dissoc % :file-key)))
+     :outstanding     (vec (outstanding-warnings))
+     :ignore-warnings (boolean (:ignore-warnings @dev-server-))}))
+
+(defn- build-namespaces
+  "The namespaces of the build, waiting for a compile that runs."
+  []
+  (with-build #(vec (:cljf.esm/namespaces @env/*compiler*))))
+
+(defn wait-for-reload
+  "Waits for the runtimes to run the build's last compile: compiles files
+  (edited sources, i.e. before the watcher noticed) unless the watcher
+  compiled them already, then waits for the runtime of opts' :runtime-id
+  (or :tag), else each connected runtime that hot reloads, to apply the
+  hot reloads of all namespaces they loaded, up to :timeout ms (default
+  10000). Returns {:status :runtimes :compiled :skipped :error :errors
+  :warnings}, status \"reloaded\", \"error\" (the build failed: :error the
+  most recent of :errors), \"warnings\" (they hold back hot reloads),
+  \"timeout\" or \"no-runtime\". A runtime running a bundle doesn't hot
+  reload: it's \"bundle\" in :runtimes. Only Clojure and ClojureScript
+  files are compiled, as the watcher's, others are :skipped (Vite reloads
+  them)."
+  [files opts]
+  (let [{:keys [compile!]} (the-build)
+        source? #(re-find #"\.clj[sc]?$" (.getName ^File %))
+        files   (->> files (map io/file) (filter #(.exists ^File %)))
+        skipped (remove source? files)
+        files   (filter source? files)
+        event   (when (seq files) (compile! {:files files}))
+        ;; the build's state now, whether this compile or an earlier one's
+        {:keys [errors outstanding ignore-warnings]} (do (build-namespaces) (build-status))
+        error (first errors)
+        targets (if (or (:runtime-id opts) (:tag opts))
+                  [(target opts)]
+                  (vals @runtimes-))
+        timeout (:timeout opts 10000)
+        base    (cond-> {}
+                  event          (assoc :compiled (vec (:compiled event)))
+                  (seq skipped)  (assoc :skipped (mapv str skipped)))]
+    (cond
+      error
+      (assoc base :status "error"
+        :error (select-keys error [:message :file :line :column])
+        :errors (mapv #(select-keys % [:message :file :line :column]) errors))
+
+      ;; they hold back hot reloads, unless the dev server ignores them
+      (and (seq outstanding) (not ignore-warnings))
+      (assoc base :status "warnings" :warnings outstanding)
+
+      (empty? targets)
+      (assoc base :status "no-runtime")
+
+      :else
+      (let [want     (stamps (build-namespaces))
+            results  (doall
+                       (pmap (fn [{:keys [runtime-id hmr]}]
+                               [runtime-id
+                                (cond
+                                  (false? hmr) "bundle"
+                                  (empty? want) "reloaded"
+                                  :else
+                                  (let [{:keys [value error]}
+                                        (request! runtime-id {:op "await-stamps" :stamps want :timeout timeout}
+                                          (+ timeout 5000))]
+                                    (cond
+                                      error             error
+                                      (= "true" value)  "reloaded"
+                                      :else             "timeout")))])
+                         targets))
+            statuses (set (map second results))]
+        (cond-> (assoc base
+                  :status   (cond
+                              (every? #{"reloaded" "bundle"} statuses) "reloaded"
+                              (contains? statuses "timeout")         "timeout"
+                              :else                                  "error")
+                  :runtimes (into (sorted-map) results))
+          ;; ignored by the dev server
+          (seq outstanding) (assoc :warnings outstanding))))))
+
+;; The runtime's console
+
+(defn logs
+  "The console's log of runtime runtime-id (see cljf.esm.repl-runtime/logs):
+  {:entries [{:seq :at :level :text :stack}] :dropped :last :epoch
+  :reloaded}, entries after sequence number :since of :epoch (all of them if
+  the page reloaded since, :reloaded), at most :limit (default 100) of the
+  last, of :levels (strings, all by default), their stacks mapped to the
+  sources. {:error ...} if the runtime doesn't answer or record its log."
+  [runtime-id {:keys [epoch since limit levels]}]
+  (target {:runtime-id runtime-id})
+  (let [{:keys [logs logsOff error]} (request! runtime-id
+                                       (cond-> {:op "logs" :limit (or limit 100)}
+                                         epoch  (assoc :epoch epoch)
+                                         since  (assoc :since since)
+                                         levels (assoc :levels (vec levels)))
+                                       10000)]
+    (cond
+      error   {:error (cond-> error
+                        (string/starts-with? error "No reply")
+                        (str ": a page loaded before the dev server was upgraded doesn't answer, reload it"))}
+      logsOff {:error "The runtime doesn't record its console log: the build was compiled without the MCP server (:repl {:mcp-port 0}), restart the dev server"}
+      :else (update logs :entries
+              (fn [es]
+                (mapv (fn [{:keys [stack text] :as e}]
+                        (cond-> (assoc e :text (map-locations runtime-id text))
+                          stack (assoc :stack (map-locations runtime-id stack))))
+                  es))))))
 
 ;; API
 

@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# Writes src/main/js/cljf/mcp-tools.json, the cljf launcher's copy of the
+# REPL's MCP tools (cljf.esm.mcp/tools), which `cljf mcp` lists before the dev
+# server is up, see script/gen_mcp_tools.clj. Run it after changing the tools;
+# cljf.esm-repl-tests/mcp-tools-copy fails until then.
+
+cd "$(dirname "$0")/.." || exit 1
+
+exec clojure -M script/gen_mcp_tools.clj

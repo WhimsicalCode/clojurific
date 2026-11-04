@@ -18,7 +18,9 @@ Eclipse Temurin before starting the dev server.
 
 Projects have the scripts `dev` (Vite's dev server, hot reloading), `build`,
 `preview`, and `repl`, a ClojureScript REPL evaluating in the pages the dev
-server runs (`cljf repl`, through the dev server's nREPL server).
+server runs (`cljf repl`, through the dev server's nREPL server). Coding agents
+use the dev server's MCP server: `.mcp.json` configures `cljf mcp` for Claude
+Code and other MCP clients, and `AGENTS.md` explains its tools.
 
 The Hono project is a backend without pages: its app is a namespace the dev
 server runs with [`@hono/vite-dev-server`](https://github.com/honojs/vite-plugins),

@@ -18,6 +18,31 @@ export const DEFAULT_PROJECT = 'clojurific-project';
 
 export const addonsDir = path.join(packageRoot, 'addons');
 
+// Files of every template: the coding agents' MCP configuration and notes,
+// and README-agents.md, the section on them appended to the README
+export const commonDir = path.join(packageRoot, 'common');
+
+// What AGENTS.md says of the app's runtimes: a backend's is its server
+function agentVars(template) {
+  return template === 'hono'
+    ? {
+      kind: 'backend',
+      runtimes: 'server (and its worker threads)',
+      runtimeNoun: 'runtimes (the server, its worker threads)',
+      openPage: '',
+      openPageStep: '',
+      evalExample: ' or call a handler',
+    }
+    : {
+      kind: 'app',
+      runtimes: 'browser tabs',
+      runtimeNoun: 'tabs',
+      openPage: ' Open the dev server\'s page if there\'s none.',
+      openPageStep: ', and open its page: each tab is a runtime the tools evaluate in',
+      evalExample: ' or the DOM',
+    };
+}
+
 // Add-ons scaffolded over a template: the templates each applies to
 export const ADDONS = {
   unistyle: ['react', 'reagent', 'uix'],
@@ -133,11 +158,16 @@ export async function scaffold({ root, template, name = packageName(path.basenam
   }
   const vars = { name, ...namespace(name) };
   // the add-ons' sources also name the app's my-app.theme namespace
-  const names = { ...vars, themeNs: vars.ns.replace(/\.core$/, '.theme') };
+  const names = { ...vars, themeNs: vars.ns.replace(/\.core$/, '.theme'), ...agentVars(template) };
   const replace = s => s.replace(/\{\{(\w+)\}\}/g, (m, v) => names[v] ?? m);
   await fs.mkdir(root, { recursive: true });
   await copy(path.join(templatesDir, template), root, replace);
+  await copy(commonDir, root, replace);
+  await fs.rm(path.join(root, 'README-agents.md'));
   for (const addon of selected) await addons[addon]({ root, template, replace });
+  // a section of its own, after the template's and the add-ons' paragraphs
+  await fs.appendFile(path.join(root, 'README.md'),
+    replace(await fs.readFile(path.join(commonDir, 'README-agents.md'), 'utf8')));
   const pkgFile = path.join(root, 'package.json');
   const pkg = JSON.parse(await fs.readFile(pkgFile, 'utf8'));
   pkg.name = name;

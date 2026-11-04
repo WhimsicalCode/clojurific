@@ -324,6 +324,28 @@ The launcher and the Vite plugin start the compiler with `cljf.main`, `cljf.esm`
 - In the browser's console, `cljs_eval("(+ 1 2)")` and `cljs_eval("(foo)", {ns: "my.app", await: true, print: true})` evaluate in its page, compiled by the REPL. They return a promise of the last form's value (printed with `print`), rejected for an error or warnings. The console keeps the namespace of its last `in-ns`. Compiling forms runs their macros in the compiler's JVM, so the Vite plugin accepts `cljs_eval` only from pages on the dev server's machine, unless its `replRemoteConsole` option is set. A proxy in front of the dev server has to set `X-Real-IP` to the client's address.
 - The interactive REPL has `*1`, `*2`, `*3` and `*e`, and `doc`, `source`, `dir` and `apropos` are answered from the compiler environment. Output printed during a form is its `:out` / `:err`, and still goes to the console. `:await true` waits for a promise's value. Errors' `:stack` is mapped to the ClojureScript sources (`my/app.cljs:12:3`, `<cljs repl>:1:2` for the forms evaluated) with the output's source maps.
 
+#### Coding agents (MCP)
+
+The REPL's MCP server gives coding agents the REPL's tools: `:repl {:mcp-port 0}` (`compilerOptions: { repl: { mcpPort: 0 } }`, with `nreplPort` too or alone) starts it in the watcher's JVM. It's MCP's Streamable HTTP on `127.0.0.1`, and its port goes in `.cljf/mcp-port`. `cljf mcp` connects an agent to it over stdio:
+
+```json
+{ "mcpServers": { "clojurific": { "command": "npx", "args": ["cljf", "mcp"] } } }
+```
+
+- **Tools:**
+  - `runtimes` and `build_status`: the build's last compile, its error or warnings, and the runtimes;
+  - `eval`, `load_file` and `tag_runtime`;
+  - `wait_for_reload`: after editing files, waits until the runtime runs their hot reload, or reports the error or warnings holding it back;
+  - `console_logs`: the runtime's console output, uncaught errors and unhandled rejections, their stacks mapped to the sources;
+  - `vite_errors`: the dev server's own errors, i.e. of TypeScript or CSS;
+  - `namespaces`, `ns_info`, `doc`, `source`, `apropos` and `macroexpand`.
+- **Every tool of a runtime takes its `runtime_id`, an id or a tag:** agents can't see which tab is focused. A browser tab keeps its id when it's reloaded.
+- **Session start:** the server's instructions list the build's status and the runtimes connected when the agent starts.
+- **Dev server not running:** `cljf mcp` still lists the tools, and their calls say how to start it.
+- **Security:** the server accepts only this machine's clients, with a loopback `Host`, and JSON requests without an `Origin`: browsers' pages can't use it, those of this machine included.
+
+`create-clojurific`'s projects start it and have `.mcp.json` and an `AGENTS.md` explaining its tools. See [`docs/mcp.md`](docs/mcp.md) for the design.
+
 #### Editors
 
 Editors connect to the nREPL server in `.nrepl-port`, then evaluate `(cljf.esm.repl/repl)` in a session to switch it to ClojureScript. For CIDER, add `cider/cider-nrepl` to `deps.edn` and its middleware to the server, in the Vite plugin's options, in `cljs.edn`, or in the project's `.nrepl.edn` (`{:middleware [cider.nrepl/cider-middleware]}`), of which only `:middleware` applies. The user's `nrepl.edn` (`~/.nrepl/nrepl.edn`) isn't read: its middleware is for their Clojure projects, which the compiler's classpath may not have:
@@ -586,6 +608,10 @@ The npm package `clojurific` is `src/main/js`: the launcher (`src/main/js/cljf`)
 ### Resolver lock
 
 The jars of the launcher's resolver (`clojurific.resolve`, run with tools.deps) are listed in `src/main/js/cljf/resolver.lock.json`. `script/lock-resolver` writes it from `src/main/js/cljf/resolver/deps.edn`; run it after changing that file.
+
+### MCP tools
+
+`src/main/js/cljf/mcp-tools.json` is the launcher's copy of the MCP server's tools (`cljf.esm.mcp/tools`), which `cljf mcp` lists before the dev server is up. `script/gen-mcp-tools` writes it; run it after changing the tools.
 
 ### Default externs
 

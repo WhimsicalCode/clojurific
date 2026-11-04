@@ -65,7 +65,20 @@ for (const template of TEMPLATES) {
     assert.match(deps, /nrepl\/nrepl/);
     assert.match(deps, /cider\/cider-nrepl/);
     const viteConfig = readFileSync(path.join(root, 'vite.config.ts'), 'utf8');
-    assert.match(viteConfig, /repl: \{ nreplPort: 0, middleware: \["'cider\.nrepl\/cider-middleware"\] \}/);
+    assert.match(viteConfig, /repl: \{ nreplPort: 0, mcpPort: 0, middleware: \["'cider\.nrepl\/cider-middleware"\] \}/);
+    // coding agents' MCP server
+    assert.deepEqual(JSON.parse(readFileSync(path.join(root, '.mcp.json'), 'utf8')),
+      { mcpServers: { clojurific: { command: 'npx', args: ['cljf', 'mcp'] } } });
+    const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+    assert.match(agents, /`src\/my_app\/`/);
+    assert.match(agents, template === 'hono' ? /in the server \(and its worker threads\)/ : /in the browser tabs/);
+    assert.doesNotMatch(agents, /\{\{/);
+    const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
+    assert.match(readme, /\n## Coding agents\n/);
+    assert.match(readme, /`npx cljf mcp`/);
+    assert.match(readme, template === 'hono' ? /in the server \(and its worker threads\) running/ : /and open its page/);
+    assert.doesNotMatch(readme, /\{\{/);
+    assert.ok(!existsSync(path.join(root, 'README-agents.md')));
     if (template !== 'hono') {
       assert.match(deps, /binaryage\/devtools/);
       assert.match(viteConfig, /command === 'serve' && \{\n *preloads: \["'devtools\.preload"\]/);
@@ -112,7 +125,10 @@ for (const template of ADDONS.unistyle) {
     assert.doesNotMatch(html, /style\.css/);
     assert.ok(!existsSync(path.join(root, 'src', 'style.css')));
     assert.match(readFileSync(path.join(root, '.gitignore'), 'utf8'), /^public\/css$/m);
-    assert.match(readFileSync(path.join(root, 'README.md'), 'utf8'), /src\/my_app\/theme\.cljs/);
+    const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
+    assert.match(readme, /src\/my_app\/theme\.cljs/);
+    // the agents' section last
+    assert.ok(readme.indexOf('theme.cljs') < readme.indexOf('## Coding agents'));
     const theme = readFileSync(path.join(root, 'src', 'my_app', 'theme.cljs'), 'utf8');
     assert.match(theme, /^\(ns my-app\.theme\b/);
     const source = readFileSync(path.join(root, 'src', 'my_app', 'core.cljs'), 'utf8');

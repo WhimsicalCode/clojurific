@@ -4,6 +4,9 @@
 // - the entry runs despite the warning, the server answers
 // - a namespace compiled while the warning is outstanding isn't hot updated,
 //   and is released in the server's environment too once it's fixed
+// - the template's MCP server (mcpPort) answers through `cljf mcp`: the
+//   server is a runtime that evaluates, and wait_for_reload reports the
+//   warning holding back hot reloads
 // node dev-server.mjs, in the project's directory.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -58,6 +61,32 @@ async function until(what, f, timeout = 60000) {
   }
 }
 
+// An MCP client of `npx cljf mcp`, the bridge to the dev server's MCP
+// server: request(method, params) resolves to the result
+function mcpClient() {
+  const proc = spawn('npx', ['cljf', 'mcp'], { stdio: ['pipe', 'pipe', 'inherit'], detached: true });
+  groups.add(proc.pid);
+  let buffer = '';
+  let id = 0;
+  const waiting = new Map();
+  proc.stdout.on('data', chunk => {
+    buffer += chunk;
+    let i;
+    while ((i = buffer.indexOf('\n')) >= 0) {
+      const msg = JSON.parse(buffer.slice(0, i));
+      buffer = buffer.slice(i + 1);
+      waiting.get(msg.id)?.(msg);
+    }
+  });
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const n = ++id;
+    waiting.set(n, msg => (msg.error ? reject(new Error(`${method}: ${msg.error.message}`)) : resolve(msg.result)));
+    proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: n, method, params })}\n`);
+  });
+  const call = (name, args = {}) => request('tools/call', { name, arguments: args });
+  return { request, call, close: () => killGroup(proc.pid) };
+}
+
 // One dev server, its output in log. Returns the result of test, or throws.
 async function withDevServer(test) {
   let log = '';
@@ -98,6 +127,25 @@ for (;;) {
     await withDevServer(async ({ get, compiles, log }) => {
       await until('the server entry\'s first answer, despite the warning', async () => (await get()) === 'one');
       if (!/hot reload paused by 1 warning\(s\)/.test(log())) throw new Error('no warning paused hot reload');
+      // the template's MCP server, through the bridge
+      const mcp = mcpClient();
+      try {
+        const init = await mcp.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+        if (!/Runtimes when this session started/.test(init.instructions)) throw new Error(`MCP instructions: ${init.instructions}`);
+        const { structuredContent: { runtimes } } = await until('the server among the MCP runtimes', async () => {
+          const r = await mcp.call('runtimes');
+          return r.structuredContent?.runtimes?.some(rt => rt.kind === 'server') && r;
+        });
+        const server = runtimes.find(rt => rt.kind === 'server');
+        const evaluated = await mcp.call('eval', { code: `(${ns.replace(/\.core$/, '.text')}/greeting)`, runtime_id: server.runtime_id });
+        if (evaluated.isError || evaluated.structuredContent.results[0] !== '"one"') {
+          throw new Error(`MCP eval: ${JSON.stringify(evaluated)}`);
+        }
+        const reload = await mcp.call('wait_for_reload', { runtime_id: server.runtime_id });
+        if (reload.structuredContent?.status !== 'warnings') throw new Error(`MCP wait_for_reload: ${JSON.stringify(reload)}`);
+      } finally {
+        mcp.close();
+      }
       // compiled while the warning is outstanding: its hot update held back
       let n = compiles();
       text('two');

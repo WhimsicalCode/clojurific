@@ -20,9 +20,7 @@
             [nrepl.middleware.interruptible-eval :as eval]
             [nrepl.middleware.print :as print]
             [nrepl.server :as server]
-            [nrepl.transport :as t])
-  (:import [java.io File]
-           [java.net InetSocketAddress Socket]))
+            [nrepl.transport :as t]))
 
 (def ^:dynamic *cljs*
   "A session's ClojureScript REPL, {:ns :opts :runtime-id}, nil while the
@@ -112,35 +110,6 @@
    ;; values are printed by the runtime
    :expects  #{"eval" "load-file" #'print/wrap-print}
    :handles  {}})
-
-(defn- live-port?
-  "Whether a server accepts connections on port."
-  [port]
-  (try
-    (with-open [s (Socket.)]
-      (.connect s (InetSocketAddress. "127.0.0.1" (int port)) 200)
-      true)
-    (catch Exception _ false)))
-
-(defn- write-port-files!
-  "Writes port to the port files, unless another live server's port is in
-  one, deletes them on exit. Returns the files written."
-  [port files]
-  (let [written (doall
-                  (for [path files
-                        :let [f (io/file path)
-                              other (when (.exists f)
-                                      (try (Long/parseLong (string/trim (slurp f)))
-                                        (catch NumberFormatException _ nil)))]
-                        :when (not (and other (not= other port) (live-port? other)))]
-                    (do (spit f (str port))
-                        f)))]
-    (.addShutdownHook (Runtime/getRuntime)
-      (Thread. (fn []
-                 (doseq [^File f written]
-                   (when (and (.exists f) (= (str port) (string/trim (slurp f))))
-                     (.delete f))))))
-    written))
 
 (defn- warn [& xs]
   (binding [*out* *err*]
@@ -444,7 +413,7 @@
                  :port (if (true? nrepl-port) 0 nrepl-port)
                  :handler (apply server/default-handler #'wrap-cljs-repl extra))
         port   (:port server)
-        files  (write-port-files! port port-files)]
+        files  (repl/write-port-files! port port-files)]
     (println (str "[cljf.esm.repl] nREPL server on " nrepl-host ":" port
                (when (seq files) (str " (" (string/join ", " files) ")"))
                (when (seq names) (str " with " (string/join ", " names)))

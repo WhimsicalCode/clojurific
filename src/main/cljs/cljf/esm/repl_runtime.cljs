@@ -32,6 +32,145 @@
 
 (def ^:private overlays (js/Map.))
 
+;; The console's log: console.* calls, uncaught errors and unhandled
+;; rejections, for the REPL's logs op (the MCP server's console_logs), when
+;; the build has the MCP server (CONSOLE_LOG). Kept on the registry, which
+;; outlives the module's hot reloads, recording since the runtime's first
+;; instance ran. A page's load has an epoch of its own: a reloaded page
+;; keeps its runtime id, its sequence numbers start again.
+
+(goog-define ^{:doc "Whether the runtime records the console's log: the
+  watcher defines it under :repl {:mcp-port ...}, the MCP server reads it."}
+  CONSOLE_LOG false)
+
+(def ^:private max-logs 500)
+
+(def ^:private max-log-text 2000)
+
+(defn- preview
+  "A JavaScript value as text, bounded: depth levels deep, 10 keys or items
+  each, without calling getters (own data properties only)."
+  [x depth]
+  (cond
+    (string? x)   (js/JSON.stringify x)
+    (or (nil? x) (number? x) (boolean? x) (undefined? x)) (str x)
+    (fn? x)       (str "#<fn " (or (.-name x) "anonymous") ">")
+    (instance? js/Error x) (str "#<" (.-name x) ": " (.-message x) ">")
+    (<= depth 0)  (if (array? x) "[…]" "{…}")
+    (array? x)    (str "["
+                    (.join (.map (.slice x 0 10) #(preview % (dec depth))) ",")
+                    (when (< 10 (.-length x)) ",…")
+                    "]")
+    (object? x)
+    (let [ks (js/Object.keys x)]
+      (str "{"
+        (.join (.map (.slice ks 0 10)
+                 (fn [k]
+                   (let [d (js/Object.getOwnPropertyDescriptor x k)]
+                     (str (js/JSON.stringify k) ":"
+                       (if (and d (js-in "value" d)) (preview (.-value d) (dec depth)) "<getter>")))))
+          ",")
+        (when (< 10 (.-length ks)) ",…")
+        "}"))
+    :else (try (str "#<" (.. x -constructor -name) ">")
+            (catch :default _ "#<object>"))))
+
+(defn- log-text
+  "A console argument as text: strings as they are, errors with their stack,
+  ClojureScript values printed (*print-length* 20, *print-level* 4), other
+  values previewed, 2 levels deep: logging a large object costs little."
+  [x]
+  (let [s (cond
+            (string? x)                 x
+            (instance? js/Error x)      (or (.-stack x) (str x))
+            (or (nil? x) (number? x) (boolean? x)) (str x)
+            (satisfies? IPrintWithWriter x) (binding [*print-length* 20 *print-level* 4] (pr-str x))
+            :else (try (preview x 2) (catch :default _ (str x))))]
+    (if (< max-log-text (count s))
+      (str (subs s 0 max-log-text) "…")
+      s)))
+
+(defn- log-state []
+  (or (.-logs registry)
+      (set! (.-logs registry) #js {:entries #js [] :seq 0
+                                   :epoch (str (.toString (js/Date.now) 36)
+                                            (.slice (.toString (js/Math.random) 36) 2 8))})))
+
+(defn- log!
+  "Adds an entry of level (log, info, warn, error, debug) to the log: the
+  console's args (an array), or an uncaught error's."
+  [level args stack]
+  (try
+    (let [^js state (log-state)
+          entries (.-entries state)
+          n       (inc (.-seq state))]
+      (set! (.-seq state) n)
+      (.push entries #js {:seq   n
+                          :at    (js/Date.now)
+                          :level level
+                          :text  (.join (.map args log-text) " ")
+                          :stack stack})
+      (when (< max-logs (.-length entries))
+        (.splice entries 0 (- (.-length entries) max-logs))))
+    (catch :default _ nil)))
+
+(defn- install-log!
+  "Records the console's calls and the uncaught errors, once per global."
+  []
+  (when (and CONSOLE_LOG (not (.-logging registry)))
+    (set! (.-logging registry) true)
+    (when-let [^js console (.-console js/globalThis)]
+      (doseq [level ["log" "info" "warn" "error" "debug"]]
+        (let [f (unchecked-get console level)]
+          (when (fn? f)
+            (unchecked-set console level
+              (fn [& args]
+                (let [args (into-array args)]
+                  (log! level args nil)
+                  (.apply f console args))))))))
+    (let [error-of (fn [e] (when (instance? js/Error e) (.-stack e)))]
+      (if-let [^js p (and (not (.-document js/globalThis))
+                          (.-process js/globalThis))]
+        ;; the monitor changes nothing else: Node.js still handles an uncaught
+        ;; exception, and an unhandled rejection (raised as one, origin
+        ;; unhandledRejection, under the default --unhandled-rejections=throw),
+        ;; as it would. Not an unhandledRejection listener: having one turns
+        ;; Node.js' handling of them off
+        (when (fn? (.-on p))
+          (.on p "uncaughtExceptionMonitor"
+            (fn [e origin]
+              (log! "error" #js [(if (= "unhandledRejection" origin) "Unhandled rejection" "Uncaught") e]
+                (error-of e)))))
+        (when (fn? (.-addEventListener js/globalThis))
+          (.addEventListener js/globalThis "error"
+            (fn [^js ev]
+              (log! "error" #js ["Uncaught" (or (.-error ev) (.-message ev))] (error-of (.-error ev)))))
+          (.addEventListener js/globalThis "unhandledrejection"
+            (fn [^js ev]
+              (log! "error" #js ["Unhandled rejection" (.-reason ev)] (error-of (.-reason ev))))))))))
+
+(install-log!)
+
+(defn- logs
+  "The log's entries after sequence number since of epoch (all of them for
+  another epoch: the page reloaded since), at most limit of the last, of
+  levels (all when nil), the last sequence number and the epoch. nil when
+  the runtime doesn't record its log (CONSOLE_LOG)."
+  [epoch since limit levels]
+  (when CONSOLE_LOG
+    (let [^js state (log-state)
+          since   (if (= epoch (.-epoch state)) (or since 0) 0)
+          entries (.filter (.-entries state)
+                    (fn [^js e]
+                      (and (> (.-seq e) since)
+                           (or (nil? levels) (some #{(.-level e)} levels)))))
+          n       (.-length entries)]
+      #js {:entries  (.slice entries (max 0 (- n (or limit 100))))
+           :dropped  (max 0 (- n (or limit 100)))
+           :last     (.-seq state)
+           :epoch    (.-epoch state)
+           :reloaded (boolean (and epoch (not= epoch (.-epoch state))))})))
+
 (def ^:private views (js/Map.))
 
 (defn- overlay [ns]
@@ -252,6 +391,27 @@
 (defn- tag []
   (some-> (session-storage) (.getItem tag-key)))
 
+(def ^:private tab-key-key "cljs-esm-repl-tab")
+
+(defn- random-key []
+  (if-let [^js c (.-crypto js/globalThis)]
+    (if (fn? (.-randomUUID c))
+      (.randomUUID c)
+      (str (js/Math.random)))
+    (str (js/Math.random))))
+
+(defn- tab-key
+  "The page's key in sessionStorage, which keeps its runtime id when it's
+  reloaded (see the Vite plugin's connectRuntime): created on its first
+  hello. A page opened by another has a copy, the plugin gives it a key of
+  its own (see handle!'s welcome). nil outside pages."
+  []
+  (when-let [storage (and (.-document js/globalThis) (session-storage))]
+    (or (.getItem storage tab-key-key)
+        (let [k (random-key)]
+          (.setItem storage tab-key-key k)
+          k))))
+
 (defn- format-warning [{:strs [message file line column]}]
   (str "WARNING: " message (when file (str " at " file ":" line ":" column))))
 
@@ -310,6 +470,9 @@
                       (.then (fn [_] (reply! #js {:value "nil"}))
                              (fn [e] (reply! (error-reply e)))))
       "await-stamps" (await-stamps (get msg "stamps") (get msg "timeout" 10000) reply!)
+      "logs"      (reply! (if-let [l (logs (get msg "epoch") (get msg "since") (get msg "limit") (get msg "levels"))]
+                            #js {:logs l}
+                            #js {:logsOff true}))
       "tag"       (let [tag (get msg "tag")]
                     (when-let [storage (session-storage)]
                       (if tag
@@ -317,7 +480,9 @@
                         (.removeItem storage tag-key)))
                     (reply! #js {:value (pr-str tag)}))
       "console-result" (console-result (get msg "rid") (get msg "result"))
-      "welcome"   nil
+      ;; a page opened by another got a tab key of its own
+      "welcome"   (when-let [k (get msg "tabKey")]
+                    (some-> (session-storage) (.setItem tab-key-key k)))
       nil)))
 
 (defn- document [] (.-document js/globalThis))
@@ -362,6 +527,14 @@
                             :else  true)
                :focused   (boolean (and doc (.hasFocus doc)))
                :tag       (tag)
+               :tabKey    (tab-key)
+               ;; what the runtime is, in (cljf.esm.repl/runtimes)
+               :kind      (cond
+                            doc        "browser"
+                            (not hmr?) "bundle"
+                            thread     (if (:main? thread) "server" "worker")
+                            (.-WorkerGlobalScope js/globalThis) "worker"
+                            :else      "server")
                ;; the output directory's URL, the REPL maps stack traces to the
                ;; ClojureScript sources with the source maps there
                :root      (.-href (root))}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "clojurific": {
+      "command": "npx",
+      "args": ["cljf", "mcp"]
+    }
+  }
+}

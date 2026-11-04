@@ -1,0 +1,364 @@
+[
+  {
+    "name": "runtimes",
+    "title": "Runtimes",
+    "description": "Lists the JavaScript runtimes running the build: browser tabs, the dev server's server (ssr) and its worker threads, and the threads of a bundle (vite build --watch). Every runtime tool takes one's runtime_id. A browser tab keeps its id when reloaded, other runtimes get a new one when they restart. focused marks the tab the user focused last.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "build_status",
+    "title": "Build status",
+    "description": "The build's status: whether it compiles, the last compile (its error with a source excerpt, or the namespaces compiled), the warnings holding back hot reloads, the dev server's URLs and the runtimes.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "eval",
+    "title": "Evaluate ClojureScript",
+    "description": "Evaluates ClojureScript forms in a runtime, compiled with the build's compiler environment. Returns each form's value printed as EDN, the output printed (out, err), the compiler warnings and an error with its stack mapped to the sources. A form with warnings isn't evaluated, unless warnings_ok, nor are the forms after a failed one. def redefines a var for the namespace's code, as a hot reload does; in-ns changes the namespace of the forms after it only. The result's ns is the namespace after the forms: *ns* is nil at runtime, as in all ClojureScript (the namespace is the compiler's), and (namespace ::x) is the form's namespace. Values are printed with print_length 50 and print_level 8 unless given.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "The forms to evaluate."
+        },
+        "runtime_id": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "The runtime: an id of the runtimes tool, or a tag (tag_runtime)."
+        },
+        "ns": {
+          "type": "string",
+          "description": "The namespace to evaluate in, default cljs.user."
+        },
+        "await": {
+          "type": "boolean",
+          "description": "Wait for a promise's value."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": "Give up waiting for the runtime after these ms, default 30000."
+        },
+        "warnings_ok": {
+          "type": "boolean",
+          "description": "Evaluate forms with compiler warnings."
+        },
+        "print_length": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "*print-length* of the values, null for none."
+        },
+        "print_level": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "*print-level* of the values, null for none."
+        }
+      },
+      "required": [
+        "code",
+        "runtime_id"
+      ]
+    }
+  },
+  {
+    "name": "load_file",
+    "title": "Load file",
+    "description": "Loads a ClojureScript file into a runtime: the watcher compiles it and the tool returns once the runtime applied its hot reload (or with the warnings holding it back). A file outside the source directories is evaluated form by form.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The file, relative to the project's directory."
+        },
+        "runtime_id": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "The runtime: an id of the runtimes tool, or a tag (tag_runtime)."
+        }
+      },
+      "required": [
+        "path",
+        "runtime_id"
+      ]
+    }
+  },
+  {
+    "name": "wait_for_reload",
+    "title": "Wait for hot reload",
+    "description": "After editing source files: compiles them unless the watcher did already, then waits until the runtime runs the build's last compile, i.e. applied the hot reloads. Returns reloaded, error (the build failed: the error and where), warnings (they hold back hot reloads), timeout or no-runtime.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runtime_id": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "The runtime: an id of the runtimes tool, or a tag (tag_runtime)."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The files edited, relative to the project's directory."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": "Give up after these ms, default 10000."
+        }
+      },
+      "required": [
+        "runtime_id"
+      ]
+    }
+  },
+  {
+    "name": "tag_runtime",
+    "title": "Tag runtime",
+    "description": "Tags a runtime, taking the tag from any other: tools take the tag as runtime_id. A browser tab keeps its tag when reloaded. A null tag removes the runtime's.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runtime_id": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "The runtime: an id of the runtimes tool, or a tag (tag_runtime)."
+        },
+        "tag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "runtime_id",
+        "tag"
+      ]
+    }
+  },
+  {
+    "name": "namespaces",
+    "title": "Namespaces",
+    "description": "The build's namespaces and their source files.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "Only the namespaces starting with it."
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "doc",
+    "title": "Documentation",
+    "description": "A var's, macro's, special form's or namespace's documentation: its arglists, docstring and where it's defined, from the build's compiler environment.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "The name, i.e. map, str/join, my.app/render."
+        },
+        "ns": {
+          "type": "string",
+          "description": "The namespace resolving it (its aliases and refers), default cljs.user."
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "source",
+    "title": "Source",
+    "description": "The source of a var or macro, read from its file.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string"
+        },
+        "ns": {
+          "type": "string",
+          "description": "The namespace resolving it, default cljs.user."
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "console_logs",
+    "title": "Console logs",
+    "description": "The runtime's console output: its console.* calls, uncaught errors and unhandled rejections (the last 500), oldest first, their stacks mapped to the sources. Pass the last result's cursor as since to get only what's new: all of the entries when the page reloaded since.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runtime_id": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "The runtime: an id of the runtimes tool, or a tag (tag_runtime)."
+        },
+        "since": {
+          "type": "string",
+          "description": "Only the entries after this cursor, a previous call's."
+        },
+        "levels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "log",
+              "info",
+              "warn",
+              "error",
+              "debug"
+            ]
+          },
+          "description": "Only these levels, all by default."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "At most these of the last entries, default 100."
+        }
+      },
+      "required": [
+        "runtime_id"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "vite_errors",
+    "title": "Vite errors",
+    "description": "The Vite dev server's own errors, not the ClojureScript compiler's (see build_status): the error its overlay shows, i.e. of a TypeScript, CSS or HTML transform, until an update replaces it, and the last ones it logged, i.e. of the server's ssr environment.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "string",
+          "description": "Only the errors after this time (ISO 8601), i.e. a previous call's."
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "ns_info",
+    "title": "Namespace info",
+    "description": "A namespace of the build: its file, docstring, public vars and macros with their arglists, the namespaces it requires, and its dependents (the namespaces requiring it, which recompile when its API changes).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ns": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ns"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "macroexpand",
+    "title": "Macroexpand",
+    "description": "Expands a ClojureScript form's macros in a namespace of the build, with its aliases and refers: once (macroexpand-1), until the form's head isn't a macro (macroexpand), or all the forms in it (all).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "form": {
+          "type": "string"
+        },
+        "ns": {
+          "type": "string",
+          "description": "The namespace expanding it, default cljs.user."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "macroexpand-1",
+            "macroexpand",
+            "all"
+          ],
+          "description": "Default macroexpand."
+        }
+      },
+      "required": [
+        "form"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "apropos",
+    "title": "Apropos",
+    "description": "The public vars of the build's namespaces whose name contains a string (case-insensitive).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "ns": {
+          "type": "string",
+          "description": "Only this namespace's vars."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  }
+]

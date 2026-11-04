@@ -13,6 +13,8 @@ and the fork's own are `cljf.*` (`cljf.esm`, `cljf.x`). Read
 - `src/main/clojure/cljf/esm.clj` — the ES module build, watch and test runner generation
 - `src/main/clojure/cljf/esm/repl.clj`, `src/main/cljs/cljf/esm/repl_runtime.cljs` — the nREPL server
   and its browser runtime
+- `src/main/clojure/cljf/esm/mcp.clj` — the REPL's MCP server for coding agents (`:repl {:mcp-port 0}`),
+  `src/main/js/cljf/mcp.js` its stdio bridge (`cljf mcp`), see [`docs/mcp.md`](docs/mcp.md)
 - `src/main/cljs/cljf/esm/` — runtime support: `goog.js`, `lazy`, `node_test`, `karma`
 - `src/main/cljs/cljf/x.clj` — extensions to ClojureScript (`defclass`, over the analyzer's `class*`
   and `super*`)
@@ -63,7 +65,9 @@ After updating `com.google.javascript/closure-compiler` (the `:closure` alias), 
 `script/gen-default-externs` and commit `src/main/clojure/cljs/externs/default.edn`, the default
 externs the analyzer reads without the Closure Compiler. After changing
 `src/main/js/cljf/resolver/deps.edn` (i.e. to update tools.deps), run `script/lock-resolver` and
-commit `src/main/js/cljf/resolver.lock.json`.
+commit `src/main/js/cljf/resolver.lock.json`. After changing the MCP server's tools
+(`cljf.esm.mcp/tools`), run `script/gen-mcp-tools` and commit `src/main/js/cljf/mcp-tools.json`, the
+launcher's copy, which `cljf.esm-repl-tests/mcp-tools-copy` checks.
 
 `cljs/repl.cljc` is only `cljs.repl`'s macros (`doc`, `source`, `dir`, `apropos`, `find-doc`) and
 the docs they read, which `cljf.esm.repl` and cider's orchard use; the classic REPL is gone.

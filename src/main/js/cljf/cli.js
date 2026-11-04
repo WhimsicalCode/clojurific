@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { LauncherError } from './errors.js';
 import { classpath, compilerCommand, findJava, setupJava, version } from './launcher.js';
+import { bridge } from './mcp.js';
 import { repl } from './repl.js';
 
 const usage = `Usage: cljf [options] <command> [arguments]
@@ -17,6 +18,9 @@ Commands:
   repl [--port <port>]   a ClojureScript REPL into the pages running the dev
                          server's (or watch's) build, through its nREPL server
                          (:repl {:nrepl-port 0}, port from .nrepl-port)
+  mcp [--port <port>]    an MCP server on stdio for coding agents, into the
+                         dev server's (or watch's) REPL (:repl {:mcp-port 0},
+                         port from .cljf/mcp-port)
   setup-java [version]   download Eclipse Temurin (the latest LTS by default)
                          into cljf's cache, for machines without Java
 
@@ -80,6 +84,11 @@ async function main() {
     case 'repl': {
       const i = args.indexOf('--port');
       process.exit(await repl({ port: i >= 0 ? Number(args[i + 1]) : undefined }));
+      break;
+    }
+    case 'mcp': {
+      const i = args.indexOf('--port');
+      await bridge({ port: i >= 0 ? Number(args[i + 1]) : undefined });
       break;
     }
     case 'setup-java': {
