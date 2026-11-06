@@ -1,0 +1,35 @@
+# clojurific.dev
+
+The website, a Vite project built with the compiler in `..`:
+
+- `index.html`: the home page.
+- `play/`: a ClojureScript REPL whose forms are compiled and evaluated in the page by the self-hosted compiler (`cljf.selfhost`, `:self-host`). `src/clojurific/play.cljs` is the playground. Its forms can `require` the namespaces it requires. Code is highlighted with `cljf repl`'s tokenizer (`../src/main/js/cljf/highlight.js`).
+- `public/`: copied as is: `CNAME` for the custom domain, the logo, and the fonts.
+- Styling follows unidraw.dev:
+  - Monsical for text, in `public/fonts/` and copied from unidraw.dev.
+  - Poppins for headings, from Google Fonts.
+  - White cards on `#f5f5f5`.
+
+```sh
+cd web
+npm ci
+npm run dev      # http://localhost:5173, the compiler's watch and hot reload
+npm run build    # dist/
+npm run preview  # serves dist/
+```
+
+`vite.config.mjs` runs the plugin from `../src/main/js/vite-plugin-cljs` with the Clojure CLI (`clojure -M`, the classpath of `deps.edn`). It sets two compiler options:
+
+- `:self-host`: the compiler, and `cljs.core`'s macros as a lazily loaded chunk.
+- `:esm-repl`: namespaces register themselves for the compiler in the page.
+
+A bundle is built with `prune: false`. Forms compiled in the page use ClojureScript's property names and may call any protocol method, so these can be neither renamed nor pruned. The build copies the analysis caches the compiler reads to `dist/play/analysis/`.
+
+`../.github/workflows/web.yml` builds and deploys it to GitHub Pages on pushes to `main` that change it or the compiler. Before the first deploy:
+
+1. Set the repository's Pages settings to **Source: GitHub Actions**.
+2. Verify `clojurific.dev` in the organization's Pages settings.
+3. Add GitHub Pages' DNS records for the apex: `A` records 185.199.108.153, 185.199.109.153, 185.199.110.153 and 185.199.111.153, and the matching `AAAA` records.
+4. `.dev` is HSTS-preloaded: enable *Enforce HTTPS* once GitHub has issued the certificate.
+
+If GitHub Pages doesn't work out, Cloudflare Pages serves the same output: `npx wrangler pages deploy dist --project-name clojurific`.

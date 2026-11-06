@@ -29,3 +29,9 @@ package-lock.json
 # the native prune summarizer: built by script/build-native-prune
 src/main/rust/prune/target
 src/main/js/vite-plugin-cljs/native
+
+# clojurific.dev
+!web/package.json
+!web/package-lock.json
+/web/dist
+/web/target

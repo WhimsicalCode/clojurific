@@ -1,0 +1,4 @@
+;; clojurific.dev: the playground's ClojureScript, compiled by the fork in ..
+{:paths ["src"]
+ :deps {com.whimsical/clojurific {:local/root ".."}
+        org.clojure/tools.reader {:mvn/version "1.6.0"}}}

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clojurific · Fast ClojureScript compiler</title>
+  <meta name="description" content="Fast ClojureScript compiler by Whimsical: compiles to ES modules, runs as a Vite plugin.">
+  <link rel="icon" href="/img/clojurific-dark-60.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <a class="code-link" href="https://github.com/WhimsicalCode/clojurific" aria-label="Clojurific on GitHub">
+    <img src="/img/github-black.svg" height="20" alt="GitHub">
+  </a>
+
+  <main class="home">
+    <header class="hero">
+      <img alt="Clojurific" src="/img/clojurific-dark-60.svg" height="72">
+      <p class="lede">
+        Fast ClojureScript compiler from the makers of <a class="link" href="https://whimsical.com">Whimsical</a>.
+      </p>
+      <div class="cta">
+      <div class="cmd card">
+        <code>npm create clojurific@latest</code>
+        <button class="copy" type="button" aria-label="Copy command" title="Copy">
+          <svg class="icon-copy" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <svg class="icon-check" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
+      </div>
+        <p class="cta-links">
+          <a class="link" href="play/">Try it in browser</a>
+          <a class="link" href="https://github.com/WhimsicalCode/clojurific#getting-started">Learn more</a>
+        </p>
+      </div>
+    </header>
+
+    <section class="section">
+      <div class="about card">
+        <p>Clojurific is optimized for <strong>interoperability</strong> with modern JavaScript tooling, runtime <strong>performance</strong> and build <strong>speed</strong>.</p>
+        <ul>
+          <li>Compiles ClojureScript to ES modules</li>
+          <li>Runs as a Vite plugin, offering fast hot reload in dev and easy interoperability with JavaScript libraries</li>
+          <li>Compatible with existing ClojureScript libraries</li>
+          <li>Browser and backend support</li>
+          <li>Integrated MCP and REPL in dev for both browser and backend</li>
+          <li>Up to 5x faster builds compared to classic ClojureScript compiler</li>
+          <li>About 40% faster on runtime benchmarks</li>
+        </ul>
+      </div>
+    </section>
+
+    <footer class="section">
+      <p class="footer">
+        <a class="link" href="https://github.com/WhimsicalCode/clojurific">GitHub</a>
+        <a class="link" href="https://www.npmjs.com/package/clojurific">npm</a>
+        <a class="link" href="https://clojars.org/com.whimsical/clojurific">Clojars</a>
+        <span>©️ Whimsical, Inc.</span>
+      </p>
+    </footer>
+  </main>
+
+  <script type="module">
+    for (const button of document.querySelectorAll('.cmd .copy')) {
+      button.addEventListener('click', async () => {
+        await navigator.clipboard.writeText(button.parentElement.querySelector('code').textContent);
+        button.classList.add('copied');
+        button.title = 'Copied';
+        setTimeout(() => { button.classList.remove('copied'); button.title = 'Copy'; }, 1500);
+      });
+    }
+  </script>
+</body>
+</html>

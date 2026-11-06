@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Playground · Clojurific</title>
+  <meta name="description" content="A ClojureScript REPL in your browser, compiled by Clojurific's self-hosted compiler.">
+  <link rel="icon" href="/img/clojurific-dark-60.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap">
+  <link rel="stylesheet" href="/src/style.css">
+  <script type="module" src="/src/clojurific/play.cljs"></script>
+</head>
+<body class="play-page">
+  <header class="nav">
+    <a class="brand" href="/">
+      <img alt="Clojurific" src="/img/clojurific-dark-60.svg" height="28">
+    </a>
+    <span class="nav-title">Playground</span>
+    <a class="code-link" href="https://github.com/WhimsicalCode/clojurific" aria-label="Clojurific on GitHub">
+      <img src="/img/github-black.svg" height="20" alt="GitHub">
+    </a>
+  </header>
+  <main id="repl" class="repl card busy">
+    <div id="log" class="log">
+      <pre class="entry intro">ClojureScript compiled and evaluated in this page by Clojurific's self-hosted compiler.
+Only cljs.core's macros are available: other macro namespaces are Clojure.
+
+Enter evaluates · Shift+Enter starts a new line · ↑ ↓ history · Ctrl+L clears</pre>
+    </div>
+    <div class="input-row">
+      <label id="prompt" for="input">cljs.user=&gt;</label>
+      <div class="input-wrap">
+        <pre id="input-highlight" class="input-highlight" aria-hidden="true"></pre>
+        <textarea id="input" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="ClojureScript"></textarea>
+      </div>
+      <span class="spinner" aria-hidden="true"></span>
+    </div>
+  </main>
+</body>
+</html>
