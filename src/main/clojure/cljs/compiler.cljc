@@ -237,7 +237,8 @@
   ([ns nm] (munge-esm-var ns nm js-reserved))
   ([ns nm reserved]
    (let [local? (and (not *esm-repl*) (= ns (str ana/*cljs-ns*)))
-         idx    (.indexOf ^String nm ".")
+         ;; .. (the macro) is a name, not a property path
+         idx    (if (= ".." nm) -1 (.indexOf ^String nm "."))
          member (esm-var-name (if (neg? idx) nm (subs nm 0 idx)))
          ;; nm may be a property path, i.e. Foo.prototype.bar, reserved
          ;; words are valid property names, i.e. an npm module's default

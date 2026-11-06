@@ -97,13 +97,18 @@
   [{:keys [js-entries]}]
   (->> (vals js-entries) (mapcat (comp vals :exports)) (map (comp symbol namespace)) distinct))
 
+(def ^:private self-host-ns
+  "The self-hosted compiler, compiled with :self-host, see cljf.selfhost."
+  'cljf.selfhost)
+
 (defn- mains
   "The namespaces a build compiles with their dependencies: the :preloads,
   the main namespaces, those :js-entries export from, and under :esm-repl
   the REPL runtime and the namespaces required at the REPL (::repl-mains, an
-  atom)."
-  [{:keys [preloads esm-repl ::repl-mains] :as opts}]
+  atom), with :self-host the self-hosted compiler (cljf.selfhost)."
+  [{:keys [preloads esm-repl self-host ::repl-mains] :as opts}]
   (concat (when esm-repl [comp/esm-repl-runtime])
+          (when self-host [self-host-ns])
           preloads (main-namespaces opts) (js-entry-namespaces opts)
           (some-> repl-mains deref sort)))
 
@@ -168,6 +173,22 @@
 
 (defn- output-file ^File [ns {:keys [output-dir]}]
   (io/file output-dir (util/ns->relpath ns :js)))
+
+(defn- compile-self-host-macros!
+  "With :self-host, compiles cljs.core's macros
+  (cljs/core.cljc) as ClojureScript, the module cljs/core$macros.js the
+  self-hosted compiler (cljf.selfhost) expands macros with. After the build:
+  it imports the compiler's namespaces. Unless it's up to date."
+  [{:keys [output-dir self-host] :as opts}]
+  (when self-host
+    (let [src (source-file (io/resource "cljs/core.cljc") 'cljs.core output-dir)]
+      ;; the warnings of the macros compiled as ClojureScript (i.e. redefining
+      ;; cljs.core's fns) aren't the build's
+      ;; in a copy of the compiler env: cljs.core$macros isn't the build's
+      (binding [ana/*cljs-warnings* (zipmap (keys ana/*cljs-warnings*) (repeat false))
+                env/*compiler*      (atom @env/*compiler*)]
+        (comp/compile-file src (io/file output-dir "cljs" "core$macros.js")
+          (assoc opts :macros-ns true))))))
 
 (defn- install-goog-shims [{:keys [output-dir]}]
   (doseq [path goog-shims]
@@ -817,6 +838,8 @@
       ;; keyword and symbol constants are hoisted into a constants module
       ;; (see write-constants!)
       (cond-> (true? (:optimize-constants opts)) (assoc :emit-constants true))
+      ;; the REPL runtime defines cljs_selfhost_eval, see cljf.selfhost
+      (cond-> (:self-host opts) (assoc-in [:closure-defines "cljf.esm.repl_runtime.SELF_HOST"] true))
       ;; the generated test runner is a main namespace
       (cond-> (:test-runner opts)
         (update :main #(vec (distinct (conj (if (coll? %) (vec %) (if % [%] [])) (-> opts :test-runner :ns))))))))
@@ -1073,6 +1096,7 @@
                   (doseq [input others]
                     (compile-ns input opts))))
               (some-> ^Future preload (.get)))
+            (compile-self-host-macros! opts)
             (check-js-entries compiler-env opts)
             (write-constants! compiler-env opts)
             (install-goog-shims opts)

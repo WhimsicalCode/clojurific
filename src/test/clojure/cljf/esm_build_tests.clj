@@ -807,3 +807,49 @@
       (let [s (after [{:type "error" :message "X"} nil])]
         (is (= #{"X"} (messages s)))
         (is (empty? (messages (esm/compiled-status s compiled ["c.cljs"] false))))))))
+
+(deftest self-host-evaluates-forms-in-the-runtime
+  ;; :self-host: the compiler in the runtime (cljf.selfhost), cljs.core's
+  ;; macros compiled as ClojureScript
+  (let [dir     (temp-dir)
+        out     (io/file dir "out")
+        sources (into {} [(write-source! dir 'test.selfhost
+                            "(ns test.selfhost (:require [clojure.string :as str]))
+                             (defonce state (atom {:n 1}))
+                             (defn greet [s] (str \"Hi \" (str/upper-case s)))"
+                            (- (System/currentTimeMillis) 60000))])
+        runner  (io/file dir "run.mjs")]
+    (binding [esm/*generated-sources* sources]
+      (esm/build {:main 'test.selfhost :output-dir (str out) :esm-repl true :self-host true}))
+    (testing "cljs.core's macros module parses (.. is a name, not a property path)"
+      (is (string/includes? (slurp (io/file out "cljs" "core$macros.js")) "cljs$core$macros$_DOT__DOT_")))
+    ;; fetch of the analysis caches from the output directory, as a dev server serves them
+    (spit runner
+      (str "import fs from 'node:fs';
+            import { pathToFileURL } from 'node:url';
+            const out = " (pr-str (str (.getCanonicalPath out) "/")) ";
+            globalThis.fetch = async (url) => {
+              const f = decodeURIComponent(new URL(url).pathname);
+              return fs.existsSync(f)
+                ? new Response(fs.readFileSync(f), { headers: { 'content-type': 'application/json' } })
+                : new Response('', { status: 404, headers: { 'content-type': 'text/html' } });
+            };
+            globalThis.$CLJS_ESM = { nses: new Map(), root: pathToFileURL(out).href };
+            await import(pathToFileURL(out + 'test/selfhost.js').href);
+            const res = [];
+            for (const f of ['(let [x 1] (-> x inc (* 10)))',
+                             '(vec (for [x (range 4) :when (odd? x)] (* x x)))',
+                             '(in-ns (quote test.selfhost))',
+                             '(greet \"there\")',
+                             '(swap! state update :n inc)',
+                             '(defn twice [x] (* 2 x))',
+                             '(twice (str/index-of \"abc\" \"c\"))',
+                             '::k',
+                             '(nope 1)']) {
+              try { res.push(await globalThis.cljs_selfhost_eval(f, { print: true })); }
+              catch (e) { res.push('error: ' + e.message); }
+            }
+            console.log(JSON.stringify(res));"))
+    (is (= ["20" "[1 9]" "nil" "\"Hi THERE\"" "{:n 2}" "#'test.selfhost/twice" "4" ":test.selfhost/k"
+            "error: Form not evaluated: 1 warning(s)"]
+           (json/read-str (last (string/split-lines (string/trim (run-node runner)))))))))

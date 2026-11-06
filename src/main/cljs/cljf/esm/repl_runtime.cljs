@@ -226,7 +226,7 @@
         (.set views ns v)
         v)))
 
-(defn- root
+(defn root
   "The output directory's URL, the REPL sends paths relative to it: the
   socket's (see connect-socket!) in a bundle, whose import.meta.url is the
   bundle's."
@@ -238,7 +238,7 @@
     (let [url (.-url (js* "import.meta"))]
       (js/URL. "../../" url))))
 
-(defn- import-path [path]
+(defn import-path [path]
   (js* "import(/* @vite-ignore */ ~{})" (.-href (js/URL. path (root)))))
 
 (defn- load-ns
@@ -266,7 +266,7 @@
                      #js {:mod mod :sets #js [(.-$$set mod)] :libs #js {} :gen 1}))
                  (view ns))))))
 
-(defn- load-ref
+(defn load-ref
   "A promise of what a reference [alias ns kind path] of a REPL form is
   bound to: a namespace's view (kind ns), a module's namespace object
   (module, i.e. a goog shim) or its default export (default, Closure Library
@@ -643,6 +643,22 @@
         (fn [code opts]
           (console-eval send! code opts)))
       (connect 250))))
+
+(goog-define ^{:doc "Whether the build has the self-hosted compiler (:self-host),
+  cljf.selfhost: defines cljs_selfhost_eval."}
+  SELF_HOST false)
+
+(when SELF_HOST
+  ;; cljf.selfhost/console-eval, its module (with the compiler) loaded on
+  ;; first use
+  (set! (.-cljs_selfhost_eval js/globalThis)
+    (fn [code opts]
+      ;; registered once loaded, i.e. a bundle's, whose modules aren't at
+      ;; their output paths
+      (-> (if-let [entry (.get (.-nses registry) "cljf.selfhost")]
+            (js/Promise.resolve (.-mod entry))
+            (import-path "cljf/selfhost.js"))
+          (.then (fn [m] ((.-console_eval m) code opts)))))))
 
 (if-let [hot (js* "import.meta.hot")]
   (connect-vite! hot)

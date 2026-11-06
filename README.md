@@ -139,6 +139,7 @@ Options are EDN maps, `@file.edn` to read them from a file, and `:profile` keywo
 | `:esm-hmr` | hot reloading code, enabled by `watch` |
 | `:esm-repl` | modules register themselves for the REPL, which main namespaces load first, enabled by `watch` with `:esm-hmr` |
 | `:repl` | `{:nrepl-port 0 :nrepl-host "127.0.0.1" :port-files [".nrepl-port"] :middleware []}`, `watch` starts an nREPL server (`0` picks a port), writes its port to the port files no other live server's port is in, and deletes them on exit; needs nREPL on the classpath. `:middleware` adds nREPL middleware (names of vars holding middleware fns, or collections of names), as does the `:middleware` of the project's `.nrepl.edn`, whose other keys don't apply (see [Editors](#editors)) |
+| `:self-host true` | the ClojureScript compiler in the runtime (`cljf.selfhost`): with `:esm-repl`, `cljs_selfhost_eval("(+ 1 2)")` compiles and evaluates without the watcher (see [Self-hosted REPL](#self-hosted-repl)) |
 | `:esm-dts false` | don't write `.d.ts` files |
 | `:esm-after-load` / `:esm-before-load` | fns run around hot reloads, like `^:dev/after-load` |
 | `:watch-dirs` | source directories, defaults to the classpath directories without the compiler's own |
@@ -323,6 +324,17 @@ The launcher and the Vite plugin start the compiler with `cljf.main`, `cljf.esm`
 - A form with compiler warnings isn't evaluated, unless `:warnings-ok`: the result has `:error` and `:warnings`, `:results` ends with `:cljf.esm.repl/failed`, and the forms after it aren't evaluated. The nREPL middleware replies with an `eval-error`.
 - In the browser's console, `cljs_eval("(+ 1 2)")` and `cljs_eval("(foo)", {ns: "my.app", await: true, print: true})` evaluate in its page, compiled by the REPL. They return a promise of the last form's value (printed with `print`), rejected for an error or warnings. The console keeps the namespace of its last `in-ns`. Compiling forms runs their macros in the compiler's JVM, so the Vite plugin accepts `cljs_eval` only from pages on the dev server's machine, unless its `replRemoteConsole` option is set. A proxy in front of the dev server has to set `X-Real-IP` to the client's address.
 - The interactive REPL has `*1`, `*2`, `*3` and `*e`, and `doc`, `source`, `dir` and `apropos` are answered from the compiler environment. Output printed during a form is its `:out` / `:err`, and still goes to the console. `:await true` waits for a promise's value. Errors' `:stack` is mapped to the ClojureScript sources (`my/app.cljs:12:3`, `<cljs repl>:1:2` for the forms evaluated) with the output's source maps.
+
+#### Self-hosted REPL
+
+With `:self-host true`, a build also compiles the ClojureScript compiler (`cljf.selfhost`, with `cljs.analyzer`, `cljs.compiler` and tools.reader) and `cljs.core`'s macros as ClojureScript (`cljs/core$macros.js`). In a watched build (`:esm-repl`), `cljs_selfhost_eval(code, {ns, await, print})` in the console compiles and evaluates forms in the page itself, as `cljs_eval` does but without the watcher's JVM, and returns a promise of the last form's value. Its modules load on first use.
+
+A build that requires `cljf.selfhost` evaluates without the REPL: `(cljf.selfhost/eval-str code opts)` returns a promise of `{:value :ns :warnings :error}`. The compiler fetches analysis caches from the output directory, or from `(cljf.selfhost/set-analysis-root! url)`'s for a bundle. Bundles need `:esm-repl` (namespaces register themselves for the compiler) and the Vite plugin's `prune: false`: forms compiled in the page use ClojureScript's property names and may call any protocol method. That's how [clojurific.dev/play](https://clojurific.dev/play/) works (`web/`).
+
+- Forms compile as the REPL's do (views of the namespaces they reference, `def` as a hot reload). The analysis of the build's namespaces comes from their analysis caches in the output directory, fetched as forms need them.
+- `ns`, `require` and `in-ns` work for namespaces of the build.
+- Only `cljs.core`'s macros are available. Other macro namespaces are Clojure, which a page can't run, so their macros don't expand.
+- A form with warnings isn't evaluated.
 
 #### Coding agents (MCP)
 
@@ -548,7 +560,7 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`, which keeps them in every bundle.
 - Closure Library files run whole: `goog.i18n`'s locale data (from `goog.date`, e.g. cljs-time) has every locale, which Closure's advanced compilation reduces to `goog.LOCALE`'s, about 340 KB of a bundle.
 - Closure's `:modules` aren't supported; lazy loading uses `import()`.
-- There's no classic compiler (`goog.provide` output, Closure's `:advanced` optimizations): `cljs.closure`, `cljs.build.api`, `cljs.compiler.api`, `cljs.main`, the classic REPLs (`cljs.repl/repl`, `cljs.repl.node`, `cljs.repl.browser`, `cljs.server.*`), `cljs.module-graph` and `cljs.loader` were removed, and so was self-hosted ClojureScript (`cljs.js`), which emits classic code. Tools calling them (figwheel, piggieback, `cljs.main` scripts) fail with a missing namespace; `cljs.repl` keeps its `doc`, `source`, `dir`, `apropos` and `find-doc` macros.
+- There's no classic compiler (`goog.provide` output, Closure's `:advanced` optimizations): `cljs.closure`, `cljs.build.api`, `cljs.compiler.api`, `cljs.main`, the classic REPLs (`cljs.repl/repl`, `cljs.repl.node`, `cljs.repl.browser`, `cljs.server.*`), `cljs.module-graph` and `cljs.loader` were removed, and so was self-hosted ClojureScript's `cljs.js`, which emits classic code (`:self-host`'s `cljf.selfhost` compiles in the page, see [Self-hosted REPL](#self-hosted-repl)). Tools calling them (figwheel, piggieback, `cljs.main` scripts) fail with a missing namespace; `cljs.repl` keeps its `doc`, `source`, `dir`, `apropos` and `find-doc` macros.
 - Keywords, `get` and map destructuring read plain JavaScript objects ([JavaScript objects](#javascript-objects)): a library relying on `(:k js-obj)` being `nil`, as in ClojureScript, sees the property.
 
 ## Design

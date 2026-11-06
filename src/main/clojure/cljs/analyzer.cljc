@@ -4418,14 +4418,15 @@ x                          (not (contains? ret :info)))
         (let [qualified-symbol (gets env :ns :rename-macros sym)
               nsym (symbol (namespace qualified-symbol))
               sym  (symbol (name qualified-symbol))]
-          (.findInternedVar ^clojure.lang.Namespace
-            #?(:clj (find-ns nsym) :cljs (find-macros-ns nsym)) sym))
+          #?(:clj  (.findInternedVar ^clojure.lang.Namespace (find-ns nsym) sym)
+             ;; self-hosted, a macro namespace may not be loaded (cljf.selfhost)
+             :cljs (some-> (find-macros-ns nsym) (.findInternedVar sym))))
 
         :else
         (let [nsym (gets env :ns :use-macros sym)]
           (if (and (some? nsym) (symbol? nsym))
-            (.findInternedVar ^clojure.lang.Namespace
-              #?(:clj (find-ns nsym) :cljs (find-macros-ns nsym)) sym)
+            #?(:clj  (.findInternedVar ^clojure.lang.Namespace (find-ns nsym) sym)
+               :cljs (some-> (find-macros-ns nsym) (.findInternedVar sym)))
             ;; can't be done as compiler pass because macros get to run first
             (when-not (and (lite-mode?) (= 'vector sym))
               (.findInternedVar ^clojure.lang.Namespace

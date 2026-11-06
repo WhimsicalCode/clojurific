@@ -12327,11 +12327,17 @@ reduces them without incurring seq initialization"
     :else (recur (gobject/get ctxt (first xs)) (next xs))))
 
 (defn find-ns-obj
-  "Bootstrap only."
+  "Bootstrap only. The module of namespace ns registered with
+  globalThis.$CLJS_ESM (see cljf.esm.repl-runtime), otherwise the object at
+  its path in the global scope."
   [ns]
-  (let [munged-ns (munge (str_ ns))
+  (let [registry  (unchecked-get js/globalThis "$CLJS_ESM")
+        entry     (when-not (nil? registry) (.get (.-nses registry) (str_ ns)))
+        munged-ns (munge (str_ ns))
         segs (.split munged-ns ".")]
-    (case *target*
+    (if-not (nil? entry)
+     (.-mod entry)
+     (case *target*
       "nodejs" (if ^boolean js/COMPILED
                   ; Under simple optimizations on nodejs, namespaces will be in module
                   ; rather than global scope and must be accessed by a direct call to eval.
@@ -12347,7 +12353,7 @@ reduces them without incurring seq initialization"
                     (next segs))
                   (find-ns-obj* goog/global segs))
       ("default" "webworker") (find-ns-obj* goog/global segs)
-      (throw (js/Error. (str_ "find-ns-obj not supported for target " *target*))))))
+      (throw (js/Error. (str_ "find-ns-obj not supported for target " *target*)))))))
 
 (defn ns-interns*
   "Returns a map of the intern mappings for the namespace.

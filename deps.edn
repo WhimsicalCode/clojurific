@@ -1,6 +1,8 @@
 {:paths ["src/main/clojure" "src/main/cljs" "resources"]
  :deps
  {com.cognitect/transit-java {:mvn/version "1.0.362"}
+  ;; cljf.selfhost reads analysis caches in the page
+  com.cognitect/transit-cljs {:mvn/version "0.8.280"}
   org.clojure/clojure {:mvn/version "1.10.0"}
   org.clojure/core.specs.alpha {:mvn/version "0.1.24"}
   org.clojure/google-closure-library {:mvn/version "0.0-20250515-f04e4c0e"}
