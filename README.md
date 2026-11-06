@@ -337,6 +337,7 @@ A build that requires `cljf.selfhost` evaluates without the REPL: `(cljf.selfhos
 - `#x` literals work: a namespace without `cljf.jsx` requires it for them, as the JVM REPL does.
 - Only the macros of `cljs.core` and `cljf.jsx` are available. Other macro namespaces are Clojure, which a page can't run, so their macros don't expand.
 - A form with warnings isn't evaluated.
+- A namespace's analysis is read once: vars a hot reload adds to the build's namespaces are undeclared to the self-hosted compiler until the page reloads.
 
 #### Coding agents (MCP)
 

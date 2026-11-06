@@ -67,7 +67,10 @@
   output directory: a bundle's are copied elsewhere, i.e. next to its page.
   Paths under it are the output directory's (cljs/core.cljs.cache.json)."
   [url]
-  (reset! analysis-root (js/URL. (str url) (.-baseURI js/document))))
+  ;; relative to the page, outside one (Node.js, a worker) an absolute URL
+  (reset! analysis-root (if (exists? js/document)
+                          (js/URL. (str url) (.-baseURI js/document))
+                          (js/URL. (str url)))))
 
 (defonce ^:private state
   (doto (env/default-compiler-env {:static-fns true})
@@ -104,15 +107,17 @@
 
 (defn- fetch-text
   "A promise of the text of path relative to the output directory, nil if
-  it's not there."
+  it's not there, rejected if it couldn't be fetched (i.e. a network error,
+  the dev server restarting)."
   [path]
   (-> (js/fetch (.-href (js/URL. path (or @analysis-root (rt/root)))) #js {:headers #js {:Accept "application/json"}})
       (.then (fn [^js res]
                (let [type (or (.get (.-headers res) "content-type") "")]
-                 ;; not a page, i.e. the dev server's fallback for a missing file
-                 (when (and (.-ok res) (not (string/includes? type "html")))
-                   (.text res)))))
-      (.catch (fn [_] nil))))
+                 (cond
+                   ;; not a page, i.e. the dev server's fallback for a missing file
+                   (and (.-ok res) (not (string/includes? type "html"))) (.text res)
+                   (or (.-ok res) (= 404 (.-status res))) nil
+                   :else (throw (js/Error. (str "Fetching " path ": HTTP " (.-status res))))))))))
 
 (defonce ^:private analyses
   ;; {ns promise}: of whether the namespace's analysis cache was read
@@ -142,7 +147,11 @@
                                                      (filter string? (vals (:requires analysis))))))
                                  (swap! cached conj ns)
                                  true)
-                               false))))]
+                               false)))
+                    ;; not remembered: the next form fetches it again
+                    (.catch (fn [_]
+                              (swap! analyses dissoc ns)
+                              false)))]
           (swap! analyses assoc ns p)
           p))))
 
@@ -346,8 +355,11 @@
                              (js/Promise.all
                                (into-array
                                  (for [dep deps]
+                                   ;; the build's have a module, the ones
+                                   ;; defined in the page only a view
                                    (rt/load-ref [nil (str dep) "ns"
-                                                 (when-not (registered? dep)
+                                                 (when (and (not (registered? dep))
+                                                            (contains? @cached dep))
                                                    (ns->path dep ".js"))]))))))
                     (.then (fn [_] {:ns (:ns compiled) :value nil :warnings warnings}))))
 
@@ -356,9 +368,12 @@
                 (fn [{:keys [value]}] {:ns (:ns compiled) :value value :warnings warnings}))))))))
 
 (defn- jsx-literals?
-  "Whether form has #x literals (cljf.jsx/x)."
+  "Whether form has #x literals (cljf.jsx/x), #js literals' too."
   [form]
-  (some #(= 'cljf.jsx/x %) (tree-seq coll? seq form)))
+  (some #(= 'cljf.jsx/x %)
+        (tree-seq #(or (coll? %) (instance? tags/JSValue %))
+                  #(if (instance? tags/JSValue %) (seq (.-val %)) (seq %))
+                  form)))
 
 (defn- requires-jsx?
   "Whether namespace ns requires cljf.jsx, which #x literals need."
@@ -380,10 +395,10 @@
                    (fn [{:keys [error] :as r}]
                      (if error r (eval-form form ns opts)))))))))
 
-(defn- read-forms
-  "The forms of string code, read in namespace ns: its aliases resolve
-  ::alias/keywords and syntax quotes."
-  [code ns]
+(defn- read-form
+  "The next form of reader rdr, eof when there's none, read in namespace ns:
+  its aliases resolve ::alias/keywords and syntax quotes."
+  [rdr ns eof]
   ;; binding's values are evaluated before any is bound
   (binding [env/*compiler*          state
             ana/*cljs-ns*           ns
@@ -391,19 +406,21 @@
             reader/*alias-map*      (binding [env/*compiler* state] (ana/get-aliases ns))
             reader/*data-readers*   tags/*cljs-data-readers*
             reader/resolve-symbol   ana/resolve-symbol]
-    (let [rdr (readers/indexing-push-back-reader code 1 "<cljs selfhost>")
-          eof (js-obj)]
-      (loop [forms []]
-        (let [form (reader/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)]
-          (if (identical? eof form)
-            forms
-            (recur (conj forms form))))))))
+    (reader/read {:eof eof :read-cond :allow :features #{:cljs}} rdr)))
+
+(defn- error-result
+  "The result of an evaluation that threw e (anything, nil too) in namespace
+  ns."
+  [ns e]
+  {:ns ns :error (error-message e) :stack (some-> e .-stack)})
 
 (defn eval-str
   "Evaluates the forms of string code, returns a promise of {:value :ns
   :warnings :error}: :value is the last form's, printed unless
   :print false, :ns the namespace evaluating the next form. Stops at the
-  first form with an error or warnings (unless :warnings-ok).
+  first form with an error or warnings (unless :warnings-ok). Each form is
+  read once the one before it is evaluated, in the namespace it left (i.e.
+  of an ns form), with the aliases it required. Never rejected.
 
   opts:
   - :ns - evaluate in this namespace, default the last in-ns's
@@ -413,25 +430,41 @@
   ([code] (eval-str code nil))
   ([code opts]
    (let [ns  (or (some-> (:ns opts) symbol) @current-ns)
-         run (fn run [forms ns last]
-               (if-let [form (first forms)]
-                 (-> (if (jsx-literals? form)
-                       (eval-jsx-form form ns opts)
-                       (eval-form form ns opts))
-                     (.then (fn [{:keys [error] :as r}]
-                              (if error r (run (rest forms) (:ns r) r)))))
-                 (js/Promise.resolve (or last {:ns ns :value nil}))))]
+         rdr (readers/indexing-push-back-reader code 1 "<cljs selfhost>")
+         eof (js-obj)
+         ;; a promise of the result of the forms after last's, in namespace
+         ;; ns: an error's namespace is the one its form ran in
+         run (fn run [ns last]
+               (-> (js/Promise.resolve nil)
+                   (.then (fn [_]
+                            (let [form (read-form rdr ns eof)]
+                              (if (identical? eof form)
+                                (or last {:ns ns :value nil})
+                                (.then (if (jsx-literals? form)
+                                         (eval-jsx-form form ns opts)
+                                         (eval-form form ns opts))
+                                  (fn [{:keys [error] :as r}]
+                                    (if error r (run (:ns r) r))))))))
+                   ;; reading or evaluating a form threw: in the namespace
+                   ;; it was read in
+                   (.catch #(error-result ns %))))
+         print (fn [r]
+                 (if (and (contains? r :value) (not (false? (:print opts))))
+                   (try
+                     (update r :value #(binding [*print-length* (:print-length opts *print-length*)
+                                                 *print-level*  (:print-level opts *print-level*)]
+                                         (pr-str %)))
+                     ;; i.e. a lazy sequence throwing as it's realized
+                     (catch :default e
+                       (merge (dissoc r :value) (error-result (:ns r) e))))
+                   r))]
      (-> (load-core!)
          (.then (fn [_] (load-ns! ns)))
-         (.then (fn [_] (run (read-forms code ns) ns nil)))
-         (.catch (fn [e] {:ns ns :error (error-message e) :stack (.-stack e)}))
+         (.then (fn [_] (run ns nil)))
+         (.catch #(error-result ns %))
          (.then (fn [{:keys [ns] :as r}]
                   (when-not (:ns opts) (reset! current-ns ns))
-                  (cond-> r
-                    (and (contains? r :value) (not (false? (:print opts))))
-                    (update :value #(binding [*print-length* (:print-length opts *print-length*)
-                                              *print-level*  (:print-level opts *print-level*)]
-                                      (pr-str %))))))))))
+                  (print r)))))))
 
 (defn console-eval
   "eval-str for the console (globalThis.cljs_selfhost_eval): a promise of

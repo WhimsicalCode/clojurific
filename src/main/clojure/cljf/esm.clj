@@ -189,14 +189,16 @@
   [{:keys [output-dir self-host] :as opts}]
   (when self-host
     (doseq [[ns res out] self-host-macros]
-      (let [src (source-file (io/resource res) ns output-dir)]
-        ;; the warnings of the macros compiled as ClojureScript (i.e. redefining
-        ;; cljs.core's fns) aren't the build's
-        ;; in a copy of the compiler env: the macros namespace isn't the build's
+      ;; the warnings of the macros compiled as ClojureScript (i.e. redefining
+      ;; cljs.core's fns) aren't the build's
+      ;; in a copy of the compiler env: the macros namespace isn't the build's.
+      ;; Its constants are inline: the constants module is written from the
+      ;; build's env, which doesn't register them
+      (let [src  (source-file (io/resource res) ns output-dir)
+            opts (-> opts (dissoc :optimize-constants :emit-constants) (assoc :macros-ns true))]
         (binding [ana/*cljs-warnings* (zipmap (keys ana/*cljs-warnings*) (repeat false))
-                  env/*compiler*      (atom @env/*compiler*)]
-          (comp/compile-file src (io/file output-dir out)
-            (assoc opts :macros-ns true)))))))
+                  env/*compiler*      (atom (update @env/*compiler* :options dissoc :optimize-constants :emit-constants))]
+          (comp/compile-file src (io/file output-dir out) opts))))))
 
 (defn- install-goog-shims [{:keys [output-dir]}]
   (doseq [path goog-shims]

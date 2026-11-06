@@ -845,14 +845,59 @@
                              '(defn twice [x] (* 2 x))',
                              '(twice (str/index-of \"abc\" \"c\"))',
                              '::k',
-                             '(nope 1)']) {
+                             '(nope 1)',
+                             // a falsy form isn't the end of the input
+                             'nil (+ 1 2)',
+                             'false',
+                             // forms read once the ones before them ran
+                             '(ns test.sh2 (:require [clojure.string :as s])) [::k ::s/k]',
+                             // an error keeps the namespace its form ran in
+                             '(in-ns (quote test.sh3)) (throw (js/Error. \"err\"))',
+                             '::k',
+                             // printing a lazy sequence that throws, throwing nil
+                             '(map (fn [_] (throw (js/Error. \"lazy\"))) [1])',
+                             '(throw nil)',
+                             // namespaces only defined in the page
+                             '(ns test.page) (def x 5)',
+                             '(ns test.page2 (:require [test.page :as p])) p/x']) {
               try { res.push(await globalThis.cljs_selfhost_eval(f, { print: true })); }
               catch (e) { res.push('error: ' + e.message); }
             }
             console.log(JSON.stringify(res));"))
     (is (= ["20" "[1 9]" "nil" "\"Hi THERE\"" "{:n 2}" "#'test.selfhost/twice" "4" ":test.selfhost/k"
-            "error: Form not evaluated: 1 warning(s)"]
+            "error: Form not evaluated: 1 warning(s)"
+            "3" "false"
+            "[:test.sh2/k :clojure.string/k]"
+            "error: err" ":test.sh3/k"
+            "error: lazy" "error: Unknown error"
+            "#'test.page/x" "5"]
            (json/read-str (last (string/split-lines (string/trim (run-node runner)))))))))
+
+(deftest self-host-macros-with-optimize-constants
+  ;; the macro modules' constants are inline: the constants module is the
+  ;; build's
+  (let [dir     (temp-dir)
+        out     (io/file dir "out")
+        sources (into {} [(write-source! dir 'test.selfconst "(ns test.selfconst (:require [cljf.selfhost])) (def k :a)"
+                            (- (System/currentTimeMillis) 60000))])
+        runner  (io/file dir "run.mjs")]
+    (binding [esm/*generated-sources* sources]
+      (esm/build {:main 'test.selfconst :output-dir (str out) :esm-repl true :self-host true :optimize-constants true}))
+    (is (not (string/includes? (slurp (io/file out "cljs" "core$macros.js")) "constants.js")))
+    (spit runner
+      (str "import fs from 'node:fs';
+            import { pathToFileURL } from 'node:url';
+            const out = " (pr-str (str (.getCanonicalPath out) "/")) ";
+            globalThis.fetch = async (url) => {
+              const f = decodeURIComponent(new URL(url).pathname);
+              return fs.existsSync(f)
+                ? new Response(fs.readFileSync(f), { headers: { 'content-type': 'application/json' } })
+                : new Response('', { status: 404, headers: { 'content-type': 'text/html' } });
+            };
+            globalThis.$CLJS_ESM = { nses: new Map(), root: pathToFileURL(out).href };
+            await import(pathToFileURL(out + 'test/selfconst.js').href);
+            console.log(JSON.stringify([await globalThis.cljs_selfhost_eval('(-> 1 inc (* 10) (vector :b))', { print: true })]));"))
+    (is (= ["[20 :b]"] (json/read-str (last (string/split-lines (string/trim (run-node runner)))))))))
 
 (deftest self-host-evaluates-jsx-literals-and-provided-modules
   ;; cljf.jsx's macros compiled as ClojureScript, npm modules the page
@@ -883,7 +928,8 @@
             const sh = await import(pathToFileURL(out + 'cljf/selfhost.js').href);
             sh.provide_module_BANG_('lib', { twice: (x) => 2 * x });
             const res = [];
-            for (const f of ['(js/JSON.stringify #x [:div.a {:onClick identity :data-n 1} (for [i [1 2]] #x [:i {:key i} i])])',
+            for (const f of ['(.-length #js [#x [:b]])',
+                             '(js/JSON.stringify #x [:div.a {:onClick identity :data-n 1} (for [i [1 2]] #x [:i {:key i} i])])',
                              '(defn Hi [{:keys [n]}] #x [:<> [:b \"Hi \" n]])',
                              '(js/JSON.stringify #js [(.-props #x [Hi {:n 1}]) (Hi #js {:n 2})])',
                              '(ns app.lib (:require [\"lib\" :as lib]))',
@@ -893,7 +939,9 @@
               catch (e) { res.push('error: ' + e.message); }
             }
             console.log(JSON.stringify(res));"))
-    (let [[el defn' type ns' v nope] (json/read-str (last (string/split-lines (string/trim (run-node runner)))))]
+    (let [[in-js el defn' type ns' v nope] (json/read-str (last (string/split-lines (string/trim (run-node runner)))))]
+      (testing "#x in a #js literal, the first form with #x"
+        (is (= "1" in-js)))
       (testing "#x in a namespace without cljf.jsx, which requires it"
         (is (= (pr-str "{\"runtime\":\"react\",\"type\":\"div\",\"key\":null,\"props\":{\"data-n\":1,\"className\":\"a\",\"children\":[{\"runtime\":\"react\",\"type\":\"i\",\"key\":\"1\",\"props\":{\"children\":1}},{\"runtime\":\"react\",\"type\":\"i\",\"key\":\"2\",\"props\":{\"children\":2}}]}}")
                el)))

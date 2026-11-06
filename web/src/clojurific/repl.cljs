@@ -165,8 +165,9 @@
   a promise of the compiler loaded and init-code (a string, default nil)
   evaluated, in cljs.user, with warnings (i.e. of a single segment
   namespace, app): the prompt's namespace is the one it leaves, i.e. of an
-  ns form. Then a ?code= parameter is evaluated. Focuses the input
-  unless :focus false."
+  ns form. A ?code= parameter is put in the input, for the user to evaluate
+  (a link doesn't run code in the page). Focuses the input unless :focus
+  false."
   [{:keys [examples init-code focus]}]
   ;; the analysis caches next to the playground (vite.config.mjs), the dev
   ;; server's output directory otherwise
@@ -190,4 +191,7 @@
                (when error (entry! "error" error))
                (set! (.-textContent ($ "prompt")) (str ns ">"))
                (when-let [code (.get (js/URLSearchParams. (.-search js/location)) "code")]
-                 (eval! code))))))
+                 (let [input ($ "input")]
+                   (set! (.-value input) code)
+                   (resize!)
+                   (.focus input)))))))

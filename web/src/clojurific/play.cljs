@@ -94,28 +94,32 @@
   [^js props]
   ((.-app props)))
 
+(defonce ^:private failed?
+  ;; whether the last render threw with fresh state: its boundary stays
+  ;; showing nothing, the next render needs a new one
+  (atom false))
+
 (defn- render!
   "Renders App in the preview, keeping its state. If it throws, i.e. an edit
   changed the hooks it calls, it's remounted with fresh state (fresh? true),
   and an error then is shown."
-  ([App] (render! App false))
+  ([App] (render! App @failed?))
   ([App fresh?]
    (show-error! "")
+   (reset! failed? false)
    (when fresh? (swap! boundary inc))
    (.render @root
      #x [ErrorBoundary {:key @boundary
                         :onError (fn [e]
                                    (if fresh?
-                                     (show-error! (str "Render error: " (ex-message e)))
+                                     (do (reset! failed? true)
+                                         (show-error! (str "Render error: " (ex-message e))))
                                      ;; after the commit that caught it
                                      (js/queueMicrotask #(render! App true))))}
          [Preview {:app App}]])))
 
-(defn- run-code!
-  "Evaluates the code in the app's namespace, renders its App."
-  []
-  (let [code (str (.-value ($ "code")))
-        run  (swap! runs inc)]
+(defn- evaluate! [run]
+  (let [code (str (.-value ($ "code")))]
     (status! "busy" "compiling…")
     (-> (selfhost/eval-str code {:ns app-ns :print false})
         (.then (fn [{:keys [error warnings]}]
@@ -131,6 +135,22 @@
                      (not (fn? value)) (show-error! "Define App, the component the preview renders: (defn App [] #x [:p \"Hi\"])")
                      :else (do (render! value)
                                (status! "ok" "compiled")))))))))
+
+(defonce ^:private running
+  ;; a promise of the run being evaluated: runs don't overlap, the forms of
+  ;; one would redefine the vars of the next
+  (atom (js/Promise.resolve nil)))
+
+(defn- run-code!
+  "Evaluates the code in the app's namespace, renders its App: after the run
+  being evaluated, unless the code changed again meanwhile."
+  []
+  (let [run (swap! runs inc)]
+    (swap! running
+      (fn [p]
+        (-> p
+            (.then #(when (= run @runs) (evaluate! run)))
+            (.catch (fn [e] (show-error! (str (ex-message e))))))))))
 
 (defonce ^:private pending (atom nil))
 
