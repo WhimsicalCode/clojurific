@@ -1,8 +1,8 @@
 name: Website
 
 # Builds clojurific.dev (web/, see web/README.md) and deploys it to GitHub
-# Pages on pushes to main that change it or the compiler. The custom domain is
-# web/CNAME; the repository's Pages source is GitHub Actions.
+# Pages on pushes to main that change it or the compiler. The repository's
+# Pages settings set the source (GitHub Actions) and the custom domain.
 
 on:
   push:
