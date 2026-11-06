@@ -174,21 +174,29 @@
 (defn- output-file ^File [ns {:keys [output-dir]}]
   (io/file output-dir (util/ns->relpath ns :js)))
 
+(def ^:private self-host-macros
+  "The macro namespaces :self-host compiles as ClojureScript, [ns source
+  output]: cljs.core's, and cljf.jsx's (#x literals), which the self-hosted
+  compiler imports when a form has #x literals."
+  [['cljs.core "cljs/core.cljc" "cljs/core$macros.js"]
+   ['cljf.jsx "cljf/jsx.cljc" "cljf/jsx$macros.js"]])
+
 (defn- compile-self-host-macros!
-  "With :self-host, compiles cljs.core's macros
-  (cljs/core.cljc) as ClojureScript, the module cljs/core$macros.js the
-  self-hosted compiler (cljf.selfhost) expands macros with. After the build:
-  it imports the compiler's namespaces. Unless it's up to date."
+  "With :self-host, compiles the macros of self-host-macros as
+  ClojureScript, the modules the self-hosted compiler (cljf.selfhost)
+  expands macros with: cljs/core$macros.js and cljf/jsx$macros.js. After the
+  build: they import the build's namespaces. Unless they're up to date."
   [{:keys [output-dir self-host] :as opts}]
   (when self-host
-    (let [src (source-file (io/resource "cljs/core.cljc") 'cljs.core output-dir)]
-      ;; the warnings of the macros compiled as ClojureScript (i.e. redefining
-      ;; cljs.core's fns) aren't the build's
-      ;; in a copy of the compiler env: cljs.core$macros isn't the build's
-      (binding [ana/*cljs-warnings* (zipmap (keys ana/*cljs-warnings*) (repeat false))
-                env/*compiler*      (atom @env/*compiler*)]
-        (comp/compile-file src (io/file output-dir "cljs" "core$macros.js")
-          (assoc opts :macros-ns true))))))
+    (doseq [[ns res out] self-host-macros]
+      (let [src (source-file (io/resource res) ns output-dir)]
+        ;; the warnings of the macros compiled as ClojureScript (i.e. redefining
+        ;; cljs.core's fns) aren't the build's
+        ;; in a copy of the compiler env: the macros namespace isn't the build's
+        (binding [ana/*cljs-warnings* (zipmap (keys ana/*cljs-warnings*) (repeat false))
+                  env/*compiler*      (atom @env/*compiler*)]
+          (comp/compile-file src (io/file output-dir out)
+            (assoc opts :macros-ns true)))))))
 
 (defn- install-goog-shims [{:keys [output-dir]}]
   (doseq [path goog-shims]

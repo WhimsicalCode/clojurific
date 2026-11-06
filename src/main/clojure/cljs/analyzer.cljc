@@ -916,13 +916,16 @@
   [module]
   #?(:clj  (let [idx (get @env/*compiler* :node-module-index)]
              (contains? idx (str (-> module lib&sublib first))))
-     :cljs (try
-             (and (= *target* "nodejs")
-                  (boolean
-                    (or (js/require.resolve (str module))
-                        (js/require.resolve (-> module lib&sublib first)))))
-             (catch :default _
-               false))))
+     ;; the index of a self-hosted compiler that knows the build's npm
+     ;; modules (cljf.selfhost), else Node's resolution
+     :cljs (or (contains? (get @env/*compiler* :node-module-index) (str (-> module lib&sublib first)))
+               (try
+                 (and (= *target* "nodejs")
+                      (boolean
+                        (or (js/require.resolve (str module))
+                            (js/require.resolve (-> module lib&sublib first)))))
+                 (catch :default _
+                   false)))))
 
 (defn dep-has-global-exports?
   [module]
@@ -3189,9 +3192,11 @@ x                          (not (contains? ret :info)))
 
 (defn- esm-npm-symbol?
   "Under ES module output, symbol requires which are neither ClojureScript
-  nor Closure Library namespaces are npm packages, i.e. [react :as r]."
+  nor Closure Library namespaces are npm packages, i.e. [react :as r].
+  Self-hosted, without the sources to tell, only string requires are."
   [lib]
-  (and (symbol? lib)
+  (and #?(:clj true :cljs false)
+       (symbol? lib)
        (let [[lib' _] (lib&sublib lib)
              lib'     (str lib')]
          (and (not (string/starts-with? lib' "goog"))

@@ -327,13 +327,15 @@ The launcher and the Vite plugin start the compiler with `cljf.main`, `cljf.esm`
 
 #### Self-hosted REPL
 
-With `:self-host true`, a build also compiles the ClojureScript compiler (`cljf.selfhost`, with `cljs.analyzer`, `cljs.compiler` and tools.reader) and `cljs.core`'s macros as ClojureScript (`cljs/core$macros.js`). In a watched build (`:esm-repl`), `cljs_selfhost_eval(code, {ns, await, print})` in the console compiles and evaluates forms in the page itself, as `cljs_eval` does but without the watcher's JVM, and returns a promise of the last form's value. Its modules load on first use.
+With `:self-host true`, a build also compiles the ClojureScript compiler (`cljf.selfhost`, with `cljs.analyzer`, `cljs.compiler` and tools.reader) and the macros of `cljs.core` and of [`#x` literals](#jsx-literals) as ClojureScript (`cljs/core$macros.js`, `cljf/jsx$macros.js`, loaded with the first form that needs them). In a watched build (`:esm-repl`), `cljs_selfhost_eval(code, {ns, await, print})` in the console compiles and evaluates forms in the page itself, as `cljs_eval` does but without the watcher's JVM, and returns a promise of the last form's value. Its modules load on first use.
 
 A build that requires `cljf.selfhost` evaluates without the REPL: `(cljf.selfhost/eval-str code opts)` returns a promise of `{:value :ns :warnings :error}`. The compiler fetches analysis caches from the output directory, or from `(cljf.selfhost/set-analysis-root! url)`'s for a bundle. Bundles need `:esm-repl` (namespaces register themselves for the compiler) and the Vite plugin's `prune: false`: forms compiled in the page use ClojureScript's property names and may call any protocol method. That's how [clojurific.dev/play](https://clojurific.dev/play/) works (`web/`).
 
 - Forms compile as the REPL's do (views of the namespaces they reference, `def` as a hot reload). The analysis of the build's namespaces comes from their analysis caches in the output directory, fetched as forms need them.
 - `ns`, `require` and `in-ns` work for namespaces of the build.
-- Only `cljs.core`'s macros are available. Other macro namespaces are Clojure, which a page can't run, so their macros don't expand.
+- npm modules can't be loaded in the page. A form requires those the page provides with `(cljf.selfhost/provide-module! "react" react)`, i.e. `(ns app (:require ["react" :as react]))`. It reaches the modules a namespace of the build requires through that namespace.
+- `#x` literals work: a namespace without `cljf.jsx` requires it for them, as the JVM REPL does.
+- Only the macros of `cljs.core` and `cljf.jsx` are available. Other macro namespaces are Clojure, which a page can't run, so their macros don't expand.
 - A form with warnings isn't evaluated.
 
 #### Coding agents (MCP)

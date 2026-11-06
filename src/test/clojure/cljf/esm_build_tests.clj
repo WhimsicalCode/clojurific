@@ -853,3 +853,55 @@
     (is (= ["20" "[1 9]" "nil" "\"Hi THERE\"" "{:n 2}" "#'test.selfhost/twice" "4" ":test.selfhost/k"
             "error: Form not evaluated: 1 warning(s)"]
            (json/read-str (last (string/split-lines (string/trim (run-node runner)))))))))
+
+(deftest self-host-evaluates-jsx-literals-and-provided-modules
+  ;; cljf.jsx's macros compiled as ClojureScript, npm modules the page
+  ;; provides (cljf.selfhost/provide-module!)
+  (let [dir     (temp-dir)
+        out     (io/file dir "out")
+        sources (into {} [(write-source! dir 'test.selfjsx
+                            "(ns test.selfjsx (:require [cljf.jsx] [cljf.selfhost]))"
+                            (- (System/currentTimeMillis) 60000))])
+        runner  (io/file dir "run.mjs")]
+    (stub-jsx-runtime! dir "react")
+    (binding [esm/*generated-sources* sources]
+      (esm/build {:main 'test.selfjsx :output-dir (str out) :esm-repl true :self-host true}))
+    (testing "cljf.jsx's macros module"
+      (is (.exists (io/file out "cljf" "jsx$macros.js"))))
+    (spit runner
+      (str "import fs from 'node:fs';
+            import { pathToFileURL } from 'node:url';
+            const out = " (pr-str (str (.getCanonicalPath out) "/")) ";
+            globalThis.fetch = async (url) => {
+              const f = decodeURIComponent(new URL(url).pathname);
+              return fs.existsSync(f)
+                ? new Response(fs.readFileSync(f), { headers: { 'content-type': 'application/json' } })
+                : new Response('', { status: 404, headers: { 'content-type': 'text/html' } });
+            };
+            globalThis.$CLJS_ESM = { nses: new Map(), root: pathToFileURL(out).href };
+            await import(pathToFileURL(out + 'test/selfjsx.js').href);
+            const sh = await import(pathToFileURL(out + 'cljf/selfhost.js').href);
+            sh.provide_module_BANG_('lib', { twice: (x) => 2 * x });
+            const res = [];
+            for (const f of ['(js/JSON.stringify #x [:div.a {:onClick identity :data-n 1} (for [i [1 2]] #x [:i {:key i} i])])',
+                             '(defn Hi [{:keys [n]}] #x [:<> [:b \"Hi \" n]])',
+                             '(js/JSON.stringify #js [(.-props #x [Hi {:n 1}]) (Hi #js {:n 2})])',
+                             '(ns app.lib (:require [\"lib\" :as lib]))',
+                             '(lib/twice 21)',
+                             '(ns app.nope (:require [\"nope\" :as nope]))']) {
+              try { res.push(await globalThis.cljs_selfhost_eval(f, { print: true })); }
+              catch (e) { res.push('error: ' + e.message); }
+            }
+            console.log(JSON.stringify(res));"))
+    (let [[el defn' type ns' v nope] (json/read-str (last (string/split-lines (string/trim (run-node runner)))))]
+      (testing "#x in a namespace without cljf.jsx, which requires it"
+        (is (= (pr-str "{\"runtime\":\"react\",\"type\":\"div\",\"key\":null,\"props\":{\"data-n\":1,\"className\":\"a\",\"children\":[{\"runtime\":\"react\",\"type\":\"i\",\"key\":\"1\",\"props\":{\"children\":1}},{\"runtime\":\"react\",\"type\":\"i\",\"key\":\"2\",\"props\":{\"children\":2}}]}}")
+               el)))
+      (testing "components"
+        (is (= "#'cljs.user/Hi" defn'))
+        (is (= (pr-str "[{\"n\":1},{\"runtime\":\"react\",\"type\":\"react-Fragment\",\"key\":null,\"props\":{\"children\":{\"runtime\":\"react\",\"type\":\"b\",\"key\":null,\"props\":{\"children\":[\"Hi \",2]}}}}]") type)))
+      (testing "a provided npm module"
+        (is (= "nil" ns'))
+        (is (= "42" v)))
+      (testing "other npm modules"
+        (is (string/starts-with? nope "error: npm module nope isn't in the page"))))))

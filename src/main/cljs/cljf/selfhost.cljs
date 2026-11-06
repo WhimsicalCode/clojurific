@@ -16,9 +16,14 @@
   *esm-repl*): the body of a function taking views of the namespaces it
   references, which cljf.esm.repl-runtime evaluates. The analysis of the
   build's namespaces is read from the analysis caches in the output
-  directory, as forms need it. Macros expand with cljs.core's macros
-  compiled as ClojureScript (cljs/core$macros.js, written by the build):
-  other macro namespaces are Clojure, and aren't available.
+  directory, as forms need it. Macros expand with the macros the build
+  compiles as ClojureScript: cljs.core's (cljs/core$macros.js), and
+  cljf.jsx's (cljf/jsx$macros.js), loaded for forms with #x literals. Other
+  macro namespaces are Clojure, and aren't available.
+
+  npm modules can't be loaded in the page: a form requires those the page
+  provides (provide-module!), i.e. (ns app (:require [\"react\" :as react])),
+  or reaches those of a namespace of the build that requires them.
 
   globalThis.cljs_selfhost_eval(code, opts) evaluates in the console."
   (:require [cljf.esm.repl-runtime :as rt]
@@ -45,11 +50,12 @@
    "goog.string"            #(js* "import(\"../goog/string.js\")")
    "goog.userAgent.product" #(js* "import(\"../goog/userAgent/product.js\")")})
 
-(defn- import-core-macros
-  "Imports cljs.core's macros (cljs/core$macros.js, written by the build):
-  a static path, which bundlers split into a chunk of its own."
-  []
-  (js* "import(\"../cljs/core$macros.js\")"))
+(def ^:private macro-imports
+  "The macro namespaces compiled as ClojureScript by the build (cljf.esm's
+  self-host-macros), {ns import-fn}: static paths, which bundlers split
+  into chunks of their own."
+  {'cljs.core #(js* "import(\"../cljs/core$macros.js\")")
+   'cljf.jsx  #(js* "import(\"../cljf/jsx$macros.js\")")})
 
 (defonce ^:private analysis-root
   ;; the URL the analysis caches are fetched from, default the output
@@ -68,7 +74,22 @@
     ;; known to the analyzer as JavaScript namespaces, references go through
     ;; their modules (see refs)
     (swap! assoc :js-dependency-index
-      (into {} (map (fn [ns] [ns {:provides [ns]}])) (keys goog-shims)))))
+      (into {} (map (fn [ns] [ns {:provides [ns]}])) (keys goog-shims)))
+    ;; the npm modules known to the analyzer (cljs.analyzer/node-module-dep?):
+    ;; provided ones, and those the build's namespaces require
+    (swap! assoc :node-module-index #{})))
+
+(defonce ^:private modules
+  ;; the npm modules forms can require, {lib module}, see provide-module!
+  (js/Map.))
+
+(defn provide-module!
+  "Lets forms require npm module lib (a string, i.e. \"react\") as module,
+  the page's: (ns app (:require [\"react\" :as react])). The self-hosted
+  compiler can't load npm modules, only use those the page has imported."
+  [lib module]
+  (.set modules (str lib) module)
+  (swap! state update :node-module-index conj (str lib)))
 
 (defonce ^:private current-ns (atom 'cljs.user))
 
@@ -112,10 +133,15 @@
                     (.then #(or % (fetch-text (ns->path ns ".cljc.cache.json"))))
                     (.then (fn [text]
                              (if text
-                               (do (swap! state assoc-in [::ana/namespaces ns]
-                                     (transit/read @transit-reader text))
-                                   (swap! cached conj ns)
-                                   true)
+                               (let [analysis (transit/read @transit-reader text)]
+                                 (swap! state #(-> %
+                                                   (assoc-in [::ana/namespaces ns] analysis)
+                                                   ;; its npm modules, which forms reach
+                                                   ;; through its registration's libs
+                                                   (update :node-module-index into
+                                                     (filter string? (vals (:requires analysis))))))
+                                 (swap! cached conj ns)
+                                 true)
                                false))))]
           (swap! analyses assoc ns p)
           p))))
@@ -127,20 +153,32 @@
   (or (.-$CLJS_ESM js/globalThis)
       (set! (.-$CLJS_ESM js/globalThis) #js {:nses (js/Map.)})))
 
+(defonce ^:private macro-loads
+  ;; {ns promise}: of the macros of ns loaded
+  (atom {}))
+
+(defn- load-macros!
+  "A promise of the macros of namespace ns (macro-imports) loaded: their
+  module registered for the analyzer (cljs.core/find-macros-ns), a module
+  compiled with :esm-repl registers itself, otherwise it's registered here.
+  And their analysis, for the macros' arities."
+  [ns]
+  (or (get @macro-loads ns)
+      (let [mns (str ns "$macros")
+            p   (js/Promise.all
+                  #js [(load-analysis! mns)
+                       (.then ((macro-imports ns))
+                         (fn [m]
+                           (when-not (registered? mns)
+                             (.set (.-nses (registry)) mns
+                               #js {:mod m :sets #js [(.-$$set m)] :libs #js {} :gen 1}))))])]
+        (swap! macro-loads assoc ns p)
+        p)))
+
 (defn- load-core!
-  "A promise of cljs.core's analysis and macros, the module of its macros
-  registered for the analyzer (cljs.core/find-macros-ns): a module compiled
-  with :esm-repl registers itself, otherwise it's registered here."
+  "A promise of cljs.core's analysis and macros."
   []
-  (js/Promise.all
-    #js [(load-analysis! 'cljs.core)
-         ;; for the macros' arities
-         (load-analysis! 'cljs.core$macros)
-         (.then (import-core-macros)
-           (fn [m]
-             (when-not (registered? "cljs.core$macros")
-               (.set (.-nses (registry)) "cljs.core$macros"
-                 #js {:mod m :sets #js [(.-$$set m)] :libs #js {} :gen 1}))))]))
+  (js/Promise.all #js [(load-analysis! 'cljs.core) (load-macros! 'cljs.core)]))
 
 (defn- ensure-ns! [ns]
   (when-not (get-in @state [::ana/namespaces ns])
@@ -273,6 +311,17 @@
   [ast]
   (distinct (remove string? (:deps ast))))
 
+(defn- provide-libs!
+  "Binds the npm modules an ns (or require) form's ast requires in namespace
+  ns, as the build's modules bind theirs (cljs.analyzer/munge-node-lib): the
+  provided ones (provide-module!). Throws for others."
+  [ast ns]
+  (doseq [lib (distinct (filter string? (:deps ast)))]
+    (if (.has modules lib)
+      (unchecked-set (rt/view (str ns)) (ana/munge-node-lib lib) (.get modules lib))
+      (throw (js/Error. (str "npm module " lib " isn't in the page: the self-hosted compiler "
+                             "only requires the modules the page provides (cljf.selfhost/provide-module!)"))))))
+
 (defn- eval-form
   "A promise of {:ns :value :warnings :error} of form in namespace ns."
   [form ns opts]
@@ -291,6 +340,7 @@
               ;; required, loads their modules
               (#{:ns :ns*} (:op ast))
               (let [deps (ns-form-deps ast)]
+                (provide-libs! ast (:ns compiled))
                 (-> (js/Promise.all (into-array (map load-ns! deps)))
                     (.then (fn [_]
                              (js/Promise.all
@@ -304,6 +354,31 @@
               :else
               (.then (run-js compiled opts)
                 (fn [{:keys [value]}] {:ns (:ns compiled) :value value :warnings warnings}))))))))
+
+(defn- jsx-literals?
+  "Whether form has #x literals (cljf.jsx/x)."
+  [form]
+  (some #(= 'cljf.jsx/x %) (tree-seq coll? seq form)))
+
+(defn- requires-jsx?
+  "Whether namespace ns requires cljf.jsx, which #x literals need."
+  [ns]
+  (or (= 'cljf.jsx ns)
+      (some #{'cljf.jsx} (vals (get-in @state [::ana/namespaces ns :requires])))))
+
+(defn- eval-jsx-form
+  "eval-form of a form with #x literals: once cljf.jsx's macros are loaded,
+  and namespace ns requires cljf.jsx (implicitly, as the build does for a
+  source file with #x literals), unless the form is an ns form."
+  [form ns opts]
+  (-> (load-macros! 'cljf.jsx)
+      (.then (fn [_]
+               (if (or (requires-jsx? ns)
+                       (and (seq? form) (= 'ns (first form))))
+                 (eval-form form ns opts)
+                 (.then (eval-form '(require (quote cljf.jsx)) ns opts)
+                   (fn [{:keys [error] :as r}]
+                     (if error r (eval-form form ns opts)))))))))
 
 (defn- read-forms
   "The forms of string code, read in namespace ns: its aliases resolve
@@ -340,7 +415,9 @@
    (let [ns  (or (some-> (:ns opts) symbol) @current-ns)
          run (fn run [forms ns last]
                (if-let [form (first forms)]
-                 (-> (eval-form form ns opts)
+                 (-> (if (jsx-literals? form)
+                       (eval-jsx-form form ns opts)
+                       (eval-form form ns opts))
                      (.then (fn [{:keys [error] :as r}]
                               (if error r (run (rest forms) (:ns r) r)))))
                  (js/Promise.resolve (or last {:ns ns :value nil}))))]

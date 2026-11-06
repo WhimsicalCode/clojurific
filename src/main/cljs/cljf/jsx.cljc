@@ -7,9 +7,12 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns cljf.jsx
-  "#x (or #jsx) literals: hiccup compiled to calls of the JSX runtime, see x."
-  (:require [clojure.string :as string])
-  (:import [cljs.tagged_literals JSValue]))
+  "#x (or #jsx) literals: hiccup compiled to calls of the JSX runtime, see x.
+  Also ClojureScript: the macros of the self-hosted compiler (cljf.selfhost),
+  compiled with :self-host as cljf/jsx$macros.js."
+  (:require [clojure.string :as string]
+            #?(:cljs [cljs.tagged-literals :as tags]))
+  #?(:clj (:import [cljs.tagged_literals JSValue])))
 
 ;; prop names, as cljf.jsx (cljs) names them at runtime: as written, the
 ;; JavaScript names (:className, :onClick, :fontSize), never renamed
@@ -57,7 +60,7 @@
   boolean): a #js literal, a form or local tagged as one."
   [env form]
   (boolean
-    (or (instance? JSValue form)
+    (or (instance? #?(:clj JSValue :cljs tags/JSValue) form)
         (js-tags (:tag (meta form)))
         (and (symbol? form)
              (js-tags (get-in env [:locals form :tag]))))))
