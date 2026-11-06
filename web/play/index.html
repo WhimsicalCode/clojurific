@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Playground · Clojurific</title>
-  <meta name="description" content="A ClojureScript REPL in your browser, compiled by Clojurific's self-hosted compiler.">
+  <meta name="description" content="A React app and a REPL in ClojureScript, compiled in your browser by Clojurific's self-hosted compiler as you type.">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,21 +22,39 @@
       <img src="/img/github-black.svg" height="20" alt="GitHub">
     </a>
   </header>
-  <main id="repl" class="repl card busy">
-    <div id="log" class="log">
-      <pre class="entry intro">ClojureScript compiled and evaluated in this page by Clojurific's self-hosted compiler.
-Only cljs.core's macros are available: other macro namespaces are Clojure.
-
-Enter evaluates · Shift+Enter starts a new line · ↑ ↓ history · Ctrl+L clears</pre>
-    </div>
-    <div class="input-row">
-      <label id="prompt" for="input">cljs.user=&gt;</label>
-      <div class="input-wrap">
-        <pre id="input-highlight" class="input-highlight" aria-hidden="true"></pre>
-        <textarea id="input" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="ClojureScript"></textarea>
+  <main class="react-play">
+    <section class="pane editor card" aria-label="Code">
+      <div class="pane-head">
+        <span>app.cljs</span>
+        <span id="status" class="status"></span>
+        <button id="reset" class="pane-button" type="button" title="Replace the code with the sample">Reset</button>
       </div>
-      <span class="spinner" aria-hidden="true"></span>
-    </div>
+      <div class="editor-body">
+        <div class="input-wrap">
+          <pre id="code-highlight" class="input-highlight" aria-hidden="true"></pre>
+          <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="ClojureScript code of the app"></textarea>
+        </div>
+      </div>
+    </section>
+    <section class="pane preview card" aria-label="Preview">
+      <div class="pane-head"><span>Preview</span></div>
+      <div class="preview-body">
+        <pre id="preview-error" class="preview-error" hidden></pre>
+        <div id="preview-root" class="preview-root"></div>
+      </div>
+    </section>
+    <section id="repl" class="pane repl card busy" aria-label="REPL">
+      <div class="pane-head"><span>REPL</span></div>
+      <div id="log" class="log"></div>
+      <div class="input-row">
+        <label id="prompt" for="input">app&gt;</label>
+        <div class="input-wrap">
+          <pre id="input-highlight" class="input-highlight" aria-hidden="true"></pre>
+          <textarea id="input" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="ClojureScript"></textarea>
+        </div>
+        <span class="spinner" aria-hidden="true"></span>
+      </div>
+    </section>
   </main>
 </body>
 </html>

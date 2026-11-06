@@ -3,7 +3,12 @@
 The website, a Vite project built with the compiler in `..`:
 
 - `index.html`: the home page.
-- `play/`: a ClojureScript REPL whose forms are compiled and evaluated in the page by the self-hosted compiler (`cljf.selfhost`, `:self-host`). `src/clojurific/play.cljs` is the playground. Its forms can `require` the namespaces it requires. Code is highlighted with `cljf repl`'s tokenizer (`../src/main/js/cljf/highlight.js`).
+- `play/`: the playground, ClojureScript compiled and evaluated in the page by the self-hosted compiler (`cljf.selfhost`, `:self-host`):
+  - A React app's code (`#x` literals), compiled as you type. Its `App` is rendered in the preview next to it (`src/clojurific/play.cljs`), inside an error boundary (`src/error-boundary.js`). `App` is called by a stable wrapper component, so its `useState` state survives edits, unless an edit changes its hooks: then it's remounted.
+  - Code the editor doesn't show is evaluated first (`prelude`): the `ns` form, and `use-atom`, a hook that renders a component again when an atom changes. The sample keeps its state in a `defonce` atom.
+  - A REPL in the app's namespace (`src/clojurific/repl.cljs`), which sees the app's vars and changes its state: `(swap! state update :clicks + 10)`.
+  - The code can require `react`, which the page provides, and the namespaces `play.cljs` requires.
+  - Code is highlighted with `cljf repl`'s tokenizer (`../src/main/js/cljf/highlight.js`).
 - `public/`: copied as is: `CNAME` for the custom domain, the logo, and the fonts.
 - Styling follows unidraw.dev:
   - Monsical for text, in `public/fonts/` and copied from unidraw.dev.
@@ -20,7 +25,7 @@ npm run preview  # serves dist/
 
 `vite.config.mjs` runs the plugin from `../src/main/js/vite-plugin-cljs` with the Clojure CLI (`clojure -M`, the classpath of `deps.edn`). It sets two compiler options:
 
-- `:self-host`: the compiler, and `cljs.core`'s macros as a lazily loaded chunk.
+- `:self-host`: the compiler, and the macros of `cljs.core` and `#x` as lazily loaded chunks.
 - `:esm-repl`: namespaces register themselves for the compiler in the page.
 
 A bundle is built with `prune: false`. Forms compiled in the page use ClojureScript's property names and may call any protocol method, so these can be neither renamed nor pruned. The build copies the analysis caches the compiler reads to `dist/play/analysis/`.
