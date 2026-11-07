@@ -81,9 +81,19 @@
               done     (env/with-compiler-env env
                          (binding [ana/*cljs-warning-handlers*
                                    [(fn [type _ extra] (swap! warnings conj [type extra]))]]
-                           (#'esm/recompile! env inputs '[test.rb test.ra] opts)))]
+                           (#'esm/recompile! env inputs '[test.rb test.ra] opts (atom []))))]
           (is (= '#{test.ra test.rb} done))
-          (is (empty? @warnings)))))))
+          (is (empty? @warnings))))
+      (testing "a batch failing after writing a namespace reports it written"
+        (write-source! dir 'test.ra "(ns test.ra) (defn f [x] x) (defn g [x] x) (defn h [x] x)" (+ ms 2000))
+        (write-source! dir 'test.rb "(ns test.rb (:require [test.ra :as a])) (def y (a/h 1)" (+ ms 2000))
+        (let [written (atom [])
+              inputs  (env/with-compiler-env env (esm/find-sources ['test.rb] opts))]
+          (is (thrown? Exception
+                (env/with-compiler-env env
+                  (#'esm/recompile! env inputs '[test.rb test.ra] opts written))))
+          (is (= '[test.ra] @written))
+          (is (string/includes? (output dir 'test.ra) "h = ")))))))
 
 (deftest writes-closure-libraries-of-cached-namespaces
   (let [dir     (temp-dir)

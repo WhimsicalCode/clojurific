@@ -1283,8 +1283,10 @@
   order, not nses': a batch of changes (i.e. a rebase) may name a namespace
   before one it requires, which would be analyzed against the required
   namespace's old api (warning of undeclared vars) and, compiled already,
-  not again once the required one's api changed."
-  [compiler-env inputs nses opts]
+  not again once the required one's api changed. Adds each namespace to
+  the atom written once its output is written: a compile failing reports
+  those written before the failure."
+  [compiler-env inputs nses opts written]
   (let [by-ns (into {} (map (juxt :ns identity)) inputs)
         index (into {} (map-indexed (fn [i {:keys [ns]}] [ns i])) inputs)
         enqueue (fn [queue nses] (into queue (comp (filter index) (map (juxt index identity))) nses))]
@@ -1295,6 +1297,7 @@
             (recur queue done)
             (let [before (api compiler-env ns)]
               (compile-ns (by-ns ns) (assoc opts :force true))
+              (swap! written conj ns)
               (let [changed? (not= before (api compiler-env ns))]
                 (recur (cond-> queue
                          changed? (enqueue (dependents compiler-env [ns])))
@@ -1523,6 +1526,9 @@
         ;; using the macros, so the watcher's next recompile retries them (a
         ;; failed build builds all again). Not the REPL's, failing on them
         pending-     (atom {})
+        ;; the namespaces the current recompile wrote: an error event reports
+        ;; them, the Vite plugin hot updates them once a compile succeeds
+        written-     (atom [])
         ;; the warnings of the output files, {path [warning]}: compiled
         ;; events report them as :outstanding, the Vite plugin holds back hot
         ;; reloads while there are any
@@ -1604,7 +1610,7 @@
                                         (recompile! compiler-env inputs
                                           (distinct (concat fresh cljs res-nses runner-changed
                                                       (macro-dependents compiler-env macros)))
-                                          opts)))]
+                                          opts written-)))]
                          (check-js-entries compiler-env opts)
                          (write-constants! compiler-env opts)
                          (install-goog-libs compiler-env opts)
@@ -1643,6 +1649,7 @@
                                    (map (fn [^File f] [(canonical-path f) (.lastModified f)]))
                                    files)
                                  (swap! status- assoc :compiling true)
+                                 (reset! written- [])
                                  (event! "compiling" {})
                                  (try
                                    (let [full?   (not @built?)
@@ -1656,7 +1663,9 @@
                                                                ana/*parse-ns-cache*  (java.util.concurrent.ConcurrentHashMap.)]
                                                        (recompile-changes! files nses)))
                                                    (catch Throwable e
-                                                     (doto (assoc (error-data e) :type "error")
+                                                     (doto (assoc (error-data e)
+                                                             :type "error"
+                                                             :files (map #(.getPath (output-file % opts)) @written-))
                                                        (->> (event! "error")))))]
                                      (status! event files full?))
                                    (finally

@@ -16,7 +16,7 @@ import { Worker } from 'node:worker_threads';
 import { compilerCommand } from '../cljf/launcher.js';
 import { pruneChunks, propertyRenames } from './prune.js';
 import { ednValue } from './edn.js';
-import { watchWarnings } from './warnings.js';
+import { normalizePath, watchWarnings } from './warnings.js';
 import { listenReplSocket } from './repl-socket.js';
 import { runtimeMessage } from './runtime-ops.js';
 import { WORKER_ENV, devWorkers, entryModule, importVite, workerHotChannel } from './dev-workers.js';
@@ -396,6 +396,41 @@ export default module.exports;
 `;
 }
 
+// Hot updates compiled modules mods in the pages (the client environment),
+// instead of Vite. A compiled module accepts its own updates and its new
+// instance updates the bindings of the earlier ones (see the compiler's
+// emit-esm-hmr-footer), so the pages keep running its importers' instances.
+// Vite would stamp the importers too, transitively, with the update's
+// timestamp, which modules transformed later import them with: a namespace
+// gaining a require of one of them, or of a module importing one, would load
+// a second instance of it, whose top level runs again without the values of
+// the first (an empty defmulti, its record types redefined). Only the module
+// itself is stamped here; its importers' transforms are invalidated, as by a
+// change, to import it with the new timestamp. Returns false, leaving the
+// update to Vite, in other environments (they import modules without
+// timestamps), for modules that don't accept their own updates and for
+// other than .js files (i.e. CSS a build hook writes to outputDir).
+function hotUpdateCompiled(environment, mods, timestamp) {
+  if (environment.config.consumer !== 'client' || environment.config.server.hmr === false ||
+      mods.some(mod => mod.type !== 'js' || !mod.file?.endsWith('.js') || mod.isSelfAccepting === false)) return false;
+  const updates = [];
+  for (const mod of mods) {
+    environment.moduleGraph.invalidateModule(mod);
+    mod.lastHMRTimestamp = timestamp;
+    mod.lastHMRInvalidationReceived = false;
+    // not loaded in this environment yet when undefined
+    if (mod.isSelfAccepting) {
+      updates.push({ type: 'js-update', timestamp, path: mod.url, acceptedPath: mod.url,
+                     explicitImportRequired: false, isWithinCircularImport: false });
+    }
+  }
+  if (updates.length) {
+    environment.logger.info(`hmr update ${updates.map(u => u.path).join(', ')}`, { timestamp: true });
+    environment.hot.send({ type: 'update', updates });
+  }
+  return true;
+}
+
 /**
  * @param {object} options
  * @param {string[]} [options.aliases] deps.edn aliases of the classpath the
@@ -458,6 +493,12 @@ export default function cljf(options) {
   // the namespaces of the pages' scripts, compiled as main namespaces
   let pageNamespaces = [];
   let compiling = Promise.resolve();
+  // the output files of the namespaces the watch recompiled, whose hot
+  // updates the compiled events send rather than Vite's file watcher: a
+  // module is written with its source's modification time (the compiler's
+  // staleness check), so the watcher misses the rewrite of a dependent whose
+  // source didn't change
+  const recompiled = new Set();
   const localModules = new Set();
   // the compiler warnings, which hold hot updates back (see warnings.js)
   const warnings = watchWarnings({ ignoreWarnings: options.ignoreWarnings });
@@ -1112,10 +1153,16 @@ export default function cljf(options) {
 
     // Hot updates of compiled modules wait for the compile (and its build
     // hooks, i.e. generated CSS) to finish, in every environment: the pages',
-    // the ssr environment's and the worker threads'.
-    async hotUpdate({ file }) {
+    // the ssr environment's and the worker threads'. Those of the namespaces
+    // the watch recompiled are sent once their compiled event arrives.
+    async hotUpdate({ type, file, modules, timestamp }) {
       await compiling;
-      if (warnings.held(file)) return [];
+      if (warnings.held(file) || (type !== 'delete' && recompiled.has(file))) {
+        // Vite still retries, on a create, the modules whose imports failed
+        // to resolve, i.e. JavaScript importing the namespace before it existed
+        return modules.filter(mod => mod.file !== file);
+      }
+      if (file.startsWith(outputDir + path.sep) && hotUpdateCompiled(this.environment, modules, timestamp)) return [];
     },
 
     // for scripts running the dev server themselves (createServer), i.e. to
@@ -1317,6 +1364,10 @@ export default function cljf(options) {
         }
         // before the hot updates waiting for the compile
         const held = event.type === 'compiled' ? warnings.compiled(event) : null;
+        // a failed compile's: those it wrote before failing, held back
+        if (event.type === 'error') warnings.failed(event);
+        const files = (event.files ?? []).map(file => normalizePath(file));
+        for (const file of files) recompiled.add(file);
         compiled();
         // The dev manifest, the pages' scripts, is written after the first
         // compile even if it failed: pages then show the error overlay.
@@ -1352,12 +1403,13 @@ export default function cljf(options) {
           config.logger.info(`[cljf] compiled ${event.namespaces} namespace(s) in ${event.ms}ms` +
             (ignored ? `, ${ignored} outstanding warning(s) ignored` : ''), { timestamp: true });
           problem = null;
-          // the namespaces held back that this compile didn't update, in every
-          // environment: a server entry's (ssr) as well as the pages'
+          // the namespaces this compile wrote and those held back that it
+          // didn't, together, in every environment: a server entry's (ssr) as
+          // well as the pages'
           for (const environment of Object.values(server.environments)) {
-            for (const file of released) {
-              for (const mod of environment.moduleGraph.getModulesByFile(file) ?? []) environment.reloadModule(mod);
-            }
+            const mods = [...new Set([...files, ...released])]
+              .flatMap(file => [...(environment.moduleGraph.getModulesByFile(file) ?? [])]);
+            if (!hotUpdateCompiled(environment, mods, Date.now())) mods.forEach(mod => environment.reloadModule(mod));
           }
           runSsrEntries();
           // createWorker resolves :js-entries names with it, i.e. right after

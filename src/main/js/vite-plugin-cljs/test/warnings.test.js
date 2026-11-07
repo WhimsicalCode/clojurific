@@ -34,6 +34,18 @@ test('a compile with no outstanding warnings releases the output, i.e. once a na
   assert.deepEqual(warnings.compiled({ files: ['main.js'], warnings: [], outstanding: [] }), { released: ['a.js', 'b.js'], outstanding: [], ignored: 0 });
 });
 
+test('a failed compile holds back what it wrote until a compile succeeds, even with ignoreWarnings', () => {
+  for (const ignoreWarnings of [false, true]) {
+    const warnings = watchWarnings({ ignoreWarnings });
+    // a written, then b failed to compile
+    warnings.failed({ type: 'error', files: ['a.js'] });
+    assert.equal(warnings.held('a.js'), true);
+    // fixing b recompiles b only: a is released with it
+    assert.deepEqual(warnings.compiled({ files: ['b.js'], warnings: [], outstanding: [] }).released, ['a.js']);
+    assert.equal(warnings.held('a.js'), false);
+  }
+});
+
 test('ignoreWarnings holds nothing back and counts the outstanding warnings', () => {
   const warnings = watchWarnings({ ignoreWarnings: true });
   const a = warning('a.js');

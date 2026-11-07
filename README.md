@@ -618,9 +618,9 @@ Externs aren't needed: `:externs` and `:infer-externs` aren't used. The analyzer
 
 ### Hot reloading
 
-Modules accept their own updates (`import.meta.hot`). Importers keep the bindings of the module instance they imported. A reloaded instance updates the bindings of all previous ones through their `$$set`, so callers see new definitions, like reloading a namespace under goog. A reloaded instance first restores the previous instance's values, so `defonce` keeps its value. `^:dev/before-load` / `^:dev/after-load` fns run around updates. Changing `cljs.core` reloads the page.
+Modules accept their own updates (`import.meta.hot`). Importers keep the bindings of the module instance they imported. A reloaded instance updates the bindings of all previous ones through their `$$set`, so callers see new definitions, like reloading a namespace under goog. A reloaded instance first restores the previous instance's values, so `defonce` keeps its value. In pages the plugin sends the hot updates of compiled modules itself: Vite would give the importers of an updated module its timestamp too, and a module importing one of them later (i.e. a namespace gaining a require) would load a second instance of it. `^:dev/before-load` / `^:dev/after-load` fns run around updates. Changing `cljs.core` reloads the page.
 
-The watcher recompiles changed namespaces, their dependents when a namespace's API (arities, macros) changed, and namespaces using changed macros.
+The watcher recompiles changed namespaces, their dependents when a namespace's API (arities, macros) changed, and namespaces using changed macros. The Vite plugin hot updates the namespaces a compile wrote together, from its compiled event, rather than as Vite's file watcher reports them: an output file keeps its source's modification time, so the rewrite of a dependent whose source didn't change goes unnoticed by the watcher. The namespaces a compile wrote before failing, which its error event reports, are hot updated with the next compile that succeeds, like the output compiler warnings hold back.
 
 ### REPL internals
 

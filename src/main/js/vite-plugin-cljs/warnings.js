@@ -2,7 +2,9 @@
 // shadow-cljs, it isn't hot reloaded, it would fail at runtime (undeclared
 // vars), unless ignoreWarnings (shadow-cljs' :devtools {:ignore-warnings
 // true}). The compiler keeps the warnings: a compiled event's outstanding
-// are those of all namespaces in the build.
+// are those of all namespaces in the build. The output a compile wrote
+// before it failed is held back too, until a compile succeeds: the error
+// stays on the overlay meanwhile.
 
 /**
  * The output held back of a watch: compiled(event) holds back the event's
@@ -11,6 +13,9 @@
  *   reload now that no namespace has warnings
  * - outstanding: the warnings pausing hot reload, none with ignoreWarnings
  * - ignored: the number of warnings ignoreWarnings ignored
+ * failed(event) holds back the files an error event reports written, the
+ * next compile without outstanding warnings releases them (with
+ * ignoreWarnings, the next compile).
  * held(file) is whether file's hot update is held back. Paths are compared
  * normalized, as Vite's (forward slashes): the compiler's are the
  * platform's.
@@ -19,6 +24,9 @@ export function watchWarnings({ ignoreWarnings = false, platform = process.platf
   const held = new Set();
   return {
     held: file => held.has(normalizePath(file, platform)),
+    failed(event) {
+      for (const file of event.files ?? []) held.add(normalizePath(file, platform));
+    },
     compiled(event) {
       const files = (event.files ?? []).map(file => normalizePath(file, platform));
       // a compiler of a version before :outstanding: the compile's warnings

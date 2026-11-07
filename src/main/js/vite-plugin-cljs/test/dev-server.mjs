@@ -4,6 +4,11 @@
 // - the entry runs despite the warning, the server answers
 // - a namespace compiled while the warning is outstanding isn't hot updated,
 //   and is released in the server's environment too once it's fixed
+// - a namespace recompiled because a namespace it requires changed its API
+//   is hot updated
+// - in the pages' environment, a hot update doesn't stamp the namespaces
+//   requiring the one updated: a module transformed later imports them as
+//   pages run them
 // - the template's MCP server (mcpPort) answers through `cljf mcp`: the
 //   server is a runtime that evaluates, and wait_for_reload reports the
 //   warning holding back hot reloads
@@ -108,7 +113,7 @@ async function withDevServer(test) {
       const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       return res.ok ? res.text() : `${res.status} ${(await res.text()).slice(0, 200)}`;
     };
-    return await test({ get, compiles, log: () => log });
+    return await test({ url, get, compiles, log: () => log });
   } catch (e) {
     e.message += `\n--- vite's output:\n${log}`;
     throw e;
@@ -124,7 +129,7 @@ let attempt = 0;
 for (;;) {
   attempt++;
   try {
-    await withDevServer(async ({ get, compiles, log }) => {
+    await withDevServer(async ({ url, get, compiles, log }) => {
       await until('the server entry\'s first answer, despite the warning', async () => (await get()) === 'one');
       if (!/hot reload paused by 1 warning\(s\)/.test(log())) throw new Error('no warning paused hot reload');
       // the template's MCP server, through the bridge
@@ -162,6 +167,40 @@ for (;;) {
       await until('the compile of the fixed namespace', async () => compiles() > n);
       await until('the held back namespace released in the server', async () => textUpdate.test(log().slice(before)), 20000);
       if ((await get()) !== 'two') throw new Error('the server doesn\'t answer with the released namespace');
+      // an API change recompiles the core namespace, which requires the text
+      // namespace: hot updated too, though its source (and so its output's
+      // modification time) didn't change
+      n = compiles();
+      const beforeApi = log().length;
+      fs.writeFileSync(textFile, `(ns ${parent}.text)\n(defn greeting [] "three")\n(defn farewell [] "bye")\n`);
+      await until('the compile of the text namespace\'s API change', async () => compiles() > n);
+      await until('the core namespace hot updated in the server',
+        async () => /\(ssr\) hmr update \S*\/core\.js/.test(log().slice(beforeApi)), 20000);
+      // In the pages' environment (its modules fetched from /@fs/, which the
+      // Hono server doesn't serve) a hot update stamps only the namespace
+      // updated, not the ones requiring it, which pages keep running: a
+      // module transformed later imports them without a timestamp, rather
+      // than load a second instance
+      const clientModule = async file => {
+        const res = await fetch(`${url}/@fs${path.resolve('target/cljs', file)}`, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) throw new Error(`${file}: ${res.status}`);
+        return res.text();
+      };
+      const coreModule = path.relative('src', coreFile).replace(/\.cljs$/, '.js').split(path.sep).join('/');
+      const imported = (code, name) => code.match(new RegExp(`from "([^"]*/${name}\\.js[^"]*)"`))?.[1];
+      // the core module transformed in the pages' environment: it imports text
+      if (!imported(await clientModule(coreModule), 'text')) throw new Error('the core module doesn\'t import the text module');
+      n = compiles();
+      fs.writeFileSync(textFile, `(ns ${parent}.text)\n(defn greeting [] "four")\n(defn farewell [] "bye")\n`);
+      await until('the compile of the text namespace', async () => compiles() > n);
+      const textImport = await until('the text module stamped', async () => {
+        const spec = imported(await clientModule(coreModule), 'text');
+        return /[?&]t=\d+/.test(spec) && spec;
+      });
+      const coreImport = imported(await clientModule('cljs-esm-entries/server.js'), 'core');
+      if (!coreImport || /[?&]t=/.test(coreImport)) {
+        throw new Error(`the server entry imports the core module as ${coreImport}, the text module being ${textImport}`);
+      }
     });
     break;
   } catch (e) {
