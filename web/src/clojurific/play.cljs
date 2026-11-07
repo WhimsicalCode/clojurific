@@ -6,6 +6,7 @@
             ["react" :as react]
             ["react-dom/client" :as rdc]
             [cljf.selfhost :as selfhost]
+            [cljf.webmcp :as webmcp]
             [clojure.string :as string]
             [clojurific.repl :as repl]
             ;; namespaces the playground's code can require
@@ -118,7 +119,10 @@
                                      (js/queueMicrotask #(render! App true))))}
          [Preview {:app App}]])))
 
-(defn- evaluate! [run]
+(defn- evaluate!
+  "Evaluates the editor's code, renders its App: a promise of {:error} or
+  {:rendered true}, {:stale true} when the code changed meanwhile."
+  [run]
   (let [code (str (.-value ($ "code")))]
     (status! "busy" "compiling…")
     (-> (selfhost/eval-str code {:ns app-ns :print false})
@@ -129,12 +133,16 @@
                                                               warnings)))}
                    (selfhost/eval-str "App" {:ns app-ns :print false}))))
         (.then (fn [{:keys [value error]}]
-                 (when (= run @runs)
-                   (cond
-                     error (show-error! error)
-                     (not (fn? value)) (show-error! "Define App, the component the preview renders: (defn App [] #x [:p \"Hi\"])")
-                     :else (do (render! value)
-                               (status! "ok" "compiled")))))))))
+                 (if (not= run @runs)
+                   {:stale true}
+                   (let [error (cond
+                                 error error
+                                 (not (fn? value)) "Define App, the component the preview renders: (defn App [] #x [:p \"Hi\"])")]
+                     (if error
+                       (do (show-error! error) {:error error})
+                       (do (render! value)
+                           (status! "ok" "compiled")
+                           {:rendered true})))))))))
 
 (defonce ^:private running
   ;; a promise of the run being evaluated: runs don't overlap, the forms of
@@ -143,14 +151,18 @@
 
 (defn- run-code!
   "Evaluates the code in the app's namespace, renders its App: after the run
-  being evaluated, unless the code changed again meanwhile."
+  being evaluated, unless the code changed again meanwhile. A promise of
+  evaluate!'s result."
   []
   (let [run (swap! runs inc)]
     (swap! running
       (fn [p]
         (-> p
-            (.then #(when (= run @runs) (evaluate! run)))
-            (.catch (fn [e] (show-error! (str (ex-message e))))))))))
+            (.then #(if (= run @runs) (evaluate! run) {:stale true}))
+            (.catch (fn [e]
+                      (let [error (str (ex-message e))]
+                        (show-error! error)
+                        {:error error}))))))))
 
 (defonce ^:private pending (atom nil))
 
@@ -193,6 +205,103 @@
     (.select el)
     (insert! sample)))
 
+(defn- set-code!
+  "Replaces the editor's code, as typing does (its undo too)."
+  [code]
+  (let [el ($ "code")]
+    (.focus el)
+    (.select el)
+    (insert! code)
+    ;; the input event's debounced run is the one awaited instead
+    (some-> @pending js/clearTimeout)))
+
+;; WebMCP: the app's tools for agents in the browser, with cljf.webmcp's
+
+(defn- preview-state
+  "The preview: its text and any error, what an agent sees of it."
+  []
+  (let [err ($ "preview-error")]
+    (cond-> {:text (str (.-innerText ($ "preview-root")))
+             :html (let [h (str (.-innerHTML ($ "preview-root")))]
+                     (if (> (count h) 20000) (str (subs h 0 20000) "…") h))}
+      (not (.-hidden err)) (assoc :error (str (.-textContent err))))))
+
+(defn- result [m]
+  (js/JSON.stringify (clj->js m) nil 1))
+
+(defn- after-render
+  "A promise resolving once React committed the render and the browser
+  painted."
+  []
+  (js/Promise. (fn [resolve] (js/requestAnimationFrame #(js/setTimeout resolve 50)))))
+
+(def ^:private app-tools
+  [{:name        "playground_get_code"
+    :description "The code in the playground's editor: the React app the preview renders, in namespace app. Its App component is rendered; react is required as react; use-atom (a hook rendering a component again when an atom changes) is defined."
+    :inputSchema {:type "object" :properties {}}
+    :annotations {:readOnlyHint true}
+    :execute     (fn [_] (result {:code (str (.-value ($ "code")))}))}
+   {:name        "playground_set_code"
+    :description (str "Replaces the code in the playground's editor and runs it, as if the user typed it: its forms are evaluated in namespace app, "
+                      "then its App component is rendered in the preview (#x [:tag ...] literals are React elements, hiccup compiled to JSX). "
+                      "Returns the compile or render error, or the preview's text and HTML. defonce keeps state across edits. The user can undo it in the editor.")
+    :inputSchema {:type       "object"
+                  :properties {:code {:type "string" :description "The whole app's code, defining App."}}
+                  :required   ["code"]}
+    :execute     (fn [^js input]
+                   (set-code! (str (.-code input)))
+                   (-> (run-code!)
+                       (.then (fn [r] (.then (after-render) (fn [_] r))))
+                       (.then (fn [{:keys [error]}]
+                                (result (if error {:error error} (assoc (preview-state) :rendered true)))))))}
+   {:name        "playground_preview"
+    :description "The playground's preview: the rendered app's text and HTML, and its compile or render error if any."
+    :inputSchema {:type "object" :properties {}}
+    :annotations {:readOnlyHint true}
+    :execute     (fn [_] (result (preview-state)))}])
+
+(defonce ^:private badge-timer (atom nil))
+
+(defn- agent-called!
+  "Shows on the WebMCP badge that an agent called a tool."
+  [tool _]
+  (let [el ($ "webmcp")]
+    (.add (.-classList el) "active")
+    (set! (.-textContent el) (str "WebMCP · " tool))
+    (some-> @badge-timer js/clearTimeout)
+    (reset! badge-timer
+      (js/setTimeout #(do (.remove (.-classList el) "active")
+                          (set! (.-textContent el) "WebMCP"))
+                     1500))))
+
+(defn- show-webmcp-badge!
+  "Shows the WebMCP badge, next to the REPL's heading, listing the tools in
+  its tooltip."
+  [names]
+  (let [el ($ "webmcp")]
+    (set! (.-title el) (str "Agents in this browser can use the playground through WebMCP:\n"
+                            (string/join "\n" names)))
+    (set! (.-hidden el) false)))
+
+(defn- register-webmcp!
+  "Registers the playground's WebMCP tools: cljf.webmcp's, evaluating in the
+  app's namespace and shown in the REPL's log, and the app's. Shows the
+  WebMCP badge when the browser has WebMCP."
+  []
+  (when (webmcp/model-context)
+    (show-webmcp-badge!
+      (concat (map #(str "cljs_" %) ["eval" "doc" "apropos" "ns_info" "macroexpand" "namespaces"])
+              (map :name app-tools))))
+  (webmcp/register!
+    {:ns          app-ns
+     :on-call     agent-called!
+     :before-eval #(repl/entry! "in agent" % :code {:prefix "agent> "})
+     :after-eval  (fn [_ {:keys [value error]}]
+                    (if error
+                      (repl/entry! "error" error)
+                      (repl/entry! "value" (str value) :code {})))
+     :tools       app-tools}))
+
 (defn init []
   (selfhost/provide-module! "react" react)
   (let [el ($ "code")]
@@ -205,7 +314,8 @@
   (-> (repl/init! {:examples  examples
                    :init-code prelude
                    :focus     false})
-      (.then run-code!)))
+      (.then run-code!)
+      (.then register-webmcp!)))
 
 (when (exists? js/document)
   (init))

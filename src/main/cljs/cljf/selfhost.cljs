@@ -466,6 +466,169 @@
                   (when-not (:ns opts) (reset! current-ns ns))
                   (print r)))))))
 
+;; Lookups, from the compiler state in the page (i.e. for cljf.webmcp's tools)
+
+(defn- arglists [v]
+  (let [a (:arglists v)]
+    (if (and (seq? a) (= 'quote (first a))) (second a) a)))
+
+(defn- macros->ns
+  "The namespace of a macros namespace, cljs.core$macros' cljs.core."
+  [ns]
+  (string/replace (str ns) #"\$macros$" ""))
+
+(defn- in-ns-env
+  "Calls f with an analysis environment of namespace ns, without warnings."
+  [ns f]
+  (binding [env/*compiler*                  state
+            ana/*cljs-ns*                   ns
+            ana/*cljs-warnings*             (zipmap (keys ana/*cljs-warnings*) (repeat false))
+            ana/*private-var-access-nowarn* true]
+    (f (assoc (ana/empty-env) :ns (ana/get-namespace ns)))))
+
+(defn- lookup-ready
+  "A promise of cljs.core's analysis and macros, and of namespace ns' and
+  those it requires."
+  [ns]
+  (.then (load-core!) #(load-ns! ns)))
+
+(defn- page-namespaces
+  "The namespaces in the page, sorted: the build's (registered by their
+  modules) and those only defined in the page."
+  []
+  (->> (concat (some-> (.-$CLJS_ESM js/globalThis) .-nses .keys js/Array.from)
+               (map str (keys (::ana/namespaces @state))))
+       (remove #(string/ends-with? % "$macros"))
+       distinct
+       sort))
+
+(defn namespaces
+  "A promise of the names of the namespaces in the page, sorted."
+  []
+  (js/Promise.resolve (vec (page-namespaces))))
+
+(defn- var-info [v]
+  (let [n (:name v)]
+    (cond-> {:name (if (namespace n) (str (macros->ns (namespace n)) "/" (name n)) (str n))
+             :kind (if (:macro v) "macro" "var")}
+      (seq (arglists v)) (assoc :arglists (mapv pr-str (arglists v)))
+      (:doc v)           (assoc :doc (:doc v)))))
+
+(defn doc
+  "A promise of the documentation of symbol sym (a string or symbol),
+  resolved in namespace ns (default the current one) with its aliases and
+  refers: {:name :kind :arglists :doc}, :kind var, macro, namespace or
+  special form. nil if it names none of them."
+  ([sym] (doc sym nil))
+  ([sym ns]
+   (let [sym (symbol sym)
+         ns  (or (some-> ns symbol) @current-ns)]
+     (-> (lookup-ready ns)
+         (.then (fn [_]
+                  (cond
+                    (namespace sym)
+                    (load-analysis! (in-ns-env ns #(ana/resolve-ns-alias % (namespace sym))))
+                    ;; i.e. clojure.string, a namespace not loaded yet
+                    (string/includes? (str sym) ".") (load-analysis! sym))))
+         (.then (fn [_]
+                  (in-ns-env ns
+                    (fn [env]
+                      (let [nsa (when-not (namespace sym) (get-in @state [::ana/namespaces sym]))
+                            v   (when-not nsa
+                                  (try
+                                    (ana/resolve-var env sym (ana/confirm-var-exists-throw))
+                                    (catch :default _
+                                      (try (ana/resolve-macro-var env sym) (catch :default _ nil)))))]
+                        (cond
+                          (contains? ana/specials sym)
+                          {:name (str sym) :kind "special form"}
+
+                          nsa
+                          (cond-> {:name (str sym) :kind "namespace"} (:doc nsa) (assoc :doc (:doc nsa)))
+
+                          ;; a JavaScript value, i.e. of an npm module (react/useState)
+                          (and v (#{:js-var :js} (:op v)))
+                          {:name (str sym) :kind "JavaScript value"}
+
+                          (and v (or (:macro v) (:doc v) (:arglists v) (:ns v)))
+                          (var-info v)))))))))))
+
+(defn- publics
+  "The public vars of the analysis of namespace ns, its macros' too, [sym
+  analysis] sorted."
+  [ns]
+  (let [a      (get-in @state [::ana/namespaces (symbol ns)])
+        macros (filter (comp :macro val) (get-in @state [::ana/namespaces (symbol (str ns "$macros")) :defs]))]
+    (->> (concat (:defs a) macros)
+         (remove (fn [[_ v]] (or (:private v) (:anonymous v))))
+         (sort-by (comp str key)))))
+
+(defn apropos
+  "A promise of the public vars and macros, ns/name sorted, whose name
+  contains query (case-insensitive): of namespace only-ns, or of all the
+  namespaces in the page, whose analysis it reads."
+  ([query] (apropos query nil))
+  ([query only-ns]
+   (let [q    (string/lower-case (str query))
+         nses (if only-ns [(str only-ns)] (page-namespaces))]
+     (.then (js/Promise.all (into-array (map load-analysis! nses)))
+       (fn [_]
+         (->> (for [ns      nses
+                    [sym _] (publics ns)
+                    :when   (string/includes? (string/lower-case (str sym)) q)]
+                (str ns "/" sym))
+              distinct
+              vec))))))
+
+(defn ns-info
+  "A promise of namespace ns' docstring, public vars and macros (with their
+  arglists and their docstrings' first line) and requires, nil if it isn't
+  in the page."
+  [ns]
+  (let [ns (symbol ns)]
+    (.then (load-analysis! ns)
+      (fn [_]
+        (when-let [a (get-in @state [::ana/namespaces ns])]
+          (cond-> {:ns       (str ns)
+                   :publics  (mapv (fn [[sym v]]
+                                     (cond-> {:name (str sym)}
+                                       (:macro v)         (assoc :macro true)
+                                       (seq (arglists v)) (assoc :arglists (mapv pr-str (arglists v)))
+                                       (:doc v)           (assoc :doc (first (string/split-lines (:doc v))))))
+                                   (publics ns))
+                   :requires (->> (concat (vals (:requires a)) (vals (:uses a)))
+                                  (map str) distinct sort vec)}
+            (:doc a) (assoc :doc (:doc a))))))))
+
+(defn macroexpand-str
+  "A promise of the first form of string code with its macros expanded in
+  namespace ns (default the current one), printed: once (mode
+  macroexpand-1), until its head isn't a macro (macroexpand, the default),
+  or all the forms in it (all)."
+  ([code] (macroexpand-str code nil nil))
+  ([code ns mode]
+   (let [ns  (or (some-> ns symbol) @current-ns)
+         eof (js-obj)]
+     (-> (lookup-ready ns)
+         (.then (fn [_]
+                  (let [form (read-form (readers/indexing-push-back-reader code 1 "<macroexpand>") ns eof)]
+                    (when (identical? eof form)
+                      (throw (js/Error. "No form to expand")))
+                    (.then (if (jsx-literals? form) (load-macros! 'cljf.jsx) (js/Promise.resolve nil))
+                      (fn [_]
+                        (in-ns-env ns
+                          (fn [env]
+                            (let [expand-1 #(ana/macroexpand-1 env %)
+                                  expand   (fn [f]
+                                             (loop [f f]
+                                               (let [f' (expand-1 f)]
+                                                 (if (identical? f f') f (recur f')))))]
+                              (pr-str
+                                (case (str (or mode "macroexpand"))
+                                  "macroexpand-1" (expand-1 form)
+                                  "all"           (clojure.walk/prewalk #(if (seq? %) (expand %) %) form)
+                                  (expand form)))))))))))))))
+
 (defn console-eval
   "eval-str for the console (globalThis.cljs_selfhost_eval): a promise of
   the value, rejected with the error or warnings."

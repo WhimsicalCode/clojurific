@@ -153,6 +153,9 @@ code, pre { font-family: var(--mono); }
 .entry { margin: 0 0 6px; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
 .entry.intro { color: var(--muted); margin-bottom: 16px; }
 .entry.in { margin-top: 12px; }
+/* forms an agent evaluated through WebMCP */
+.entry.agent { color: var(--muted); }
+.entry.agent::first-line { color: var(--hl); }
 .entry.out { color: var(--muted); }
 .entry.err, .entry.error { color: var(--error); }
 .entry.warning { color: var(--warning); }
@@ -226,6 +229,21 @@ code, pre { font-family: var(--mono); }
 .status.busy::before { color: var(--warning); }
 .status.error { color: var(--error); }
 .status:empty { display: none; }
+
+/* shown when the browser has WebMCP: agents in it can use the playground */
+.webmcp {
+  display: inline-flex; align-items: center; gap: 6px; cursor: help;
+  padding: 1px 8px; border-radius: 999px; font-size: 12px;
+  color: var(--hl); background: rgb(43 184 154 / 10%);
+}
+.webmcp::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--hl);
+}
+.webmcp[hidden] { display: none; }
+/* an agent called a tool */
+.webmcp.active { background: rgb(43 184 154 / 22%); }
+.webmcp.active::before { animation: webmcp-pulse 0.6s ease-in-out infinite alternate; }
+@keyframes webmcp-pulse { to { transform: scale(1.8); opacity: 0.4; } }
 
 .editor-body { flex: 1; overflow: auto; padding: 16px 24px; }
 #code { overflow: hidden; caret-color: var(--fg); }

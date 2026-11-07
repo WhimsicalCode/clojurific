@@ -899,6 +899,78 @@
             console.log(JSON.stringify([await globalThis.cljs_selfhost_eval('(-> 1 inc (* 10) (vector :b))', { print: true })]));"))
     (is (= ["[20 :b]"] (json/read-str (last (string/split-lines (string/trim (run-node runner)))))))))
 
+(deftest webmcp-registers-the-self-hosted-compilers-tools
+  ;; cljf.webmcp with a stub of WebMCP's document.modelContext, its tools
+  ;; called as an agent would
+  (let [dir     (temp-dir)
+        out     (io/file dir "out")
+        sources (into {} [(write-source! dir 'test.webmcp
+                            "(ns test.webmcp \"Tools' test.\" (:require [cljf.webmcp] [clojure.string]))
+                             (defn greet \"Greets.\" [s] (str \"Hi \" s))"
+                            (- (System/currentTimeMillis) 60000))])
+        runner  (io/file dir "run.mjs")]
+    (binding [esm/*generated-sources* sources]
+      (esm/build {:main 'test.webmcp :output-dir (str out) :esm-repl true :self-host true}))
+    (spit runner
+      (str "import fs from 'node:fs';
+            import { pathToFileURL } from 'node:url';
+            const out = " (pr-str (str (.getCanonicalPath out) "/")) ";
+            globalThis.fetch = async (url) => {
+              const f = decodeURIComponent(new URL(url).pathname);
+              return fs.existsSync(f)
+                ? new Response(fs.readFileSync(f), { headers: { 'content-type': 'application/json' } })
+                : new Response('', { status: 404, headers: { 'content-type': 'text/html' } });
+            };
+            globalThis.$CLJS_ESM = { nses: new Map(), root: pathToFileURL(out).href };
+            const tools = new Map();
+            globalThis.document = { modelContext: {
+              registerTool(t, { signal }) {
+                if (tools.has(t.name)) return Promise.reject(new Error('taken'));
+                tools.set(t.name, t);
+                signal.addEventListener('abort', () => tools.delete(t.name));
+                return Promise.resolve();
+              } } };
+            await import(pathToFileURL(out + 'test/webmcp.js').href);
+            const webmcp = await import(pathToFileURL(out + 'cljf/webmcp.js').href);
+            const unregister = webmcp.register_BANG_();
+            const names = [...tools.keys()];
+            const call = async (n, input) => JSON.parse(await tools.get(n).execute(input, {}));
+            const res = { names,
+              eval: await call('cljs_eval', { code: '(println \"out\") (in-ns (quote test.webmcp)) (greet \"there\")' }),
+              warned: await call('cljs_eval', { code: '(nope)' }),
+              doc: await call('cljs_doc', { symbol: 'greet', ns: 'test.webmcp' }),
+              docAlias: await call('cljs_doc', { symbol: 'clojure.string/join' }),
+              docSpecial: await call('cljs_doc', { symbol: 'if' }),
+              docNone: await call('cljs_doc', { symbol: 'nope' }),
+              apropos: await call('cljs_apropos', { query: 'GREE' }),
+              nsInfo: await call('cljs_ns_info', { ns: 'test.webmcp' }),
+              expand: await call('cljs_macroexpand', { form: '(when x y)', mode: 'macroexpand-1' }),
+              nses: await call('cljs_namespaces', { prefix: 'test.' }) };
+            unregister();
+            res.after = tools.size;
+            console.log(JSON.stringify(res));"))
+    (let [r (json/read-str (last (string/split-lines (string/trim (run-node runner)))))]
+      (is (= ["cljs_eval" "cljs_doc" "cljs_apropos" "cljs_ns_info" "cljs_macroexpand" "cljs_namespaces"] (get r "names")))
+      (testing "eval: the value, the output, the namespace after the forms"
+        (is (= {"ns" "test.webmcp" "value" "\"Hi there\"" "out" "out\n"} (get r "eval"))))
+      (testing "eval: warnings, the form not evaluated"
+        (is (= "Form not evaluated: 1 warning(s)" (get-in r ["warned" "error"])))
+        (is (string/includes? (get-in r ["warned" "warnings" 0 "message"]) "nope")))
+      (testing "doc"
+        (is (= {"name" "test.webmcp/greet" "kind" "var" "arglists" ["[s]"] "doc" "Greets."} (get r "doc")))
+        (is (= "clojure.string/join" (get-in r ["docAlias" "name"])))
+        (is (= "special form" (get-in r ["docSpecial" "kind"])))
+        (is (contains? (get r "docNone") "error")))
+      (testing "apropos, ns_info, namespaces"
+        (is (= ["test.webmcp/greet"] (get-in r ["apropos" "matches"])))
+        (is (= "Tools' test." (get-in r ["nsInfo" "doc"])))
+        (is (= [{"name" "greet" "arglists" ["[s]"] "doc" "Greets."}] (get-in r ["nsInfo" "publics"])))
+        (is (= ["test.webmcp"] (get-in r ["nses" "namespaces"]))))
+      (testing "macroexpand"
+        (is (= "(if x (do y))" (get-in r ["expand" "expansion"]))))
+      (testing "unregistering"
+        (is (= 0 (get r "after")))))))
+
 (deftest self-host-evaluates-jsx-literals-and-provided-modules
   ;; cljf.jsx's macros compiled as ClojureScript, npm modules the page
   ;; provides (cljf.selfhost/provide-module!)

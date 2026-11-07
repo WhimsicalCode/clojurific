@@ -9,6 +9,8 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 - `:self-host true` compiles the ClojureScript compiler into the build (`cljf.selfhost`, with `cljs.core`'s macros compiled as ClojureScript). `cljf.selfhost/eval-str` compiles and evaluates forms in the page, without the watcher's JVM, reading the build's analysis caches as forms need them; in a watched build, `cljs_selfhost_eval` does it from the console. `#x` literals work too (`cljf.jsx`'s macros, now `.cljc`, compiled as ClojureScript), and forms can require npm modules the page provides (`cljf.selfhost/provide-module!`).
 
+- `cljf.webmcp/register!` registers the self-hosted compiler's tools (`cljs_eval`, `cljs_doc`, `cljs_apropos`, `cljs_ns_info`, `cljs_macroexpand`, `cljs_namespaces`) with WebMCP, for agents in the browser, and a page's own tools; `cljf.selfhost` has the lookups (`doc`, `apropos`, `ns-info`, `macroexpand-str`, `namespaces`).
+
 ### Fixed
 
 - `cljs.core$macros`' `..` macro compiled to an invalid ES module binding (`cljs$core$macros$.`).

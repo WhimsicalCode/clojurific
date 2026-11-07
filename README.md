@@ -339,6 +339,25 @@ A build that requires `cljf.selfhost` evaluates without the REPL: `(cljf.selfhos
 - A form with warnings isn't evaluated.
 - A namespace's analysis is read once: vars a hot reload adds to the build's namespaces are undeclared to the self-hosted compiler until the page reloads.
 
+##### Tools for agents in the browser (WebMCP)
+
+`(cljf.webmcp/register! opts)` registers the self-hosted compiler's tools with [WebMCP](https://developer.chrome.com/docs/ai/webmcp) (`document.modelContext`), for agents in the browser, as the [MCP server](#coding-agents-mcp) does through the watcher in development:
+
+| Tool | |
+|---|---|
+| `cljs_eval` | `eval-str`: `code`, `ns`, `await`, `warnings_ok`, `print_length`, `print_level`. Returns the value, the output printed (`out`, `err`), the warnings and the error |
+| `cljs_doc` | a var's, macro's, special form's or namespace's arglists and docstring |
+| `cljs_apropos` | the public vars whose name contains a string |
+| `cljs_ns_info` | a namespace's docstring, publics with their arglists, and requires |
+| `cljs_macroexpand` | `macroexpand-1`, `macroexpand` or `all` |
+| `cljs_namespaces` | the namespaces in the page |
+
+- `:prefix` names them (default `cljs_`), `:ns` is the namespace they default to, `:tools` adds a page's own tools (maps of `:name`, `:description`, `:inputSchema`, `:annotations` and `:execute`), `:before-eval` and `:after-eval` show the agent's forms in the page, and `:on-call` is called with a tool's name and input whenever an agent calls one.
+- It returns a function unregistering them. Without WebMCP it does nothing and returns `nil`.
+- WebMCP is a proposed standard: Chrome has it behind an [origin trial](https://developer.chrome.com/origintrials/#/register_trial/4163014905550602241) (a token in the page's `<meta http-equiv="origin-trial">`), or `chrome://flags/#enable-webmcp-testing` locally.
+- `cljs_eval` runs any code in the page, with its origin's access. Register it where the page has nothing an agent acting for its user shouldn't reach.
+- There's no build in the page: the watcher's tools (`build_status`, `wait_for_reload`, `load_file`, `console_logs`) and `source` have no counterpart.
+
 #### Coding agents (MCP)
 
 The REPL's MCP server gives coding agents the REPL's tools: `:repl {:mcp-port 0}` (`compilerOptions: { repl: { mcpPort: 0 } }`, with `nreplPort` too or alone) starts it in the watcher's JVM. It's MCP's Streamable HTTP on `127.0.0.1`, and its port goes in `.cljf/mcp-port`. `cljf mcp` connects an agent to it over stdio:

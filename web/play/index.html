@@ -6,6 +6,8 @@
   <title>Playground · Clojurific</title>
   <meta name="description" content="A React app and a REPL in ClojureScript, compiled in your browser by Clojurific's self-hosted compiler as you type.">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <!-- WebMCP origin trial token for https://clojurific.dev, expires 2027-03-30: renew it then, see README.md -->
+  <meta http-equiv="origin-trial" content="AjY8hkw2kYUP6SkEccAJKXUJica4xMrPHXr5r5nhexMtB/PrNh0pRrJOXbrZV0yGZC96JtJIPYvexVwlcch74wMAAABOeyJvcmlnaW4iOiJodHRwczovL2Nsb2p1cmlmaWMuZGV2OjQ0MyIsImZlYXR1cmUiOiJXZWJNQ1AiLCJleHBpcnkiOjE4MDYzNjQ4MDB9">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap">
@@ -44,7 +46,10 @@
       </div>
     </section>
     <section id="repl" class="pane repl card busy" aria-label="REPL">
-      <div class="pane-head"><span>REPL</span></div>
+      <div class="pane-head">
+        <span>REPL</span>
+        <span id="webmcp" class="webmcp" hidden>WebMCP</span>
+      </div>
       <div id="log" class="log"></div>
       <div class="input-row">
         <label id="prompt" for="input">app&gt;</label>
