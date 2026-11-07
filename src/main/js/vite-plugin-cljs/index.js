@@ -1162,7 +1162,8 @@ export default function cljf(options) {
         // to resolve, i.e. JavaScript importing the namespace before it existed
         return modules.filter(mod => mod.file !== file);
       }
-      if (file.startsWith(outputDir + path.sep) && hotUpdateCompiled(this.environment, modules, timestamp)) return [];
+      // Vite's paths have forward slashes, on Windows too
+      if (file.startsWith(normalizePath(outputDir) + '/') && hotUpdateCompiled(this.environment, modules, timestamp)) return [];
     },
 
     // for scripts running the dev server themselves (createServer), i.e. to
