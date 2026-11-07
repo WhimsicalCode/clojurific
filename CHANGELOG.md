@@ -11,10 +11,6 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 - `cljf.webmcp/register!` registers the self-hosted compiler's tools (`cljs_eval`, `cljs_doc`, `cljs_apropos`, `cljs_ns_info`, `cljs_macroexpand`, `cljs_namespaces`) with WebMCP, for agents in the browser, and a page's own tools; `cljf.selfhost` has the lookups (`doc`, `apropos`, `ns-info`, `macroexpand-str`, `namespaces`).
 
-### Fixed
-
-- `cljs.core$macros`' `..` macro compiled to an invalid ES module binding (`cljs$core$macros$.`).
-
 ## 0.12.15 [2026-11-04]
 
 ### Added

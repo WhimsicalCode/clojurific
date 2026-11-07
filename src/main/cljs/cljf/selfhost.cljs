@@ -140,7 +140,15 @@
                              (if text
                                (let [analysis (transit/read @transit-reader text)]
                                  (swap! state #(-> %
-                                                   (assoc-in [::ana/namespaces ns] analysis)
+                                                   ;; under what the page defined in the
+                                                   ;; namespace already, i.e. an ns form's
+                                                   ;; aliases, its defs: they win
+                                                   (update-in [::ana/namespaces ns]
+                                                     (fn [page]
+                                                       (if page
+                                                         (merge-with (fn [a b] (if (and (map? a) (map? b)) (merge a b) b))
+                                                           analysis page)
+                                                         analysis)))
                                                    ;; its npm modules, which forms reach
                                                    ;; through its registration's libs
                                                    (update :node-module-index into
@@ -180,7 +188,11 @@
                          (fn [m]
                            (when-not (registered? mns)
                              (.set (.-nses (registry)) mns
-                               #js {:mod m :sets #js [(.-$$set m)] :libs #js {} :gen 1}))))])]
+                               #js {:mod m :sets #js [(.-$$set m)] :libs #js {} :gen 1}))))])
+                ;; not remembered: the next form imports them again
+                p   (.catch p (fn [e]
+                                (swap! macro-loads dissoc ns)
+                                (throw e)))]
         (swap! macro-loads assoc ns p)
         p)))
 
@@ -232,7 +244,7 @@
            (ns->path ns ".js")))])
     (for [ns (sort @(:goog-lib-refs esm))]
       (if (goog-shims ns)
-        [(str (comp/esm-ns-alias ns) "$") ns "goog-shim" nil]
+        [(str (comp/esm-ns-alias ns) "$") ns "goog-shim" (str "goog-lib/ns/" ns ".js")]
         [(str (comp/esm-ns-alias ns) "$") ns "default" (str "goog-lib/ns/" ns ".js")]))))
 
 (defn- compile-form
@@ -294,13 +306,33 @@
                  (when-let [c (ex-cause e)]
                    (when (ex-message c) (str ": " (ex-message c))))))))
 
+(defonce ^:private goog-libs
+  ;; {ns promise}: of the module of Closure Library namespace ns run by the
+  ;; compatibility layer (goog-lib/ns/<ns>.js), nil if the output directory
+  ;; hasn't it: the build has it when its namespaces use members the shim
+  ;; doesn't have
+  (atom {}))
+
+(defn- goog-lib [ns path]
+  (or (get @goog-libs ns)
+      (let [p (.catch (rt/load-ref [nil ns "default" path]) (fn [_] nil))]
+        (swap! goog-libs assoc ns p)
+        p)))
+
 (defn- load-ref
   "A promise of what reference [alias ns kind path] of a form is bound to,
   see cljf.esm.repl-runtime/load-ref: kind goog-shim a Closure Library
-  shim's module."
-  [[_ ns kind :as ref]]
+  shim's module, with the members it doesn't have from the namespace run by
+  the compatibility layer (at path), if the output directory has it."
+  [[_ ns kind path :as ref]]
   (if (= "goog-shim" kind)
-    ((goog-shims ns))
+    (.then (js/Promise.all #js [((goog-shims ns)) (goog-lib ns path)])
+      (fn [[shim lib]]
+        (if lib
+          (js/Proxy. #js {}
+            #js {:get (fn [_ k] (if (js-in k shim) (unchecked-get shim k) (unchecked-get lib k)))
+                 :has (fn [_ k] (or (js-in k shim) (js-in k lib)))})
+          shim)))
     (rt/load-ref ref)))
 
 (defn- run-js
@@ -563,6 +595,18 @@
          (remove (fn [[_ v]] (or (:private v) (:anonymous v))))
          (sort-by (comp str key)))))
 
+(defn- load-analyses!
+  "A promise of the analyses of namespaces nses read, at most n fetches at
+  a time."
+  [nses n]
+  (let [queue (atom (seq nses))
+        next! (fn next! []
+                (if-let [ns (first @queue)]
+                  (do (swap! queue next)
+                      (.then (load-analysis! ns) next!))
+                  (js/Promise.resolve nil)))]
+    (js/Promise.all (into-array (repeatedly (min n (count nses)) next!)))))
+
 (defn apropos
   "A promise of the public vars and macros, ns/name sorted, whose name
   contains query (case-insensitive): of namespace only-ns, or of all the
@@ -571,7 +615,7 @@
   ([query only-ns]
    (let [q    (string/lower-case (str query))
          nses (if only-ns [(str only-ns)] (page-namespaces))]
-     (.then (js/Promise.all (into-array (map load-analysis! nses)))
+     (.then (load-analyses! nses 8)
        (fn [_]
          (->> (for [ns      nses
                     [sym _] (publics ns)

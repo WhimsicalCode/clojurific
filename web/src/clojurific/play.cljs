@@ -288,19 +288,17 @@
   app's namespace and shown in the REPL's log, and the app's. Shows the
   WebMCP badge when the browser has WebMCP."
   []
-  (when (webmcp/model-context)
-    (show-webmcp-badge!
-      (concat (map #(str "cljs_" %) ["eval" "doc" "apropos" "ns_info" "macroexpand" "namespaces"])
-              (map :name app-tools))))
-  (webmcp/register!
-    {:ns          app-ns
-     :on-call     agent-called!
-     :before-eval #(repl/entry! "in agent" % :code {:prefix "agent> "})
-     :after-eval  (fn [_ {:keys [value error]}]
-                    (if error
-                      (repl/entry! "error" error)
-                      (repl/entry! "value" (str value) :code {})))
-     :tools       app-tools}))
+  (let [opts {:ns          app-ns
+              :on-call     agent-called!
+              :before-eval #(repl/entry! "in agent" % :code {:prefix "agent> "})
+              :after-eval  (fn [_ {:keys [value error]}]
+                             (if error
+                               (repl/entry! "error" error)
+                               (repl/entry! "value" (str value) :code {})))
+              :tools       app-tools}]
+    (when (webmcp/model-context)
+      (show-webmcp-badge! (webmcp/tool-names opts)))
+    (webmcp/register! opts)))
 
 (defn init []
   (selfhost/provide-module! "react" react)
@@ -317,5 +315,9 @@
       (.then run-code!)
       (.then register-webmcp!)))
 
-(when (exists? js/document)
-  (init))
+(defonce started
+  ;; once per page load: a hot reload of this namespace doesn't set the page
+  ;; up again (its listeners, the REPL's, the WebMCP tools)
+  (when (exists? js/document)
+    (init)
+    true))

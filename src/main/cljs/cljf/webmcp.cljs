@@ -44,6 +44,13 @@
   (let [v (when input (unchecked-get input k))]
     (when-not (or (undefined? v) (nil? v)) v)))
 
+(defn- limit
+  "A printing limit of the input: default when it's not given, nil (none)
+  when it's null."
+  [^js input k default]
+  (let [v (when input (unchecked-get input k))]
+    (if (undefined? v) default v)))
+
 ;; Evaluating
 
 (defonce ^:private evals
@@ -76,16 +83,17 @@
   [{:keys [ns before-eval after-eval]}]
   (fn [input]
     (let [code (str (or (arg input "code") ""))
-          opts {:ns           (or (arg input "ns") ns)
-                :await        (boolean (arg input "await"))
-                :warnings-ok  (boolean (arg input "warnings_ok"))
-                :print-length (if (some? (arg input "print_length")) (arg input "print_length") 50)
-                :print-level  (if (some? (arg input "print_level")) (arg input "print_level") 8)}
+          ;; the limits nil when none (eval-str's defaults only when absent)
+          opts (cond-> {:await        (boolean (arg input "await"))
+                        :warnings-ok  (boolean (arg input "warnings_ok"))
+                        :print-length (limit input "print_length" 50)
+                        :print-level  (limit input "print_level" 8)}
+                 (or (arg input "ns") ns) (assoc :ns (or (arg input "ns") ns)))
           out  #js []
           err  #js []
           run  (fn []
                  (when before-eval (before-eval code))
-                 (-> (capturing #(selfhost/eval-str code (into {} (remove (comp nil? val)) opts)) out err)
+                 (-> (capturing #(selfhost/eval-str code opts) out err)
                      (.then (fn [r]
                               (when after-eval (after-eval code r))
                               (result-text
@@ -215,6 +223,13 @@
                                   (.catch #(result-text {:error (str (or (ex-message %) %))}))))}
     annotations (doto (unchecked-set "annotations" (clj->js annotations)))))
 
+(defn tool-names
+  "The names of the tools register! registers with opts."
+  ([] (tool-names nil))
+  ([{:keys [prefix] :or {prefix "cljs_"} :as opts}]
+   (vec (concat (map #(str prefix (:name %)) (tools opts))
+                (map :name (:tools opts))))))
+
 (defn register!
   "Registers the self-hosted compiler's tools with WebMCP, named prefix
   (default cljs_) and eval, doc, apropos, ns_info, macroexpand and
@@ -237,7 +252,7 @@
      (let [controller (js/AbortController.)
            all        (concat (map #(update % :name (fn [n] (str prefix n))) (tools opts))
                               (:tools opts))
-           names      (mapv :name all)]
+           names      (tool-names opts)]
        (doseq [t all]
          (let [r (.registerTool mc (js-tool t (:on-call opts)) #js {:signal (.-signal controller)})]
            ;; a promise in document.modelContext, i.e. rejected for a name

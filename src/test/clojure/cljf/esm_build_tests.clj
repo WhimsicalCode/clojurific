@@ -824,9 +824,14 @@
   (let [dir     (temp-dir)
         out     (io/file dir "out")
         sources (into {} [(write-source! dir 'test.selfhost
-                            "(ns test.selfhost (:require [clojure.string :as str]))
+                            "(ns test.selfhost (:require [clojure.string :as str] [goog.string] [test.selfother]))
                              (defonce state (atom {:n 1}))
-                             (defn greet [s] (str \"Hi \" (str/upper-case s)))"
+                             (defn greet [s] (str \"Hi \" (str/upper-case s)))
+                             ;; not in the goog.string shim: the build runs the namespace
+                             ;; with the compatibility layer
+                             (defn esc [s] (goog.string/htmlEscape s))"
+                            (- (System/currentTimeMillis) 60000))
+                          (write-source! dir 'test.selfother "(ns test.selfother) (def a 1)"
                             (- (System/currentTimeMillis) 60000))])
         runner  (io/file dir "run.mjs")]
     (binding [esm/*generated-sources* sources]
@@ -847,7 +852,11 @@
             globalThis.$CLJS_ESM = { nses: new Map(), root: pathToFileURL(out).href };
             await import(pathToFileURL(out + 'test/selfhost.js').href);
             const res = [];
-            for (const f of ['(let [x 1] (-> x inc (* 10)))',
+            for (const f of [// a build's namespace redefined in the page, its analysis
+                             // read after: the page's definitions are kept
+                             '(ns test.selfother) (defn g [] (+ a 6))',
+                             '(g)',
+                             '(let [x 1] (-> x inc (* 10)))',
                              '(vec (for [x (range 4) :when (odd? x)] (* x x)))',
                              '(in-ns (quote test.selfhost))',
                              '(greet \"there\")',
@@ -869,18 +878,22 @@
                              '(throw nil)',
                              // namespaces only defined in the page
                              '(ns test.page) (def x 5)',
-                             '(ns test.page2 (:require [test.page :as p])) p/x']) {
+                             '(ns test.page2 (:require [test.page :as p])) p/x',
+                             // a Closure Library member the shim doesn't have
+                             '(goog.string/htmlEscape \"<\")']) {
               try { res.push(await globalThis.cljs_selfhost_eval(f, { print: true })); }
               catch (e) { res.push('error: ' + e.message); }
             }
             console.log(JSON.stringify(res));"))
-    (is (= ["20" "[1 9]" "nil" "\"Hi THERE\"" "{:n 2}" "#'test.selfhost/twice" "4" ":test.selfhost/k"
+    (is (= ["#'test.selfother/g" "7"
+            "20" "[1 9]" "nil" "\"Hi THERE\"" "{:n 2}" "#'test.selfhost/twice" "4" ":test.selfhost/k"
             "error: Form not evaluated: 1 warning(s)"
             "3" "false"
             "[:test.sh2/k :clojure.string/k]"
             "error: err" ":test.sh3/k"
             "error: lazy" "error: Unknown error"
-            "#'test.page/x" "5"]
+            "#'test.page/x" "5"
+            "\"&lt;\""]
            (json/read-str (last (string/split-lines (string/trim (run-node runner)))))))))
 
 (deftest self-host-macros-with-optimize-constants
@@ -947,6 +960,8 @@
             const call = async (n, input) => JSON.parse(await tools.get(n).execute(input, {}));
             const res = { names,
               eval: await call('cljs_eval', { code: '(println \"out\") (in-ns (quote test.webmcp)) (greet \"there\")' }),
+              limited: await call('cljs_eval', { code: '(range 60)' }),
+              unlimited: await call('cljs_eval', { code: '(range 60)', print_length: null }),
               warned: await call('cljs_eval', { code: '(nope)' }),
               doc: await call('cljs_doc', { symbol: 'greet', ns: 'test.webmcp' }),
               docAlias: await call('cljs_doc', { symbol: 'clojure.string/join' }),
@@ -963,6 +978,9 @@
       (is (= ["cljs_eval" "cljs_doc" "cljs_apropos" "cljs_ns_info" "cljs_macroexpand" "cljs_namespaces"] (get r "names")))
       (testing "eval: the value, the output, the namespace after the forms"
         (is (= {"ns" "test.webmcp" "value" "\"Hi there\"" "out" "out\n"} (get r "eval"))))
+      (testing "eval: print_length 50 unless given, null for none"
+        (is (string/ends-with? (get-in r ["limited" "value"]) "49 ...)"))
+        (is (string/ends-with? (get-in r ["unlimited" "value"]) "58 59)")))
       (testing "eval: warnings, the form not evaluated"
         (is (= "Form not evaluated: 1 warning(s)" (get-in r ["warned" "error"])))
         (is (string/includes? (get-in r ["warned" "warnings" 0 "message"]) "nope")))

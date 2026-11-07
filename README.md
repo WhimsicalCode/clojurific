@@ -352,7 +352,7 @@ A build that requires `cljf.selfhost` evaluates without the REPL: `(cljf.selfhos
 | `cljs_macroexpand` | `macroexpand-1`, `macroexpand` or `all` |
 | `cljs_namespaces` | the namespaces in the page |
 
-- `:prefix` names them (default `cljs_`), `:ns` is the namespace they default to, `:tools` adds a page's own tools (maps of `:name`, `:description`, `:inputSchema`, `:annotations` and `:execute`), `:before-eval` and `:after-eval` show the agent's forms in the page, and `:on-call` is called with a tool's name and input whenever an agent calls one.
+- `:prefix` names them (default `cljs_`), `:ns` is the namespace they default to, `:tools` adds a page's own tools (maps of `:name`, `:description`, `:inputSchema`, `:annotations` and `:execute`), `:before-eval` and `:after-eval` show the agent's forms in the page, and `:on-call` is called with a tool's name and input whenever an agent calls one. `(cljf.webmcp/tool-names opts)` returns the names it registers.
 - It returns a function unregistering them. Without WebMCP it does nothing and returns `nil`.
 - WebMCP is a proposed standard: Chrome has it behind an [origin trial](https://developer.chrome.com/origintrials/#/register_trial/4163014905550602241) (a token in the page's `<meta http-equiv="origin-trial">`), or `chrome://flags/#enable-webmcp-testing` locally.
 - `cljs_eval` runs any code in the page, with its origin's access. Register it where the page has nothing an agent acting for its user shouldn't reach.
