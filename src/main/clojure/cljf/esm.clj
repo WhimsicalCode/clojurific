@@ -198,7 +198,17 @@
             opts (-> opts (dissoc :optimize-constants :emit-constants) (assoc :macros-ns true))]
         (binding [ana/*cljs-warnings* (zipmap (keys ana/*cljs-warnings*) (repeat false))
                   env/*compiler*      (atom (update @env/*compiler* :options dissoc :optimize-constants :emit-constants))]
-          (comp/compile-file src (io/file output-dir out) opts))))))
+          (comp/compile-file src (io/file output-dir out) opts))
+        ;; the analysis cache of the macros namespace (for the macros' arities),
+        ;; which the compiler writes under the namespace's name (cljf/jsx.cljc,
+        ;; cljs.core's excepted), where the self-hosted compiler fetches it:
+        ;; cljf/jsx$macros.cljc.cache.json
+        (let [ext     (#'ana/cache-analysis-ext)
+              written (io/file (str (util/to-target-file output-dir {:ns ns :source-file src} "cljc") ".cache." ext))
+              cache   (io/file output-dir (str (subs out 0 (- (count out) 3)) ".cljc.cache." ext))]
+          (when (and (.exists written) (not= written cache))
+            (java.nio.file.Files/move (.toPath written) (.toPath cache)
+              (into-array [java.nio.file.StandardCopyOption/REPLACE_EXISTING]))))))))
 
 (defn- install-goog-shims [{:keys [output-dir]}]
   (doseq [path goog-shims]

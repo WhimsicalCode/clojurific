@@ -983,8 +983,10 @@
     (stub-jsx-runtime! dir "react")
     (binding [esm/*generated-sources* sources]
       (esm/build {:main 'test.selfjsx :output-dir (str out) :esm-repl true :self-host true}))
-    (testing "cljf.jsx's macros module"
-      (is (.exists (io/file out "cljf" "jsx$macros.js"))))
+    (testing "cljf.jsx's macros module, and its analysis where the self-hosted compiler fetches it"
+      (is (.exists (io/file out "cljf" "jsx$macros.js")))
+      (is (.exists (io/file out "cljf" "jsx$macros.cljc.cache.json")))
+      (is (not (.exists (io/file out "cljf" "jsx.cljc.cache.json")))))
     (spit runner
       (str "import fs from 'node:fs';
             import { pathToFileURL } from 'node:url';
@@ -1006,12 +1008,14 @@
                              '(js/JSON.stringify #js [(.-props #x [Hi {:n 1}]) (Hi #js {:n 2})])',
                              '(ns app.lib (:require [\"lib\" :as lib]))',
                              '(lib/twice 21)',
-                             '(ns app.nope (:require [\"nope\" :as nope]))']) {
+                             '(ns app.nope (:require [\"nope\" :as nope]))',
+                             // the macros' arities are checked, from their analysis
+                             '(cljf.jsx/x [:p] [:p])']) {
               try { res.push(await globalThis.cljs_selfhost_eval(f, { print: true })); }
               catch (e) { res.push('error: ' + e.message); }
             }
             console.log(JSON.stringify(res));"))
-    (let [[in-js el defn' type ns' v nope] (json/read-str (last (string/split-lines (string/trim (run-node runner)))))]
+    (let [[in-js el defn' type ns' v nope arity] (json/read-str (last (string/split-lines (string/trim (run-node runner)))))]
       (testing "#x in a #js literal, the first form with #x"
         (is (= "1" in-js)))
       (testing "#x in a namespace without cljf.jsx, which requires it"
@@ -1024,4 +1028,6 @@
         (is (= "nil" ns'))
         (is (= "42" v)))
       (testing "other npm modules"
-        (is (string/starts-with? nope "error: npm module nope isn't in the page"))))))
+        (is (string/starts-with? nope "error: npm module nope isn't in the page")))
+      (testing "#x's arity"
+        (is (re-find #"(?i)wrong number of args" arity) arity)))))

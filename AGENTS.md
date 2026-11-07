@@ -18,9 +18,16 @@ and the fork's own are `cljf.*` (`cljf.esm`, `cljf.x`). Read
 - `src/main/cljs/cljf/esm/` — runtime support: `goog.js`, `lazy`, `node_test`, `karma`
 - `src/main/cljs/cljf/x.clj` — extensions to ClojureScript (`defclass`, over the analyzer's `class*`
   and `super*`)
-- `src/main/cljs/cljf/jsx.clj`, `jsx.cljs` — `#x` / `#jsx` literals (reader tags in
+- `src/main/cljs/cljf/jsx.cljc`, `jsx.cljs` — `#x` / `#jsx` literals (reader tags in
   `cljs/tagged_literals.cljc`): hiccup compiled to `react/jsx-runtime` calls, and the runtime
-  conversions of what the macro can't see into
+  conversions of what the macro can't see into. The macros are `.cljc`: `:self-host` also compiles
+  them as ClojureScript
+- `src/main/cljs/cljf/selfhost.cljs` — the self-hosted compiler (`:self-host`): compiles and evaluates
+  forms in the page, reading the build's analysis caches; `src/main/cljs/cljf/webmcp.cljs` registers
+  its tools with WebMCP for agents in the browser
+- `web/` — the clojurific.dev website and its playground (`/play/`), a Vite project built with this
+  compiler and deployed to GitHub Pages by `.github/workflows/web.yml`, see
+  [`web/README.md`](web/README.md)
 - `src/main/js/` — the npm package `clojurific` (its `package.json`); `script/package-npm` packs it
   with `no-clojurescript/`. It has no compiler: the launcher gets `com.whimsical/clojurific` of its
   version from Clojars, or the fork's sources when run from this repository

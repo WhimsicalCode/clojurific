@@ -191,7 +191,7 @@
                (when error (entry! "error" error))
                (set! (.-textContent ($ "prompt")) (str ns ">"))
                (when-let [code (.get (js/URLSearchParams. (.-search js/location)) "code")]
-                 (let [input ($ "input")]
-                   (set! (.-value input) code)
-                   (resize!)
-                   (.focus input)))))))
+                 ;; not focused: a link's code runs only once the user chooses
+                 ;; to, clicking the input and pressing Enter
+                 (set! (.-value ($ "input")) code)
+                 (resize!))))))
