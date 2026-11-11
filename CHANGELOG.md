@@ -11,6 +11,8 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 - `cljf.webmcp/register!` registers the self-hosted compiler's tools (`cljs_eval`, `cljs_doc`, `cljs_apropos`, `cljs_ns_info`, `cljs_macroexpand`, `cljs_namespaces`) with WebMCP, for agents in the browser, and a page's own tools; `cljf.selfhost` has the lookups (`doc`, `apropos`, `ns-info`, `macroexpand-str`, `namespaces`).
 
+- The Vite plugin's dev server pages show its status in their bottom left corner, like shadow-cljs' HUD: the modules a page is loading, a compile in progress, a hot reload's modules applied, and the dev server or its compiler gone. `hud: false` turns it off.
+
 ## 0.12.15 [2026-11-04]
 
 ### Added

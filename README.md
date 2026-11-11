@@ -161,6 +161,8 @@ The plugin needs Vite 8, which the templates use and the plugin is tested with. 
 
 The plugin (`clojurific/vite`) runs the compiler: a one-shot build for `vite build` (the main namespaces are the bundle's entry points) and watch mode for `vite`. Compile errors go to Vite's error overlay. In watch mode Vite's file watcher reports changed sources to the compiler, and hot updates wait for the compile and its build hooks to finish. Like shadow-cljs, compiler warnings are shown in the overlay too, and hot reloading pauses while any namespace has warnings: the output held back is reloaded once they're fixed. Pages loaded meanwhile show the overlay of the current error or warnings. The `ignoreWarnings` option switches the pause off, like shadow-cljs' `:devtools {:ignore-warnings true}`: the warnings then go to the terminal only. The `ssrEntries` run once they're compiled either way, a warning is no error: the HTML pages a server entry serves (those loading `@vite/client`) show the overlay, its other responses (i.e. JSON) only the terminal's line.
 
+Like shadow-cljs' HUD, the dev server's pages show its status in their bottom left corner: the modules a page is loading (with a percentage of the last load's count), a compile in progress with its seconds, a hot reload's modules applied, and the dev server or its compiler gone. It shows after 300ms, so quick hot reloads don't flash it. It's a module (`hud.js`) the plugin adds before the pages' scripts, in `index.html` and in the dev manifest; the `hud: false` option leaves it out.
+
 ```ts
 // vite.config.ts
 import { defineConfig } from 'vite';
@@ -189,6 +191,7 @@ The plugin has TypeScript types (`vite-plugin-cljs/index.d.ts`): a `vite.config.
 | `replSocket` | the REPL in bundles of `vite build --watch`, i.e. a Node.js server's worker threads: `true` or `{ port, host }`, see [Worker threads](#worker-threads), defaults to `false` |
 | `replRemoteConsole` | accepts `cljs_eval` from pages on other machines too, defaults to `false` |
 | `ignoreWarnings` | hot reloads despite compiler warnings, which then go to the terminal only (the compiled line counts all namespaces' outstanding warnings), defaults to `false` |
+| `hud` | the dev server's pages show its status (loading, compiling, hot reloading), defaults to `true` |
 
 The plugin starts the compiler with the launcher, on the classpath of the project's `deps.edn` with `aliases`. `command` starts it with another command instead, e.g. the Clojure CLI's `['clojure', '-M:cljs']`; cljf.esm's arguments follow it.
 

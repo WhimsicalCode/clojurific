@@ -27,6 +27,8 @@ const NPM_AS = 'cljs-npm-as:';
 // the dev server serves as an import of its compiled module
 const SOURCE = 'cljs-source:';
 const SOURCE_FILE = /\.clj[sc]$/;
+// the dev server's status badge (hud.js), served as a virtual module
+const HUD = '\0cljf-hud';
 
 // The namespace of a ClojureScript source file, from its ns form
 async function sourceNamespace(file) {
@@ -481,6 +483,9 @@ function hotUpdateCompiled(environment, mods, timestamp) {
  *   compiler compiles, running its macros) from pages on other hosts too,
  *   defaults to false: only from this machine. A proxy in front of the dev
  *   server must set X-Real-IP to the client's address.
+ * @param {boolean} [options.hud] the dev server's pages show its status in
+ *   a corner (hud.js): modules loading, compiling, a hot reload applied,
+ *   the dev server or compiler gone. Defaults to true.
  */
 export default function cljf(options) {
   const manifestName = options.manifest ?? 'manifest.json';
@@ -502,6 +507,9 @@ export default function cljf(options) {
   const localModules = new Set();
   // the compiler warnings, which hold hot updates back (see warnings.js)
   const warnings = watchWarnings({ ignoreWarnings: options.ignoreWarnings });
+  const hud = options.hud !== false;
+  // the dev server's pages load hud.js before their scripts
+  const hudUrl = () => `${config.base}@id/__x00__${HUD.slice(1)}`;
 
     // The REPL (cljf.esm.repl): pages running the build (cljf.esm.repl-runtime)
   // say hello over Vite's websocket, modules the ssr environment's runner
@@ -946,6 +954,7 @@ export default function cljf(options) {
     // :npm-interop :shadow, ["pkg" :as x] binds module.exports of CommonJS
     // modules and the namespace of ES modules, like shadow-cljs
     async resolveId(source, importer, opts) {
+      if (source === HUD && config.command === 'serve') return HUD;
       // A ClojureScript source: its compiled module, as a module importing it
       // when serving, which a page loading it by its source's URL and the
       // modules importing it by its own share
@@ -978,6 +987,7 @@ export default function cljf(options) {
     },
 
     async load(id) {
+      if (id === HUD) return fs.readFile(fileURLToPath(new URL('./hud.js', import.meta.url)), 'utf8');
       // The dev server's server environments (ssr, worker threads) run
       // modules with Vite's module runner, which would run a CommonJS npm
       // module as an ES module, without its exports: Node.js loads it
@@ -1141,13 +1151,14 @@ export default function cljf(options) {
       order: 'pre',
       async handler(html, { filename }) {
         if (config.command !== 'serve') return html;
+        const tags = hud ? [{ tag: 'script', attrs: { type: 'module', src: hudUrl() }, injectTo: 'head-prepend' }] : [];
         const replacements = await Promise.all(
           // with a query or fragment, which the compiled module's URL keeps
           [...html.matchAll(/(<script\b[^>]*\bsrc\s*=\s*["'])([^"'?#]+\.clj[sc])([?#][^"']*)?(["'])/gi)].map(async match => {
             const file = match[2].startsWith('/') ? path.join(config.root, match[2]) : path.resolve(path.dirname(filename), match[2]);
             return [match[0], match[1] + devUrl(await compiledModule(file)) + (match[3] ?? '') + match[4]];
           }));
-        return replacements.reduce((result, [from, to]) => result.replace(from, to), html);
+        return { html: replacements.reduce((result, [from, to]) => result.replace(from, to), html), tags };
       },
     },
 
@@ -1254,6 +1265,18 @@ export default function cljf(options) {
         server.ws.send(problem);
       };
       server.ws.on('connection', socket => problem && socket.send(JSON.stringify(problem)));
+      // The pages' status badge (hud.js): whether a compile is running, since
+      // when, and whether the compiler exited. Sent to every page as it
+      // changes, and to a page asking as it starts.
+      let compileStart = null;
+      let compilerStopped = false;
+      const hudStatus = () => ({
+        compiling: compileStart !== null,
+        elapsed: compileStart === null ? 0 : Date.now() - compileStart,
+        stopped: compilerStopped,
+      });
+      const sendHud = () => hud && server.ws.send('cljf:hud', hudStatus());
+      server.ws.on('cljf:hud', (data, client) => hud && client.send('cljf:hud', hudStatus()));
       // the build info createWorker resolves :js-entries names with, read
       // after each compile
       let devInfo = null;
@@ -1361,6 +1384,8 @@ export default function cljf(options) {
         }
         if (event.type === 'compiling') {
           compiling = new Promise(resolve => (compiled = resolve));
+          compileStart = Date.now();
+          sendHud();
           return;
         }
         // before the hot updates waiting for the compile
@@ -1370,12 +1395,14 @@ export default function cljf(options) {
         const files = (event.files ?? []).map(file => normalizePath(file));
         for (const file of files) recompiled.add(file);
         compiled();
+        compileStart = null;
+        sendHud();
         // The dev manifest, the pages' scripts, is written after the first
         // compile even if it failed: pages then show the error overlay.
         const info = await buildInfo();
         if (info) {
           await writeManifest(Object.fromEntries(Object.entries(info.main).map(([ns, file]) =>
-            [ns, { scripts: [`${config.base}@vite/client`, devUrl(file)], preload: [] }])));
+            [ns, { scripts: [`${config.base}@vite/client`, ...(hud ? [hudUrl()] : []), devUrl(file)], preload: [] }])));
         }
         if (held?.outstanding.length) {
           const { outstanding } = held;
@@ -1436,6 +1463,9 @@ export default function cljf(options) {
         if (stopping) return;
         const message = `ClojureScript watch exited (${signal ?? code}): no more compiles or hot reloads, restart the dev server`;
         config.logger.error(`[cljf] ${message}`, { timestamp: true });
+        compileStart = null;
+        compilerStopped = true;
+        sendHud();
         readyResolve();
         compilerExited(new Error(message));
       });

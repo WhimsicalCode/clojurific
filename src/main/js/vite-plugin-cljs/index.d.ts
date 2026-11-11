@@ -121,6 +121,8 @@ export interface CljfOptions {
   replRemoteConsole?: boolean;
   /** Hot reload despite compiler warnings, like shadow-cljs' `:devtools {:ignore-warnings true}`: they go to the terminal only, defaults to false (hot reload pauses while any namespace has warnings, and the overlay shows them). */
   ignoreWarnings?: boolean;
+  /** The dev server's pages show its status in a corner, like shadow-cljs' HUD: modules loading, compiling, hot reloading, the dev server or compiler gone. Defaults to true. */
+  hud?: boolean;
 }
 
 /** The Vite plugin compiling ClojureScript to ES modules. */
