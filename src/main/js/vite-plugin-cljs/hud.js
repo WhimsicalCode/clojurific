@@ -13,38 +13,34 @@ const LINGER = 600;
 const MODULES_KEY = 'cljf-hud:modules';
 
 /**
- * The badge of status s: its text and whether it spins, null hides it.
+ * The badge's text for status s, null hides it.
  * s: {stopped, disconnected, compiling (ms since it started, else null),
  * reloading {done, total}, loading {done, expected}}, the first set wins.
  */
 export function view(s) {
-  if (s.stopped) return { text: 'ClojureScript watch stopped', busy: false };
-  if (s.disconnected) return { text: 'Dev server disconnected', busy: false };
+  if (s.stopped) return 'ClojureScript watch stopped';
+  if (s.disconnected) return 'Dev server disconnected';
   if (s.compiling != null) {
     const seconds = Math.floor(s.compiling / 1000);
-    return { text: seconds ? `Compiling… ${seconds}s` : 'Compiling…', busy: true };
+    return seconds ? `Compiling… ${seconds}s` : 'Compiling…';
   }
   if (s.reloading) {
     const { done, total } = s.reloading;
-    return { text: `Reloading ${Math.min(done, total)}/${total}`, busy: true };
+    return `Reloading ${Math.min(done, total)}/${total}`;
   }
   if (s.loading) {
     const { done, expected } = s.loading;
     const percent = expected ? ` (${Math.min(99, Math.floor((done / expected) * 100))}%)` : '';
-    return { text: `Loading modules… ${done.toLocaleString('en-US')}${percent}`, busy: true };
+    return `Loading modules… ${done.toLocaleString('en-US')}${percent}`;
   }
   return null;
 }
 
 const STYLE = `
   :host { all: initial; position: fixed; left: 8px; bottom: 8px; z-index: 2147483647; pointer-events: none; }
-  div { display: flex; align-items: center; gap: 7px; padding: 5px 11px 5px 9px; border-radius: 14px;
+  div { padding: 5px 11px; border-radius: 14px;
         background: rgba(24, 24, 27, 0.88); color: #fff; border: 1px solid rgba(255, 255, 255, 0.3); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
         font: 500 12px/16px system-ui, -apple-system, sans-serif; font-variant-numeric: tabular-nums; }
-  span.spinner { width: 10px; height: 10px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.3);
-                 border-top-color: #fff; animation: spin 0.8s linear infinite; }
-  [hidden] { display: none; }
-  @keyframes spin { to { transform: rotate(360deg); } }
 `;
 
 function start(hot) {
@@ -53,20 +49,19 @@ function start(hot) {
   // the compile's start, in this page's clock
   let compileStart = null;
 
-  let host, text, spinner, showTimer, hideTimer, frame;
+  let host, badge, showTimer, hideTimer, frame;
   const element = () => {
     if (host) return;
     host = document.createElement('cljf-hud');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>${STYLE}</style><div role="status"><span class="spinner"></span><span class="text"></span></div>`;
-    spinner = root.querySelector('.spinner');
-    text = root.querySelector('.text');
+    root.innerHTML = `<style>${STYLE}</style><div role="status"></div>`;
+    badge = root.querySelector('div');
   };
   const render = () => {
     frame = null;
     s.compiling = compileStart === null ? null : performance.now() - compileStart;
     const v = view(s);
-    if (!v) {
+    if (v === null) {
       clearTimeout(showTimer);
       showTimer = null;
       if (host?.isConnected) {
@@ -80,8 +75,7 @@ function start(hot) {
     clearTimeout(hideTimer);
     hideTimer = null;
     if (host?.isConnected) {
-      text.textContent = v.text;
-      spinner.hidden = !v.busy;
+      badge.textContent = v;
     } else if (!showTimer) {
       showTimer = setTimeout(() => {
         showTimer = null;
