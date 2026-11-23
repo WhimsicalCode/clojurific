@@ -567,6 +567,44 @@
     (.waitFor proc)
     out))
 
+(deftest the-generated-test-runner-runs-the-block-its-runner-returns
+  (let [dir     (temp-dir)
+        ;; Outside dir: a watched directory holding the output isn't watched
+        out     (str (temp-dir))
+        ms      (- (System/currentTimeMillis) 60000)
+        test-ns (fn [ns]
+                  (write-source! dir ns
+                    (str "(ns " ns " (:require [cljs.test :refer [deftest]]))
+                          (deftest t (js/console.log \"ran " ns "\"))")
+                    ms))
+        sources (into {} [(test-ns 'test.a-test)
+                          (test-ns 'test.b-test)
+                          (write-source! dir 'test.run
+                            "(ns test.run (:require [cljs.test :as ct]))
+                             (defn start [run-tests]
+                               (run-tests (ct/empty-env))
+                               (js/console.log \"wrapped:\")
+                               (run-tests (ct/empty-env)
+                                          (fn [block]
+                                            (interpose (fn [] (js/console.log \"between\")) block))))"
+                            ms)])]
+    ;; Generates the runner as a :test-runner build does, which looks its
+    ;; sources up on the classpath rather than in *generated-sources*.
+    (binding [esm/*generated-sources* (merge sources
+                                             (#'esm/generate-test-runner
+                                               {:output-dir out
+                                                :watch-dirs [(str dir)]
+                                                :test-runner {:ns 'test.runner :runner 'test.run/start}}))]
+      (esm/build {:main 'test.runner :output-dir out}))
+    (let [[plain wrapped] (string/split (run-node (io/file out "test" "runner.js")) #"wrapped:")
+          runs #(re-seq #"ran test\.\w+-test" %)]
+      (testing "run-tests given an env runs every test namespace"
+        (is (= ["ran test.a-test" "ran test.b-test"] (runs plain))))
+      (testing "given a fn of the block too, it runs the block the fn returns"
+        (is (= ["ran test.a-test" "ran test.b-test"] (runs wrapped)))
+        (is (re-find #"ran test\.a-test[\s\S]*between[\s\S]*ran test\.b-test" wrapped))
+        (is (not (string/includes? plain "between")))))))
+
 (deftest jsx-import-source-picks-the-jsx-runtime
   (let [dir     (temp-dir)
         ms      (- (System/currentTimeMillis) 60000)

@@ -11,7 +11,13 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 - `cljf.webmcp/register!` registers the self-hosted compiler's tools (`cljs_eval`, `cljs_doc`, `cljs_apropos`, `cljs_ns_info`, `cljs_macroexpand`, `cljs_namespaces`) with WebMCP, for agents in the browser, and a page's own tools; `cljf.selfhost` has the lookups (`doc`, `apropos`, `ns-info`, `macroexpand-str`, `namespaces`).
 
+- The generated `:test-runner`'s `run-tests` takes an optional function of the `cljs.test` block it runs, letting runners add steps between tests.
+
 - The Vite plugin's dev server pages show its status in their bottom left corner, like shadow-cljs' HUD: the modules a page is loading, a compile in progress, a hot reload's modules applied, and the dev server or its compiler gone. `hud: false` turns it off.
+
+### Fixed
+
+- `cljf.esm.karma/start` yields the event loop between tests once a second. `cljs.test` only yields when an async test waits, so a long run of synchronous tests kept the browser from answering Karma's socket ping, and Karma dropped it (`Disconnected reconnect failed before timeout ... (ping timeout)`).
 
 ## 0.12.15 [2026-11-04]
 

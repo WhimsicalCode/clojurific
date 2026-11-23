@@ -94,10 +94,43 @@
 (defmethod ct/report [::karma :end-run-tests] [_]
   (js/__karma__.complete #js {}))
 
+(def ^:private yield-after-ms
+  "How long the tests may run without yielding the event loop. Karma drops a
+  browser that doesn't answer its socket's ping within its pingTimeout, 5 s
+  by default, and cljs.test only yields when an async test waits."
+  1000)
+
+(defn- yielding
+  "Interposes a step that yields the event loop, once `yield-after-ms` have
+  passed since the last yield, between the steps of `block` and of the blocks
+  its steps return: between test namespaces and test vars. A namespace with
+  function fixtures runs its tests in one step, which this can't split."
+  [block]
+  (let [last-yield (volatile! (now))
+        yield (fn []
+                (when (< yield-after-ms (- (js/Date.now) @last-yield))
+                  (ct/async done
+                    (js/setTimeout (fn []
+                                     (vreset! last-yield (js/Date.now))
+                                     (done))
+                                   0))))]
+    ((fn interpose-yields [block]
+       (interpose yield
+                  (map (fn [step]
+                         (fn []
+                           (let [result (step)]
+                             (if (:cljs.test/block? (meta result))
+                               (ct/block (interpose-yields result))
+                               result))))
+                       block)))
+     block)))
+
 (defn start
-  "Runs the tests (run-tests, given a cljs.test env) once Karma has started."
+  "Runs the tests (run-tests, given a cljs.test env) once Karma has started,
+  yielding the event loop between tests so that Karma keeps the
+  browser connected."
   [run-tests]
-  (let [run #(run-tests (ct/empty-env ::karma))]
+  (let [run #(run-tests (ct/empty-env ::karma) yielding)]
     (if (unchecked-get js/window "__karmaStarted")
       (run)
       (unchecked-set js/window "__karmaRun" run))))
