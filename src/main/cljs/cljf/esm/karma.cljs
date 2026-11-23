@@ -100,18 +100,30 @@
   by default, and cljs.test only yields when an async test waits."
   1000)
 
+(defn- yield-point?
+  "Can the tests yield here? Only while an env is installed: between test
+  namespaces, a test's late report would go to a fresh env, not to Karma. And
+  not in a namespace with map fixtures, whose :before, test and :after are
+  separate steps, between which cljs.test doesn't yield either."
+  []
+  (when-let [env ct/*current-env*]
+    (not-any? #(some map? %)
+              (concat (vals (:once-fixtures env)) (vals (:each-fixtures env))))))
+
 (defn- yielding
   "Interposes a step that yields the event loop, once `yield-after-ms` have
   passed since the last yield, between the steps of `block` and of the blocks
-  its steps return: between test namespaces and test vars. A namespace with
-  function fixtures runs its tests in one step, which this can't split."
+  its steps return: between test namespaces and test vars, where
+  `yield-point?`. A namespace with function fixtures runs its tests in one
+  step, which this can't split."
   [block]
   (let [last-yield (volatile! (now))
         yield (fn []
-                (when (< yield-after-ms (- (js/Date.now) @last-yield))
+                (when (and (< yield-after-ms (- (now) @last-yield))
+                           (yield-point?))
                   (ct/async done
                     (js/setTimeout (fn []
-                                     (vreset! last-yield (js/Date.now))
+                                     (vreset! last-yield (now))
                                      (done))
                                    0))))]
     ((fn interpose-yields [block]
