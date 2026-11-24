@@ -1475,6 +1475,35 @@ export default function cljf(options) {
       };
       server.httpServer?.once('close', stop);
       process.once('exit', stop);
+      // Vite inlines a served module's source map as base64. The compiled
+      // namespaces' maps embed their ClojureScript sources: inlined, they're
+      // about half of what a page loads, though only DevTools reads them.
+      // Compiled namespaces link their maps instead, which Vite serves at the
+      // module's path + .map; one without a map of its own (goog's shims)
+      // gets none rather than Vite's placeholder, a copy of its code. A
+      // module the graph can't answer for there (i.e. requested with another
+      // query, or invalidated while transformed) keeps its inline map.
+      const compiledPrefix = devUrl('') + '/';
+      const inlineMap = /\n\/\/# sourceMappingURL=data:application\/json;base64,[A-Za-z0-9+/=]*$/;
+      server.middlewares.use((req, res, next) => {
+        const pathname = req.url.split('?')[0];
+        if (!pathname.startsWith(compiledPrefix) || !pathname.endsWith('.js')) return next();
+        const end = res.end;
+        res.end = function (chunk, ...args) {
+          const unchanged = () => end.call(this, chunk, ...args);
+          if (typeof chunk !== 'string' || !inlineMap.test(chunk)) return unchanged();
+          server.environments.client.moduleGraph.getModuleByUrl(pathname.slice(config.base.length - 1))
+            .then(module => {
+              const result = module?.transformResult;
+              if (!result) return unchanged();
+              end.call(this, chunk.replace(inlineMap, result.map
+                ? `\n//# sourceMappingURL=${path.posix.basename(pathname)}.map`
+                : ''), ...args);
+            }, unchanged);
+          return this;
+        };
+        next();
+      });
       // hold requests until the initial compile finished
       server.middlewares.use(async (req, res, next) => {
         await initialBuild;

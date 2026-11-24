@@ -5,6 +5,10 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.17 [Next]
 
+### Changed
+
+- The Vite plugin's dev server links compiled namespaces' source maps (`//# sourceMappingURL=<module>.js.map`) instead of the base64 copies Vite inlines, which embed the ClojureScript sources and were about half of what a page loaded. DevTools fetches them only when open. Namespaces without a map of their own (Closure Library shims) get none rather than Vite's placeholder, a copy of their code.
+
 ## 0.12.16 [2026-11-24]
 
 ### Added
