@@ -3,7 +3,7 @@
 Changes since Clojurific was forked from ClojureScript. For ClojureScript's own
 releases, see its [changelog](https://github.com/clojure/clojurescript/blob/master/changes.md).
 
-## 0.12.16 [Next]
+## 0.12.16 [2026-11-24]
 
 ### Added
 
@@ -18,6 +18,8 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 ### Fixed
 
 - `cljf.esm.karma/start` yields the event loop between tests once a second. `cljs.test` only yields when an async test waits, so a long run of synchronous tests kept the browser from answering Karma's socket ping, and Karma dropped it (`Disconnected reconnect failed before timeout ... (ping timeout)`).
+- A page could load a second instance of namespaces it already ran, i.e. when a hot reloaded namespace gained a require, whose top level ran again without the first instance's values: `defmulti`s came back empty and record types were redefined until the page was reloaded. Vite gave the importers of a hot updated namespace the update's timestamp, which later imports of them used, though the page keeps running their instances. The Vite plugin now hot updates compiled namespaces in pages itself, stamping only the updated namespace.
+- The dependents the watch recompiled after a namespace's API changed often weren't hot reloaded: their output keeps its unchanged source's modification time, so Vite's file watcher didn't report the rewrite, and pages kept running code compiled against the old API (i.e. a direct call of an arity that no longer exists). The Vite plugin now hot updates the namespaces a compile wrote from its compiled event, together in one update. Those a compile wrote before failing (its error event reports them) are held back until a compile succeeds.
 
 ## 0.12.15 [2026-11-04]
 
@@ -32,8 +34,6 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 ### Fixed
 
 - `:closure-defines` didn't set `goog-define` vars in ES module output: they kept their default, as the compiler looked for a `@define` jsdoc the macro doesn't attach to the var.
-- A page could load a second instance of namespaces it already ran, i.e. when a hot reloaded namespace gained a require, whose top level ran again without the first instance's values: `defmulti`s came back empty and record types were redefined until the page was reloaded. Vite gave the importers of a hot updated namespace the update's timestamp, which later imports of them used, though the page keeps running their instances. The Vite plugin now hot updates compiled namespaces in pages itself, stamping only the updated namespace.
-- The dependents the watch recompiled after a namespace's API changed often weren't hot reloaded: their output keeps its unchanged source's modification time, so Vite's file watcher didn't report the rewrite, and pages kept running code compiled against the old API (i.e. a direct call of an arity that no longer exists). The Vite plugin now hot updates the namespaces a compile wrote from its compiled event, together in one update. Those a compile wrote before failing (its error event reports them) are held back until a compile succeeds.
 
 ## 0.12.14 [2026-11-04]
 
