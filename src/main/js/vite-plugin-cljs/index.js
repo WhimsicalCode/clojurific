@@ -12,6 +12,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { compilerCommand } from '../cljf/launcher.js';
 import { pruneChunks, propertyRenames } from './prune.js';
@@ -29,6 +30,9 @@ const SOURCE = 'cljs-source:';
 const SOURCE_FILE = /\.clj[sc]$/;
 // the dev server's status badge (hud.js), served as a virtual module
 const HUD = '\0cljf-hud';
+// a REPL form evaluated as a module (see evalModule), served once to the dev
+// server's server environments
+const EVAL_MODULE = 'cljf-repl-eval:';
 
 // The namespace of a ClojureScript source file, from its ns form
 async function sourceNamespace(file) {
@@ -533,8 +537,10 @@ export default function cljf(options) {
   const toRepl = msg => proc?.stdin.writable && proc.stdin.write(`repl ${JSON.stringify(msg)}\n`);
   // A runtime's connection: receive takes the data of its cljs:repl events
   // for the REPL, close says bye. send replies to it, consoleAllowed whether
-  // it may cljs_eval.
-  const connectRuntime = (send, consoleAllowed) => {
+  // it may cljs_eval, evalModules whether it runs in a module runner of the
+  // dev server, which imports the forms it can't evaluate from strings (see
+  // evalModule).
+  const connectRuntime = (send, consoleAllowed, evalModules = false) => {
     let id;
     const receive = data => {
       // a page can't send the plugin's own messages, see runtimeMessage
@@ -554,7 +560,7 @@ export default function cljf(options) {
             if (tabIds.size > MAX_TAB_IDS) tabIds.delete(tabIds.keys().next().value);
           }
         }
-        runtimes.set(id, send);
+        runtimes.set(id, evalModules && data.evalStrings === false ? msg => send(evalModule(msg)) : send);
       }
       if (id === undefined) return;
       if (data.op === 'hello') {
@@ -575,6 +581,27 @@ export default function cljf(options) {
       if (id !== undefined && runtimes.delete(id)) toRepl({ op: 'bye', runtime: id });
     };
     return { receive, close };
+  };
+
+  // REPL forms as modules, for runtimes that can't evaluate strings (workerd
+  // disallows new Function, its module runner evaluates with a binding of its
+  // own): an eval message gets the specifier of a module exporting the form
+  // as a function of its references, which its runtime imports once
+  const evalModuleCode = new Map();
+  const evalModule = msg => {
+    if (msg?.op !== 'eval') return msg;
+    const key = randomUUID();
+    const params = (msg.refs ?? []).map(([alias]) => alias).join(', ');
+    // the form from the third line on, as new Function puts it, which its
+    // source map (cljf.esm.repl/snippet-source-map) expects
+    evalModuleCode.set(key, `export default function (${params}\n) {\n${msg.code}\n}\n`);
+    const { code, ...rest } = msg;
+    // named after the form's sourceURL (cljs-repl/<ns>-<n>.js), which the
+    // REPL maps a stack trace's locations of to the form's source
+    const sourceURL = code.match(/\/\/# sourceURL=(\S+)/)?.[1];
+    // Vite's URL of a virtual module: a bare specifier with a scheme would
+    // be externalized, like node:fs
+    return { ...rest, module: `/@id/__x00__${EVAL_MODULE}${key}${sourceURL ? `/${sourceURL}` : ''}` };
   };
 
   // a compiler's repl-send event: the message to its runtime
@@ -955,6 +982,26 @@ export default function cljf(options) {
     // modules and the namespace of ES modules, like shadow-cljs
     async resolveId(source, importer, opts) {
       if (source === HUD && config.command === 'serve') return HUD;
+      if (source.startsWith('\0' + EVAL_MODULE) && config.command === 'serve') return source;
+      // A compiled module imported by its path, i.e. a :js-entries module by
+      // a server's entry file (a Worker's main): resolved once the dev
+      // server's first compile wrote it, which a server importing its entry
+      // as Vite starts would otherwise miss. A server environment's once a
+      // compile succeeded: after a failed first compile its output is missing
+      // or stale, and a server failing to import it (workerd's, as Vite
+      // starts) would stop the dev server, and the watch with it, rather
+      // than wait for the fix. The pages' once the first compile finished,
+      // which shows them its error.
+      if (config.command === 'serve' && !source.startsWith('\0')) {
+        const file = source.split(/[?#]/)[0];
+        const target = file.startsWith('.') && importer && !importer.startsWith('\0')
+          ? path.resolve(path.dirname(importer.split('?')[0]), file)
+          : path.isAbsolute(file) && file.startsWith(outputDir + path.sep) ? file
+          : file.startsWith('/') ? path.join(root, file) : null;
+        if (target?.startsWith(outputDir + path.sep)) {
+          await (serverEnvironment(this) ? successfulCompile : initialCompile).catch(() => {});
+        }
+      }
       // A ClojureScript source: its compiled module, as a module importing it
       // when serving, which a page loading it by its source's URL and the
       // modules importing it by its own share
@@ -988,6 +1035,13 @@ export default function cljf(options) {
 
     async load(id) {
       if (id === HUD) return fs.readFile(fileURLToPath(new URL('./hud.js', import.meta.url)), 'utf8');
+      if (id.startsWith('\0' + EVAL_MODULE)) {
+        const key = id.slice(EVAL_MODULE.length + 1).split('/')[0];
+        const code = serverEnvironment(this) && evalModuleCode.get(key);
+        evalModuleCode.delete(key);
+        if (!code) this.error(`${id.slice(1)} is no REPL form waiting to be evaluated`);
+        return code;
+      }
       // The dev server's server environments (ssr, worker threads) run
       // modules with Vite's module runner, which would run a CommonJS npm
       // module as an ES module, without its exports: Node.js loads it
@@ -1350,13 +1404,14 @@ export default function cljf(options) {
         };
       }
       // the server environments' module runners (the ssr environment's in
-      // this process, the worker threads') are clients of their hot channels
-      for (const environment of [server.environments.ssr, server.environments[WORKER_ENV]]) {
-        const hot = environment?.hot;
+      // this process, the worker threads', another plugin's, i.e. workerd's
+      // of @cloudflare/vite-plugin) are clients of their hot channels
+      for (const environment of Object.values(server.environments)) {
+        const hot = environment.config.consumer === 'server' && environment.hot;
         if (!hot) continue;
         const clientRuntimes = new Map();
         const clientRuntime = client => {
-          if (!clientRuntimes.has(client)) clientRuntimes.set(client, connectRuntime(data => client.send('cljs:repl', data), true));
+          if (!clientRuntimes.has(client)) clientRuntimes.set(client, connectRuntime(data => client.send('cljs:repl', data), true, true));
           return clientRuntimes.get(client);
         };
         hot.on('cljs:repl', (data, client) => data && clientRuntime(client).receive(data));
@@ -1364,6 +1419,12 @@ export default function cljf(options) {
           clientRuntimes.get(client)?.close();
           clientRuntimes.delete(client);
         });
+        // A runtime's hello is lost when its runner runs it before the
+        // channel listens, i.e. workerd's importing a Worker's entry as Vite
+        // starts: asked again once the dev server listens
+        const sayHello = () => hot.send('cljs:repl', { op: 'say-hello' });
+        if (server.httpServer) server.httpServer.once('listening', sayHello);
+        else setTimeout(sayHello);
       }
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
         if (event.type === 'repl-send') return replSend(event);

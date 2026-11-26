@@ -247,6 +247,24 @@ export default defineConfig({
 - `vite build` bundles the server: `@hono/vite-build/node` writes `dist/index.js`, a Node.js server that doesn't need `node_modules`, run with `node dist/index.js`. Its `minify: false` leaves minifying to the cljf plugin, which minifies after pruning (`prune`).
 - A backend has no pages, so `manifest: false` skips the manifest of their scripts.
 
+#### Cloudflare Workers
+
+`@cloudflare/vite-plugin` runs a Worker in workerd under `vite`, in an environment of its own whose module runner imports the compiled namespaces from the dev server and hot reloads them in place. Its `main` is a JavaScript file re-exporting the `:js-entries` module, which needs to exist when Vite starts, before the first compile:
+
+```js
+// worker.js
+export { default, MyDurableObject } from './target/cljs/cljs-esm-entries/worker.js';
+```
+
+```js
+// vite.config.js
+cljf({ outputDir: 'target/cljs', compilerOptions: { jsEntries: { worker: { exports: { default: "'my.worker/handler", MyDurableObject: "'my.worker/MyDurableObject" } } } }, manifest: false }),
+cloudflare({ config: { main: 'worker.js' } }),
+```
+
+- workerd imports `main` as Vite starts, to read its exports: the dev server resolves a server environment's imports of the compiler's output once a compile succeeded. After a failed first compile it waits for the fix rather than exiting, and listens once it compiled.
+- The Worker is a runtime of the [REPL](#repl). workerd doesn't evaluate code from strings (`new Function`), so the dev server sends it each form as a module, which its module runner loads.
+
 #### Worker threads
 
 A server run by the dev server (`ssrEntries`, or a script importing it with the ssr environment's runner) starts worker threads of a `:js-entries` entry with `createWorker` of `clojurific/worker`, which takes `new Worker`'s options:
@@ -305,7 +323,7 @@ The launcher and the Vite plugin start the compiler with `cljf.main`, `cljf.esm`
 
 ### REPL
 
-`watch` evaluates forms in the pages running the build (runtimes): browser tabs, the Electron window, servers run by the dev server's ssr environment and their worker threads (`createWorker`), and the threads running a bundle of `vite build --watch` with the plugin's `replSocket` (see [Worker threads](#worker-threads)). Messages go through Vite's websocket (the ssr environment's module runner's hot channel, in the dev server's process) and the plugin's pipe to the compiler. Nothing else listens on a port but the optional nREPL server (`:repl`), which runs in the watcher's JVM:
+`watch` evaluates forms in the pages running the build (runtimes): browser tabs, the Electron window, servers run by the dev server's ssr environment (or another of its server environments, i.e. a Cloudflare Worker's, see [Cloudflare Workers](#cloudflare-workers)) and their worker threads (`createWorker`), and the threads running a bundle of `vite build --watch` with the plugin's `replSocket` (see [Worker threads](#worker-threads)). Messages go through Vite's websocket (the ssr environment's module runner's hot channel, in the dev server's process) and the plugin's pipe to the compiler. Nothing else listens on a port but the optional nREPL server (`:repl`), which runs in the watcher's JVM:
 
 ```clojure
 (require '[cljf.esm.repl :as repl])

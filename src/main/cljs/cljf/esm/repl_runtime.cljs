@@ -315,10 +315,17 @@
 (defn- eval-js
   "Evaluates a compiled REPL form, replies with its printed value, or its
   error. Keeps the value of a console evaluation (see console-eval)."
-  [{:strs [code refs repl] :as msg} reply!]
-  (-> (js/Promise.all (into-array (map load-ref refs)))
+  [{:strs [code refs repl module] :as msg} reply!]
+  (-> (js/Promise.all
+        (into-array
+          (cons
+            ;; the form as a module of the dev server's (see eval-strings?)
+            (if module
+              (.then (js* "import(/* @vite-ignore */ ~{})" module) #(.-default %))
+              (js/Promise.resolve nil))
+            (map load-ref refs))))
       (.then
-        (fn [args]
+        (fn [loaded]
           (let [out   #js []
                 err   #js []
                 done! (fn [m]
@@ -338,8 +345,10 @@
                             (swap! console-evals assoc-in [k :value] v)))
                         (done! #js {:value (print-value v msg)}))]
             (try
-              (let [f (js/Reflect.construct js/Function (into-array (concat (map first refs) [code])))
-                    v (capture #(.apply f nil args) out err)]
+              (let [f    (or (aget loaded 0)
+                             (js/Reflect.construct js/Function (into-array (concat (map first refs) [code]))))
+                    args (.slice loaded 1)
+                    v    (capture #(.apply f nil args) out err)]
                 (if (and (get msg "await") (some? v) (fn? (.-then v)))
                   (.then v ok! fail!)
                   (ok! v)))
@@ -491,6 +500,15 @@
 
 (defn- document [] (.-document js/globalThis))
 
+(defn- eval-strings?
+  "Whether the runtime evaluates code from strings: workerd disallows it, the
+  Vite plugin sends its module runner forms as modules instead."
+  []
+  (try
+    (js/Function "")
+    true
+    (catch :default _ false)))
+
 (defn- builtin
   "Node.js' built-in module name, nil elsewhere (browsers, workerd)."
   [name]
@@ -532,6 +550,8 @@
                :focused   (boolean (and doc (.hasFocus doc)))
                :tag       (tag)
                :tabKey    (tab-key)
+               ;; false in workerd, see eval-strings?
+               :evalStrings (eval-strings?)
                ;; what the runtime is, in (cljf.esm.repl/runtimes)
                :kind      (cond
                             doc        "browser"
@@ -569,7 +589,11 @@
     (set! (.-cljs_eval js/globalThis)
       (fn [code opts]
         (console-eval send! code opts)))
-    (.on hot "cljs:repl" #(when (current?) (handle! % send!)))
+    (.on hot "cljs:repl" #(when (current?)
+                            ;; the dev server lost its hello, see the Vite plugin
+                            (if (= "say-hello" (.-op %))
+                              (send! (hello true))
+                              (handle! % send!))))
     (.on hot "vite:ws:connect" #(when (current?) (send! (hello true))))
     ;; hot reloads re-register modules, after-load hooks have run
     (.on hot "vite:afterUpdate" #(when (current?) (check-stamp-waiters!)))

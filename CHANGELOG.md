@@ -5,9 +5,17 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ## 0.12.17 [Next]
 
+### Added
+
+- The Vite plugin's REPL evaluates in every server environment of the dev server, i.e. a Cloudflare Worker run in workerd by `@cloudflare/vite-plugin`, not only the ssr environment and worker threads. A runtime that can't evaluate code from strings, as workerd can't, gets each form as a module its module runner loads, and runtimes whose hello was lost before the environment's channel listened are asked for it again once the dev server listens.
+
 ### Changed
 
 - The Vite plugin's dev server links compiled namespaces' source maps (`//# sourceMappingURL=<module>.js.map`) instead of the base64 copies Vite inlines, which embed the ClojureScript sources and were about half of what a page loaded. DevTools fetches them only when open. Namespaces without a map of their own (Closure Library shims) get none rather than Vite's placeholder, a copy of their code.
+
+### Fixed
+
+- The Vite plugin's dev server resolves a server environment's imports of the compiler's output once a compile succeeded (the pages' once the first compile finished). A server environment importing its entry as Vite starts, as `@cloudflare/vite-plugin` does a Worker's `main` to read its exports, failed to start because the entry wasn't written yet, or after a failed first compile, instead of waiting for the fix.
 
 ## 0.12.16 [2026-11-24]
 
