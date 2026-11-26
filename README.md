@@ -249,7 +249,7 @@ export default defineConfig({
 
 #### Cloudflare Workers
 
-`@cloudflare/vite-plugin` runs a Worker in workerd under `vite`, in an environment of its own whose module runner imports the compiled namespaces from the dev server and hot reloads them in place. Its `main` is a JavaScript file re-exporting the `:js-entries` module, which needs to exist when Vite starts, before the first compile:
+`@cloudflare/vite-plugin` runs a Worker in workerd under `vite`, in an environment of its own whose module runner imports the compiled namespaces from the dev server and hot reloads them in place, and bundles it under `vite build`. `npm create clojurific -- --template cloudflare` scaffolds one. Its `main` is a JavaScript file re-exporting the `:js-entries` module, which needs to exist when Vite starts, before the first compile:
 
 ```js
 // worker.js
@@ -258,11 +258,12 @@ export { default, MyDurableObject } from './target/cljs/cljs-esm-entries/worker.
 
 ```js
 // vite.config.js
-cljf({ outputDir: 'target/cljs', compilerOptions: { jsEntries: { worker: { exports: { default: "'my.worker/handler", MyDurableObject: "'my.worker/MyDurableObject" } } } }, manifest: false }),
+cljf({ outputDir: 'target/cljs', compilerOptions: { jsEntries: { worker: { exports: { default: "'my.worker/handler", MyDurableObject: "'my.worker/MyDurableObject" } } } }, manifest: false, entries: [] }),
 cloudflare({ config: { main: 'worker.js' } }),
 ```
 
 - workerd imports `main` as Vite starts, to read its exports: the dev server resolves a server environment's imports of the compiler's output once a compile succeeded. After a failed first compile it waits for the fix rather than exiting, and listens once it compiled.
+- `entries: []` leaves bundling to the Cloudflare plugin, from `main`: the `:js-entries` would otherwise be inputs of every environment's build, the client's too. The Worker's build has source maps, which the plugin composes with `@jridgewell/remapping`, a dependency of the project.
 - The Worker is a runtime of the [REPL](#repl). workerd doesn't evaluate code from strings (`new Function`), so the dev server sends it each form as a module, which its module runner loads.
 
 #### Worker threads

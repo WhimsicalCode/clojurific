@@ -6,7 +6,7 @@
 # empty project, builds a namespace with npx cljf, and bundles a page loading
 # its source, and a JavaScript module importing another, with Vite and the
 # plugin. Then scaffolds a project of each create-clojurific template (and
-# of the uni.style add-on's) and bundles it, and runs the hono project's dev server (vite-plugin-cljs/test/
+# of the uni.style add-on's) and bundles it, and runs the hono and cloudflare projects' dev servers (vite-plugin-cljs/test/
 # dev-server.mjs). The package gets the compiler from Clojars: the project's local
 # Maven repository has the jar of this version (script/clojars install), and
 # downloads the rest (about 20 MB, and the templates' libraries).
@@ -81,7 +81,7 @@ repo=$(pwd)
 mkdir -p "$project/clj-config"
 printf '{:mvn/local-repo "%s"}\n' "$project/m2" > "$project/clj-config/deps.edn"
 # the templates, then the ones of the unistyle add-on with it
-for template in vanilla react reagent uix hono react+unistyle reagent+unistyle uix+unistyle; do
+for template in vanilla react reagent uix hono cloudflare react+unistyle reagent+unistyle uix+unistyle; do
   (
     cd "$project"
     name="create-$(echo "$template" | tr + -)"
@@ -105,6 +105,14 @@ for template in vanilla react reagent uix hono react+unistyle reagent+unistyle u
       # the dev server runs it despite a compiler warning, and releases the
       # output held back in its environment once it's fixed
       CLJ_CONFIG="$project/clj-config" node "$repo/src/main/js/vite-plugin-cljs/test/dev-server.mjs"
+    elif [ "$template" = cloudflare ]; then
+      # the Worker, bundled by the Cloudflare plugin from its main alone,
+      # without a client build
+      grep -q 'Hello Cloudflare Workers!' dist/worker/index.js
+      test ! -d dist/client
+      # the dev server runs it in workerd, after a failed first compile too,
+      # and its REPL evaluates there
+      CLJ_CONFIG="$project/clj-config" node "$repo/src/main/js/vite-plugin-cljs/test/cloudflare-dev-server.mjs"
     else
       grep -q "$name.core" dist/manifest.json
     fi

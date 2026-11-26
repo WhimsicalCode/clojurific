@@ -12,7 +12,7 @@ export const version = JSON.parse(readFileSync(path.join(packageRoot, 'package.j
 
 export const templatesDir = path.join(packageRoot, 'templates');
 
-export const TEMPLATES = ['react', 'reagent', 'uix', 'hono', 'vanilla'];
+export const TEMPLATES = ['react', 'reagent', 'uix', 'hono', 'cloudflare', 'vanilla'];
 
 export const DEFAULT_PROJECT = 'clojurific-project';
 
@@ -24,6 +24,16 @@ export const commonDir = path.join(packageRoot, 'common');
 
 // What AGENTS.md says of the app's runtimes: a backend's is its server
 function agentVars(template) {
+  if (template === 'cloudflare') {
+    return {
+      kind: 'Cloudflare Worker',
+      runtimes: 'Worker (in workerd, the Workers runtime)',
+      runtimeNoun: 'runtimes (the Worker)',
+      openPage: '',
+      openPageStep: '',
+      evalExample: ' or call a handler',
+    };
+  }
   return template === 'hono'
     ? {
       kind: 'backend',

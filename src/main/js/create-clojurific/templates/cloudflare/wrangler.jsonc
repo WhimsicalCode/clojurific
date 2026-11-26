@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "{{name}}",
+  "compatibility_date": "2026-11-01",
+  // the Worker's module, compiled from src/ (see worker.js and vite.config.ts)
+  "main": "./worker.js",
+  // the Durable Object counting the clicks, src/{{nsDir}}/core.cljs' Counter
+  "durable_objects": {
+    "bindings": [{ "name": "COUNTER", "class_name": "Counter" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Counter"] }]
+}

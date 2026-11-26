@@ -33,7 +33,7 @@ and the fork's own are `cljf.*` (`cljf.esm`, `cljf.x`). Read
   version from Clojars, or the fork's sources when run from this repository
 - `src/main/js/vite-plugin-cljs/` — the Vite plugin
 - `src/main/js/create-clojurific/` — the npm package `create-clojurific` (`npm create clojurific`,
-  Node.js built-ins only): its prompts, the templates (`templates/{vanilla,react,reagent,uix,hono}`), the
+  Node.js built-ins only): its prompts, the templates (`templates/{vanilla,react,reagent,uix,hono,cloudflare}`), the
   add-ons scaffolded over them (`addons/unistyle`, with `create.js` patching the template's config) and their
   tests. It's released with `clojurific`, of the same version, which its projects depend on
 - `src/main/js/cljf/` — the `cljf` launcher (Node.js built-ins only, no npm dependencies): finding

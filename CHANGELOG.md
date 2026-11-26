@@ -8,6 +8,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 ### Added
 
 - The Vite plugin's REPL evaluates in every server environment of the dev server, i.e. a Cloudflare Worker run in workerd by `@cloudflare/vite-plugin`, not only the ssr environment and worker threads. A runtime that can't evaluate code from strings, as workerd can't, gets each form as a module its module runner loads, and runtimes whose hello was lost before the environment's channel listened are asked for it again once the dev server listens.
+- `create-clojurific`'s `cloudflare` template: a Hono app on Cloudflare Workers with a Durable Object, which `@cloudflare/vite-plugin` runs in workerd under `vite` and bundles for `wrangler deploy`.
 
 ### Changed
 
@@ -16,6 +17,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 ### Fixed
 
 - The Vite plugin's dev server resolves a server environment's imports of the compiler's output once a compile succeeded (the pages' once the first compile finished). A server environment importing its entry as Vite starts, as `@cloudflare/vite-plugin` does a Worker's `main` to read its exports, failed to start because the entry wasn't written yet, or after a failed first compile, instead of waiting for the fix.
+- A build bundling no pages or entries (`entries: []`) leaves Vite's input unset rather than empty, which `@cloudflare/vite-plugin` took for a client build without inputs.
 
 ## 0.12.16 [2026-11-24]
 

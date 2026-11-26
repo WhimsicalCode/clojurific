@@ -32,6 +32,7 @@ const FRAMEWORKS = [
   { value: 'reagent', label: 'Reagent', color: c.cyan, hint: 'https://reagent-project.github.io/' },
   { value: 'uix', label: 'UIx', color: c.magenta, hint: 'https://uix-cljs.dev/' },
   { value: 'hono', label: 'Hono (backend only)', color: c.red, hint: 'https://hono.dev/' },
+  { value: 'cloudflare', label: 'Hono on Cloudflare Workers (backend only)', color: c.yellow, hint: 'https://developers.cloudflare.com/workers/' },
   { value: 'vanilla', label: 'Vanilla', color: c.yellow },
 ];
 

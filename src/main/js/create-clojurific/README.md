@@ -9,7 +9,7 @@ npm create clojurific@latest
 ```
 
 It asks for the project's name, a framework ([React](https://react.dev/) with `#x` literals, [Reagent](https://reagent-project.github.io/),
-[UIx](https://uix-cljs.dev/), or [Hono](https://hono.dev/) for a backend, or Vanilla),
+[UIx](https://uix-cljs.dev/), or [Hono](https://hono.dev/) for a backend, on Node.js or Cloudflare Workers, or Vanilla),
 for React, Reagent and UIx whether to add [uni.style](https://github.com/WhimsicalCode/uni.style),
 and whether to install the dependencies and start the dev server. The project's namespace comes from its
 name: `my-app` gets `src/my_app/core.cljs`, `my-app.core`. The compiler needs
@@ -27,6 +27,12 @@ server runs with [`@hono/vite-dev-server`](https://github.com/honojs/vite-plugin
 hot reloading it, and its REPL evaluates there. `build` bundles it into a
 Node.js server, `dist/index.js`, which `start` runs.
 
+The Cloudflare project is a Hono app on [Cloudflare Workers](https://developers.cloudflare.com/workers/),
+with a Durable Object (`defclass`) keeping its state: the dev server runs it in
+workerd with [`@cloudflare/vite-plugin`](https://developers.cloudflare.com/workers/vite-plugin/),
+hot reloading it, and its REPL evaluates there. `build` bundles the Worker into
+`dist/`, which `preview` runs and `deploy` deploys with `wrangler deploy`.
+
 uni.style, an add-on to the React, Reagent and UIx templates, styles the app
 with compile-time atomic CSS instead of `src/style.css`: `(s/c (s/flex) (s/p 8))`
 in components, which its macros compile to `public/css/bundle.css` (its build
@@ -39,11 +45,12 @@ npm create clojurific@latest my-app -- --template reagent
 npm create clojurific@latest my-app -- --template uix --immediate
 npm create clojurific@latest my-app -- --template reagent --unistyle
 npm create clojurific@latest my-api -- --template hono
+npm create clojurific@latest my-worker -- --template cloudflare
 ```
 
 | Option | |
 |---|---|
-| `-t`, `--template <name>` | `react`, `reagent`, `uix`, `hono` or `vanilla` |
+| `-t`, `--template <name>` | `react`, `reagent`, `uix`, `hono`, `cloudflare` or `vanilla` |
 | `--unistyle` | add uni.style (`react`, `reagent`, `uix`) |
 | `--overwrite` | remove the target directory's files |
 | `-i`, `--immediate` | install the dependencies and start the dev server |

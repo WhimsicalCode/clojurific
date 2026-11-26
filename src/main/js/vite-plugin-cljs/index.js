@@ -890,10 +890,14 @@ export default function cljf(options) {
         // rolldownOptions since Vite 8
         const key = userConfig.build.rolldownOptions ? 'rolldownOptions' : 'rollupOptions';
         userConfig.build[key] ??= {};
-        userConfig.build[key].input = {
+        const input = {
           ...Object.fromEntries(Object.entries(entries).map(([name, file]) => [name, path.join(outputDir, file)])),
           ...inputObject(userConfig.build[key].input ?? indexHtml, root),
         };
+        // none without pages or entries to bundle, i.e. a Cloudflare Worker's
+        // (entries: []), whose main @cloudflare/vite-plugin bundles: an empty
+        // input would be a client build without inputs
+        if (Object.keys(input).length) userConfig.build[key].input = input;
         result.build = {
           rollupOptions: {
             // :js-entries' exports are the bundle's interface, namespaces'

@@ -71,15 +71,16 @@ for (const template of TEMPLATES) {
       { mcpServers: { clojurific: { command: 'npx', args: ['--no', 'cljf', 'mcp'] } } });
     const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
     assert.match(agents, /`src\/my_app\/`/);
-    assert.match(agents, template === 'hono' ? /in the server \(and its worker threads\)/ : /in the browser tabs/);
+    const runtimes = { hono: 'the server \\(and its worker threads\\)', cloudflare: 'the Worker \\(in workerd' }[template];
+    assert.match(agents, new RegExp(`in ${runtimes ?? 'the browser tabs'}`));
     assert.doesNotMatch(agents, /\{\{/);
     const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
     assert.match(readme, /\n## Coding agents\n/);
     assert.match(readme, /`npx --no cljf mcp`/);
-    assert.match(readme, template === 'hono' ? /in the server \(and its worker threads\) running/ : /and open its page/);
+    assert.match(readme, runtimes ? new RegExp(`in ${runtimes}`) : /and open its page/);
     assert.doesNotMatch(readme, /\{\{/);
     assert.ok(!existsSync(path.join(root, 'README-agents.md')));
-    if (template !== 'hono') {
+    if (!runtimes) {
       assert.match(deps, /binaryage\/devtools/);
       assert.match(viteConfig, /command === 'serve' && \{\n *preloads: \["'devtools\.preload"\]/);
     }
@@ -102,6 +103,24 @@ for (const template of TEMPLATES) {
       assert.match(viteConfig, /jsxImportSource: 'hono\/jsx'/);
       assert.match(source, /\(\.html c \(str "<!doctype html>" \(page\)\)\)/);
       assert.match(source, /\(def app\b/);
+      assert.ok(!existsSync(path.join(root, 'index.html')));
+    } else if (template === 'cloudflare') {
+      assert.equal(pkg.scripts.dev, 'vite');
+      assert.equal(pkg.scripts.deploy, 'vite build && wrangler deploy');
+      assert.ok(pkg.dependencies.hono);
+      assert.ok(pkg.devDependencies['@cloudflare/vite-plugin']);
+      // the Worker's main re-exports the :js-entries module the Cloudflare
+      // plugin bundles, with the Durable Object class wrangler.jsonc binds
+      assert.match(viteConfig, /worker: \{ exports: \{ default: "'my-app\.core\/app", Counter: "'my-app\.core\/Counter" \} \}/);
+      assert.match(viteConfig, /entries: \[\]/);
+      // a fixed environment name: the Worker's (the project's) could be client
+      assert.match(viteConfig, /cloudflare\(\{ viteEnvironment: \{ name: 'worker' \} \}\)/);
+      assert.match(readFileSync(path.join(root, 'worker.js'), 'utf8'),
+        /export \{ default, Counter \} from '\.\/target\/cljs\/cljs-esm-entries\/worker\.js'/);
+      const wrangler = readFileSync(path.join(root, 'wrangler.jsonc'), 'utf8');
+      assert.match(wrangler, /"name": "my-app"/);
+      assert.match(wrangler, /"class_name": "Counter"/);
+      assert.match(source, /\(defclass Counter\b/);
       assert.ok(!existsSync(path.join(root, 'index.html')));
     } else {
       assert.deepEqual(pkg.scripts, { dev: 'vite', build: 'vite build', preview: 'vite preview', repl: 'cljf repl' });
