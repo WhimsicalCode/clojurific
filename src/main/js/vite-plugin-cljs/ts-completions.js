@@ -26,8 +26,8 @@ function loadTypeScript(root) {
   return null;
 }
 
-// The compiler options of the tsconfig named, or of the nearest one from
-// root, with its declaration files, defaults without one. The snippet imports .ts files
+// The compiler options of the tsconfig named, or of root's tsconfig.json,
+// with its declaration files, defaults without one. The snippet imports .ts files
 // and packages as Vite resolves them.
 function projectConfig(ts, root, tsconfig) {
   const atTypes = path.join(root, 'node_modules', '@types');
@@ -44,8 +44,10 @@ function projectConfig(ts, root, tsconfig) {
     // longer includes by default
     types: ts.sys.directoryExists(atTypes) ? ts.sys.getDirectories(atTypes) : [],
   };
-  const file = tsconfig ? path.resolve(root, tsconfig) : ts.findConfigFile(root, ts.sys.fileExists);
-  if (!file) return { options: defaults, files: [] };
+  // root's own: a tsconfig.json further up (i.e. a monorepo's, for its other
+  // projects) may not describe this one
+  const file = tsconfig ? path.resolve(root, tsconfig) : path.join(root, 'tsconfig.json');
+  if (!ts.sys.fileExists(file)) return { options: defaults, files: [] };
   const parse = f => ts.getParsedCommandLineOfConfigFile(f, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
   let parsed = parse(file);
   // a solution-style tsconfig (create-vite's: no files, references to

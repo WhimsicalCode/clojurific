@@ -74,6 +74,15 @@ test("a solution-style tsconfig's first reference, with its declaration files", 
   assert.deepEqual(names(tsCompletions({ root })(at('appGlobal.ans', 'ans'))), ['answer']);
 });
 
+test("a tsconfig.json above the root isn't the project's", { skip }, () => {
+  const root = project({
+    'tsconfig.json': JSON.stringify({ compilerOptions: { lib: ['es2022'], types: [] } }),
+    'app/package.json': '{}',
+  });
+  fs.symlinkSync(nodeModules, path.join(root, 'app', 'node_modules'), 'dir');
+  assert.ok(names(tsCompletions({ root: path.join(root, 'app') })(at('document.getE', 'getE'))).includes('getElementById'));
+});
+
 test('an error without TypeScript', () => {
   const r = tsCompletions({ root: project({}, false) })(at('document.getE', 'getE'));
   assert.match(r.error, /TypeScript/);
