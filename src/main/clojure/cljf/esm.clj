@@ -38,9 +38,17 @@
   the cljf/esm resource directory."
   ["goog.js"
    "goog/array.js"
+   "goog/async/nextTick.js"
+   "goog/crypt.js"
+   "goog/crypt/base64.js"
+   "goog/dom.js"
+   "goog/events.js"
+   "goog/events/EventType.js"
+   "goog/i18n/uChar.js"
    "goog/math.js"
    "goog/object.js"
    "goog/string.js"
+   "goog/userAgent.js"
    "goog/userAgent/product.js"])
 
 (def ^:dynamic *generated-sources*

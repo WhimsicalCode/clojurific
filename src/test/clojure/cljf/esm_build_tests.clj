@@ -97,9 +97,9 @@
 
 (deftest writes-closure-libraries-of-cached-namespaces
   (let [dir     (temp-dir)
-        sources (into {} [(write-source! dir 'test.c "(ns test.c (:require [goog.string.format]))"
+        sources (into {} [(write-source! dir 'test.c "(ns test.c (:require [goog.date.Interval]))"
                             (- (System/currentTimeMillis) 60000))])
-        lib     (io/file dir "out" "goog-lib" "ns" "goog.string.format.js")]
+        lib     (io/file dir "out" "goog-lib" "ns" "goog.date.Interval.js")]
     (build! dir sources 'test.c)
     (is (.exists lib))
     (testing "a build compiling none of its users"
@@ -132,7 +132,7 @@
           (java.util.Collections/enumeration [found])
           (proxy-super getResources name))))))
 
-(deftest restores-core-with-its-closure-libraries
+(deftest restores-core-from-the-cache
   (let [dir     (temp-dir)
         cache   (io/file dir "cache")
         thread  (Thread/currentThread)
@@ -140,21 +140,22 @@
         ms      (- (System/currentTimeMillis) 60000)
         sources (into {} [(write-source! dir 'test.g "(ns test.g) (def s (str 1))" ms)])
         out     (io/file dir "out")
-        lib     (io/file out "goog-lib" "ns" "goog.math.Integer.js")]
+        ;; cljs.core uses the Closure Library's shims only
+        lib     (io/file out "goog-lib")]
     (.setContextClassLoader thread (core-jar! dir ms loader))
     (try
       (with-redefs [cljf.main/cache-dir (fn [name] (io/file cache name))]
         (testing "a cold build without a cache entry compiles cljs.core from the jar's source, copied, and stores its output"
           (is (contains? (build! dir sources 'test.g) "core.cljs"))
           (is (.exists (io/file out "cljs" "core.cljs")))
-          (is (.exists lib))
+          (is (not (.exists lib)))
           (is (seq (.listFiles (io/file cache "cljs-core")))))
-        (testing "a cold build with the entry: cljs.core's output restored, not compiled, and the Closure Library namespaces only it uses written as well"
+        (testing "a cold build with the entry: cljs.core's output restored, not compiled"
           (doseq [^File f (reverse (file-seq out))]
             (.delete f))
           (is (not (contains? (build! dir sources 'test.g) "core.cljs")))
           (is (.exists (io/file out "cljs" "core.js")))
-          (is (.exists lib))))
+          (is (not (.exists lib)))))
       (finally
         (.setContextClassLoader thread loader)))))
 
@@ -1097,3 +1098,29 @@
         (is (string/starts-with? nope "error: npm module nope isn't in the page")))
       (testing "#x's arity"
         (is (re-find #"(?i)wrong number of args" arity) arity)))))
+
+(deftest closure-library-shims
+  (let [dir     (temp-dir)
+        sources (into {} [(write-source! dir 'test.s
+                            "(ns test.s
+                               (:require [goog.crypt :as crypt]
+                                         [goog.crypt.base64 :as base64]
+                                         [goog.crypt.Sha256]
+                                         [goog.math.Long]
+                                         [goog.async.nextTick])
+                               (:import [goog.string StringBuffer]))
+                             (let [sha (goog.crypt.Sha256.)]
+                               (.update sha (crypt/stringToUtf8ByteArray \"abc\"))
+                               (goog.async.nextTick
+                                 #(js/console.log
+                                    (crypt/byteArrayToHex (.digest sha))
+                                    (base64/encodeByteArray (crypt/stringToUtf8ByteArray \"abc\")
+                                      base64/Alphabet.WEBSAFE_NO_PADDING)
+                                    (str (.add (goog.math.Long/fromBits 1 1) (goog.math.Long/getOne)))
+                                    (str (.append (StringBuffer. \"a\") \"b\")))))"
+                            (- (System/currentTimeMillis) 60000))])]
+    (build! dir sources 'test.s)
+    (testing "classes' namespaces and their statics are their parents' shims'"
+      (is (not (.exists (io/file dir "out" "goog-lib"))))
+      (is (= "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad YWJj 4294967298 ab"
+             (string/trim (run-node (io/file dir "out" "test" "s.js"))))))))

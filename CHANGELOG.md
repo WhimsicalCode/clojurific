@@ -13,6 +13,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 ### Changed
 
+- `cljs.core` and code using `goog.crypt`, `goog.crypt.base64`, `goog.crypt.Sha256`, `goog.async.nextTick`, `goog.events`, `goog.events.EventType`, `goog.dom`, `goog.i18n.uChar` and `goog.userAgent` no longer load the Closure Library: they have ES module shims, and requiring a class's namespace (`goog.math.Long`, `goog.string.StringBuffer`) uses its parent's shim. A build using only shimmed namespaces has no `goog-lib/`, which took about 180 KB of a minified bundle of `cljs.core` alone. The `goog.events.EventType` shim's animation and transition events are the unprefixed ones, not WebKit's.
 - The Vite plugin's dev server links compiled namespaces' source maps (`//# sourceMappingURL=<module>.js.map`) instead of the base64 copies Vite inlines, which embed the ClojureScript sources and were about half of what a page loaded. DevTools fetches them only when open. Namespaces without a map of their own (Closure Library shims) get none rather than Vite's placeholder, a copy of their code.
 
 ### Fixed

@@ -193,3 +193,52 @@ formatDemuxes['d'] = function(
 
 formatDemuxes['i'] = formatDemuxes['d'];
 formatDemuxes['u'] = formatDemuxes['d'];
+
+export function padNumber(num, length, opt_precision) {
+  if (!Number.isFinite(num)) return String(num);
+  let s = opt_precision !== undefined ? num.toFixed(opt_precision) : String(num);
+  let index = s.indexOf('.');
+  if (index === -1) index = s.length;
+  const sign = s[0] === '-' ? '-' : '';
+  if (sign) s = s.substring(1);
+  return sign + repeat('0', Math.max(0, length - index)) + s;
+}
+
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '\x00': '&#0;' };
+
+export function htmlEscape(str, opt_isLikelyToContainHtmlChars) {
+  return String(str).replace(/[&<>"'\x00]/g, (c) => HTML_ESCAPES[c]);
+}
+
+const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"' };
+
+function unescapeNumericEntity(entity) {
+  if (entity.charAt(0) == '#') {
+    // 0 prefixed: hex entities (&#x10) parse as hex numbers
+    const n = Number('0' + entity.slice(1));
+    if (!isNaN(n)) return String.fromCharCode(n);
+  }
+}
+
+// Named HTML entities (&nbsp;) are decoded by the DOM where there's one, as
+// Closure Library does, XML's and numeric ones otherwise
+export function unescapeEntities(str) {
+  if (!str.includes('&')) return str;
+  const document = globalThis.document;
+  if (document) {
+    const seen = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"' };
+    let textarea;
+    return str.replace(/&([^;\s<&]+);?/g, (s, entity) => {
+      let value = seen[s] || unescapeNumericEntity(entity);
+      if (!value) {
+        // a textarea's content is text: no markup is parsed or run
+        textarea = textarea || document.createElement('textarea');
+        textarea.innerHTML = s;
+        value = textarea.value;
+      }
+      return (seen[s] = value);
+    });
+  }
+  return str.replace(/&([^;]+);/g, (s, entity) =>
+    XML_ENTITIES[entity] || unescapeNumericEntity(entity) || s);
+}

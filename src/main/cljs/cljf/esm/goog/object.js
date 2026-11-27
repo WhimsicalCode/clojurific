@@ -78,3 +78,33 @@ export function create(var_args) {
   }
   return rv;
 }
+
+export function getValueByKeys(obj, var_args) {
+  const isArrayLike = var_args != null && typeof var_args === 'object' && typeof var_args.length === 'number';
+  const keys = isArrayLike ? var_args : arguments;
+  for (let i = isArrayLike ? 0 : 1; i < keys.length; i++) {
+    if (obj == null) return undefined;
+    obj = obj[keys[i]];
+  }
+  return obj;
+}
+
+const PROTOTYPE_FIELDS = [
+  'constructor', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable',
+  'toLocaleString', 'toString', 'valueOf',
+];
+
+export function extend(target, var_args) {
+  for (let i = 1; i < arguments.length; i++) {
+    const source = arguments[i];
+    for (const key in source) {
+      target[key] = source[key];
+    }
+    // own non-enumerable-on-the-prototype keys for-in skips
+    for (const key of PROTOTYPE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) {
+        target[key] = source[key];
+      }
+    }
+  }
+}

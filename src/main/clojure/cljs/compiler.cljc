@@ -231,30 +231,33 @@
   [nm]
   (str (munge nm js-reserved)))
 
-(declare esm-goog-shim-exports valid-define-value?)
+(declare esm-goog-shim-exports esm-goog-class-shim valid-define-value?)
 
 (defn- munge-esm-var
   ([ns nm] (munge-esm-var ns nm js-reserved))
   ([ns nm reserved]
-   (let [local? (and (not *esm-repl*) (= ns (str ana/*cljs-ns*)))
-         ;; .. (the macro) is a name, not a property path
-         idx    (if (= ".." nm) -1 (.indexOf ^String nm "."))
-         member (esm-var-name (if (neg? idx) nm (subs nm 0 idx)))
-         ;; nm may be a property path, i.e. Foo.prototype.bar, reserved
-         ;; words are valid property names, i.e. an npm module's default
-         nm'    (if (neg? idx)
-                  member
-                  (str member "." (munge (subs nm (inc idx)) #{})))
-         ;; Closure Library members are taken from ES module shims if they
-         ;; provide them, otherwise from the Closure Library itself run by
-         ;; the compatibility layer, see cljf.esm/install-goog-libs
-         lib?   (and (or (= "goog" ns) (string/starts-with? ns "goog."))
-                     (not (contains? #?(:clj (esm-goog-shim-exports ns ana/*cljs-ns*) :cljs #{}) member)))]
-     (cond
-       local? nil
-       lib?   (swap! (:goog-lib-refs *esm*) conj ns)
-       :else  (swap! (:refs *esm*) conj ns))
-     (str (esm-ns-alias ns) (when lib? "$") (if local? "$" ".") nm'))))
+   (if-let [[parent class] #?(:clj (esm-goog-class-shim ns ana/*cljs-ns*) :cljs nil)]
+     ;; goog.math.Long/fromBits is goog.math's shim's Long.fromBits
+     (munge-esm-var parent (str class "." nm) reserved)
+     (let [local? (and (not *esm-repl*) (= ns (str ana/*cljs-ns*)))
+           ;; .. (the macro) is a name, not a property path
+           idx    (if (= ".." nm) -1 (.indexOf ^String nm "."))
+           member (esm-var-name (if (neg? idx) nm (subs nm 0 idx)))
+           ;; nm may be a property path, i.e. Foo.prototype.bar, reserved
+           ;; words are valid property names, i.e. an npm module's default
+           nm'    (if (neg? idx)
+                    member
+                    (str member "." (munge (subs nm (inc idx)) #{})))
+           ;; Closure Library members are taken from ES module shims if they
+           ;; provide them, otherwise from the Closure Library itself run by
+           ;; the compatibility layer, see cljf.esm/install-goog-libs
+           lib?   (and (or (= "goog" ns) (string/starts-with? ns "goog."))
+                       (not (contains? #?(:clj (esm-goog-shim-exports ns ana/*cljs-ns*) :cljs #{}) member)))]
+       (cond
+         local? nil
+         lib?   (swap! (:goog-lib-refs *esm*) conj ns)
+         :else  (swap! (:refs *esm*) conj ns))
+       (str (esm-ns-alias ns) (when lib? "$") (if local? "$" ".") nm')))))
 
 (defn- esm-split-dotted
   "Fully qualified dotted references like cljs.core.PersistentVector.EMPTY
@@ -2068,6 +2071,19 @@
             (if (= 'cljs.core from-ns) all (reduce disj all stubs))))))))
 
 #?(:clj
+   (defn esm-goog-class-shim
+     "[parent class] when Closure Library namespace ns is a class its parent
+     namespace's shim exports, i.e. goog.math.Long of goog.math's, and ns has
+     no shim of its own."
+     [ns from-ns]
+     (when (and (string/starts-with? ns "goog.") (nil? (esm-goog-shim-exports ns)))
+       (let [i      (string/last-index-of ns ".")
+             parent (subs ns 0 i)
+             class  (subs ns (inc i))]
+         (when (contains? (esm-goog-shim-exports parent from-ns) class)
+           [parent class])))))
+
+#?(:clj
    (defn esm-goog-lib-path
      "The output path of the module exporting a Closure Library namespace run
      by the compatibility layer, see cljf.esm/install-goog-libs."
@@ -2182,9 +2198,13 @@
                (emitln "const " alias " = " alias "$module" (sublib-select sublib) ";"))))
 
          ;; Closure Library shims are imported when referenced, Closure
-         ;; Library namespaces without one are loaded for their side effects
+         ;; Library namespaces without one are loaded for their side effects.
+         ;; A class's namespace, i.e. goog.math.Long, is its parent's shim's
+         ;; when the shim exports it
          (or (= "goog" dep-str) (string/starts-with? dep-str "goog."))
-         (when-not (or (= "goog" dep-str) (esm-goog-shim-exports dep-str))
+         (when-not (or (= "goog" dep-str)
+                       (esm-goog-shim-exports dep-str)
+                       (esm-goog-class-shim dep-str ns-name))
            (emitln "import \"" (esm-goog-lib! ns-name dep-str) "\";"))
 
          ;; Closure style libraries on the classpath, run by the Closure

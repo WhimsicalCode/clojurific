@@ -59,3 +59,7 @@ export function insertArrayAt(arr, elementsToAdd, opt_i) {
 export function removeAt(arr, i) {
   return Array.prototype.splice.call(arr, i, 1).length == 1;
 }
+
+export function sort(arr, opt_compareFn) {
+  arr.sort(opt_compareFn || defaultCompare);
+}

@@ -4,6 +4,8 @@
 // The subset of Closure Library's base.js used by ClojureScript, as an ES
 // module.
 
+import { nextTick } from './goog/async/nextTick.js';
+
 export let global = globalThis;
 
 export function typeOf(value) {
@@ -23,6 +25,18 @@ export function isObject(val) {
   const type = typeof val;
   return (type == 'object' && val != null) || type == 'function';
 }
+
+export function isNumber(val) {
+  return typeof val == 'number';
+}
+
+export function bind(fn, selfObj, var_args) {
+  return fn.call.apply(fn.bind, arguments);
+}
+
+// goog.async.nextTick is a namespace and a function: references to it are
+// members of goog
+export const async = { nextTick };
 
 const UID_PROPERTY = 'closure_uid_' + ((Math.random() * 1e9) >>> 0);
 let uidCounter = 0;
