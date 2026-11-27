@@ -48,6 +48,7 @@
    "goog/events/EventType.js"
    "goog/i18n/uChar.js"
    "goog/math.js"
+   "goog/net.js"
    "goog/object.js"
    "goog/string.js"
    "goog/userAgent.js"

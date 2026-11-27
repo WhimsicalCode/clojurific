@@ -272,12 +272,24 @@
             [prefix (string/join "." (concat (drop n segs) [nm]))]
             (recur (dec n))))))))
 
+(defn- esm-goog-shim-member?
+  "Whether member (a name or a property path) of ns, a Closure Library
+  namespace prefix only shims define (goog.net, whose classes Closure Library
+  provides as namespaces of their own), is one its shim exports."
+  [ns member]
+  #?(:clj  (and (string/starts-with? ns "goog.")
+                (not (contains? (:js-dependency-index @env/*compiler*) ns))
+                (some? member)
+                (contains? (esm-goog-shim-exports ns ana/*cljs-ns*)
+                  (esm-var-name (first (string/split member #"\.")))))
+     :cljs false))
+
 (defn- esm-var-ref
   "While emitting ES modules, returns [ns name] if symbol s references a var
   of a namespace compiled to an ES module."
   [s]
   (when (and *esm-emitting* (symbol? s) (some? (namespace s)))
-    (if (esm-module-ns? (namespace s))
+    (if (or (esm-module-ns? (namespace s)) (esm-goog-shim-member? (namespace s) (name s)))
       [(namespace s) (name s)]
       (esm-split-dotted (namespace s) (name s)))))
 
@@ -365,7 +377,7 @@
       (loop [n (count segs)]
         (when (pos? n)
           (let [ns (string/join "." (take n segs))]
-            (if (esm-module-ns? ns)
+            (if (or (esm-module-ns? ns) (esm-goog-shim-member? ns (nth segs n nil)))
               ;; as in munge-esm-var, Closure Library members without a shim
               ;; come from the compatibility layer
               (let [lib? (and (string/starts-with? ns "goog.")
