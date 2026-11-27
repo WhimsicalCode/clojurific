@@ -34,9 +34,13 @@
 
 (def goog-shims
   "The subset of the Closure Library cljs.core and friends depend on,
-  reimplemented as ES modules. Paths are relative to the output directory and
-  the cljf/esm resource directory."
-  ["goog.js"
+  reimplemented as ES modules, and transit-js. Paths are relative to the
+  output directory and the cljf/esm resource directory."
+  ["com/cognitect/transit-js.js"
+   "com/cognitect/transit.js"
+   "com/cognitect/transit/eq.js"
+   "com/cognitect/transit/types.js"
+   "goog.js"
    "goog/Uri.js"
    "goog/array.js"
    "goog/async/nextTick.js"

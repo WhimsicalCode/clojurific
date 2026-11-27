@@ -1151,3 +1151,22 @@
                   "2026-12-02T13:45:10,2,true 1 day 1 hour 1 minute 22 0 blob complete 7 "
                   "http://a.com/d?y=2#f a=1&b=x%20y true true")
              (string/trim (run-node (io/file dir "out" "test" "s.js"))))))))
+
+(deftest transit-shim
+  (let [dir     (temp-dir)
+        sources (into {} [(write-source! dir 'test.t
+                            "(ns test.t
+                               (:require [cognitect.transit :as t]))
+                             (let [r (t/reader :json)
+                                   s \"[\\\"~i9007199254740993\\\",\\\"~u531a379e-31bb-4ce1-8690-158dceb64be6\\\",[\\\"~#point\\\",[1,2]]]\"
+                                   a (t/read r s)
+                                   b (t/read r s)]
+                               (js/console.log (= (first a) (first b)) (= (hash (first a)) (hash (first b)))
+                                 (= a b) (str (first a)) (t/tagged-value? (nth a 2))
+                                 (t/write (t/writer :json) {:x #{1} :y [1.5 nil]})))"
+                            (- (System/currentTimeMillis) 60000))])]
+    (build! dir sources 'test.t)
+    (testing "transit-js is a shim whose large integers are cljs.core's goog.math.Long"
+      (is (not (.exists (io/file dir "out" "goog-lib"))))
+      (is (= "true true true 9007199254740993 true [\"^ \",\"~:x\",[\"~#set\",[1]],\"~:y\",[1.5,null]]"
+             (string/trim (run-node (io/file dir "out" "test" "t.js"))))))))

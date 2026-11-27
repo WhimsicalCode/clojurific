@@ -210,6 +210,8 @@
     "goog$"
     (string/join "$" (map #(str (munge % #{})) (string/split (str ns) #"\.")))))
 
+(declare esm-goog-shim-exports)
+
 (defn esm-module-ns?
   "Whether references into namespace ns (a string) should go through an ES
   module import. Everything else, i.e. Math or unknown namespaces, keeps
@@ -218,9 +220,13 @@
   (let [cenv @env/*compiler*]
     (or (= ns (str ana/*cljs-ns*))
         (= "goog" ns)
-        ;; Closure Library namespaces, i.e. goog.string but not goog.DEBUG
+        ;; Closure Library namespaces, i.e. goog.string but not goog.DEBUG,
+        ;; and Closure style libraries with a shim, i.e. transit-js'
         (and (string/starts-with? ns "goog.")
              (contains? (:js-dependency-index cenv) ns))
+        #?(:clj  (and (some? (esm-goog-shim-exports ns))
+                      (some? (deps/closure-lib (:js-dependency-index cenv) ns)))
+           :cljs false)
         (contains? (::ana/namespaces cenv) (symbol ns))
         ;; namespaces of the build not analyzed yet, i.e. under :parallel-build
         (contains? (:cljf.esm/namespaces cenv) (symbol ns)))))
@@ -2239,11 +2245,13 @@
                        (esm-goog-class-shim dep-str ns-name))
            (emitln "import \"" (esm-goog-lib! ns-name dep-str) "\";"))
 
-         ;; Closure style libraries on the classpath, run by the Closure
-         ;; Library compatibility layer, i.e. transit-js
+         ;; Closure style libraries on the classpath: shims (transit-js') are
+         ;; imported when referenced, others are run by the Closure Library
+         ;; compatibility layer
          (and (not (contains? (::ana/namespaces @env/*compiler*) (symbol dep-str)))
               (deps/closure-lib (:js-dependency-index @env/*compiler*) dep-str))
-         (emitln "import \"" (esm-goog-lib! ns-name dep-str) "\";")
+         (when-not (esm-goog-shim-exports dep-str)
+           (emitln "import \"" (esm-goog-lib! ns-name dep-str) "\";"))
 
          (contains? (::ana/namespaces @env/*compiler*) (symbol dep-str))
          (when-not (contains? @(:imported *esm*) dep-str)
