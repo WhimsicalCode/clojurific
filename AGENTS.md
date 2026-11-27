@@ -13,6 +13,8 @@ and the fork's own are `cljf.*` (`cljf.esm`, `cljf.x`). Read
 - `src/main/clojure/cljf/esm.clj` — the ES module build, watch and test runner generation
 - `src/main/clojure/cljf/esm/repl.clj`, `src/main/cljs/cljf/esm/repl_runtime.cljs` — the nREPL server
   and its browser runtime
+- `src/main/clojure/cljf/esm/repl/ts.clj`, `src/main/js/vite-plugin-cljs/ts-completions.js` — nREPL
+  completions of JavaScript interop from a TypeScript language service (the plugin's `tsCompletions`)
 - `src/main/clojure/cljf/esm/mcp.clj` — the REPL's MCP server for coding agents (`:repl {:mcp-port 0}`),
   `src/main/js/cljf/mcp.js` its stdio bridge (`cljf mcp`), see [`docs/mcp.md`](docs/mcp.md)
 - `src/main/cljs/cljf/esm/` — runtime support: `goog.js`, `lazy`, `node_test`, `karma`

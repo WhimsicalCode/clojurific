@@ -123,6 +123,14 @@ export interface CljfOptions {
   ignoreWarnings?: boolean;
   /** The dev server's pages show its status in a corner, like shadow-cljs' HUD: modules loading, compiling, hot reloading, the dev server or compiler gone. Defaults to true. */
   hud?: boolean;
+  /**
+   * Experimental: the dev server's nREPL sessions complete JavaScript interop (`js/document.getE…`,
+   * `(.. js/document -body -cl…)`, `react/useSt…` of a string require) with a TypeScript language service over
+   * the project's tsconfig (or `tsconfig`, relative to Vite's root) and node_modules, before clj-suitable's runtime
+   * introspection. Needs `typescript` 5 or 6 (or `@typescript/typescript6` next to TypeScript 7) in the project.
+   * Defaults to false.
+   */
+  tsCompletions?: boolean | { tsconfig?: string };
 }
 
 /** The Vite plugin compiling ClojureScript to ES modules. */
