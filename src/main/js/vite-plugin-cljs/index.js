@@ -826,12 +826,29 @@ export default function cljf(options) {
       // logging as a message's source rather than the wrapper, and debuggers
       // step over it. With Vite's default, the node_modules.
       if (env.command === 'serve') {
+        result.server = {};
         const userIgnore = userConfig.server?.sourcemapIgnoreList;
         if (userIgnore !== false) {
           const ignore = typeof userIgnore === 'function' ? userIgnore : file => file.includes('/node_modules/');
-          result.server = {
-            sourcemapIgnoreList: (file, map) =>
-              /[\\/]cljf[\\/]esm[\\/]repl_runtime\.(?:cljs|js)$/.test(file) || ignore(file, map),
+          result.server.sourcemapIgnoreList = (file, map) =>
+            /[\\/]cljf[\\/]esm[\\/]repl_runtime\.(?:cljs|js)$/.test(file) || ignore(file, map);
+        }
+        // Closure Library's modules (goog-lib) aren't watched: generated from
+        // the classpath (cljf.esm/install-goog-libs), a file's content never
+        // changes, and they run in one goog global, which throws on a
+        // namespace declared again. A file event, i.e. a late one of the
+        // first compile, would invalidate them and their importers, and a
+        // module runner fetching them again, as a server entry's first import
+        // does, would run them a second time (Namespace "goog.math.Long"
+        // already declared).
+        if (userConfig.server?.watch !== null) {
+          const googLib = normalizePath(path.join(outputDir, 'goog-lib'));
+          result.server.watch = {
+            // chokidar passes paths with forward slashes, on Windows too
+            ignored: [file => {
+              const f = normalizePath(file);
+              return f === googLib || f.startsWith(googLib + '/');
+            }],
           };
         }
       }

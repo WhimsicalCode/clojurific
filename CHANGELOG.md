@@ -18,6 +18,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 ### Fixed
 
 - The Vite plugin's dev server resolves a server environment's imports of the compiler's output once a compile succeeded (the pages' once the first compile finished). A server environment importing its entry as Vite starts, as `@cloudflare/vite-plugin` does a Worker's `main` to read its exports, failed to start because the entry wasn't written yet, or after a failed first compile, instead of waiting for the fix.
+- The Vite plugin's `ssrEntries` sometimes failed to start with `Namespace "goog.math.Long" already declared`: a late file event of the first compile's Closure Library modules (`goog-lib`) made Vite invalidate them while the entry was first imported, and the ssr environment's runner ran them a second time in the same `goog` global. The dev server no longer watches `goog-lib`, whose files are generated from the classpath and never change.
 - A build bundling no pages or entries (`entries: []`) leaves Vite's input unset rather than empty, which `@cloudflare/vite-plugin` took for a client build without inputs.
 
 ## 0.12.16 [2026-11-24]
