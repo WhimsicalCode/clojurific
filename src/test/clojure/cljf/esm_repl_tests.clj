@@ -686,7 +686,7 @@
                 entries (atom [{:name "fromTs" :type "var" :signature "(property) fromTs: string" :doc "Docs."}])]
             (with-redefs [esm/event! (fn [type m]
                                        (when (and (= "ts-complete" type) (not @silent?))
-                                         (swap! asked conj (dissoc m :id))
+                                         (swap! asked conj (dissoc m :id :deadline))
                                          (future (repl/handle-message!
                                                    (json/write-str {:op "ts-completions" :id (:id m) :entries @entries})))))]
               (try

@@ -9,6 +9,7 @@
 // clj-suitable's completions from the runtime.
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 
 // The snippet's file, in the project's root so that its imports resolve from
 // there. It's never written.
@@ -161,5 +162,65 @@ export function tsCompletions({ root, tsconfig }) {
         return entry;
       }),
     };
+  };
+}
+
+// ms after a worker exits before a request starts another: one failing as
+// it starts would otherwise cost every completion a start (1-3s)
+const RESTART_AFTER = 30000;
+
+/**
+ * Returns {request, close}: request(msg) completes a ts-complete request
+ * ({id, code, position, prefix, details, deadline}) with tsCompletions in a
+ * worker thread (ts-worker.js, or workerURL), started by the first, and calls
+ * onReply({id, ...result}) with its answer. When the worker exits, its
+ * requests are answered with {id, error}, as are those of the next
+ * RESTART_AFTER ms; the request after them starts another worker. close()
+ * stops it, requests after it are ignored.
+ */
+export function tsCompletionsWorker({ root, tsconfig, onReply, workerURL = new URL('./ts-worker.js', import.meta.url) }) {
+  let worker = null;
+  let closed = false;
+  // the ids the worker hasn't answered
+  const pending = new Set();
+  // {at, error} of the worker that exited last
+  let exited = null;
+  const start = () => {
+    const w = new Worker(workerURL);
+    let failure;
+    w.on('message', ({ skipped, ...reply }) => {
+      pending.delete(reply.id);
+      if (!skipped) onReply(reply);
+    });
+    w.on('error', e => (failure = e?.message ?? String(e)));
+    w.on('exit', code => {
+      if (worker !== w) return;
+      worker = null;
+      exited = { at: Date.now(), error: `TypeScript completions' worker exited: ${failure ?? `code ${code}`}` };
+      for (const id of pending) onReply({ id, error: exited.error });
+      pending.clear();
+    });
+    // after the listeners: a message listener references the worker again,
+    // the dev server's exit doesn't wait for it
+    w.unref();
+    return w;
+  };
+  return {
+    request(msg) {
+      if (closed) return;
+      if (!worker && exited && Date.now() - exited.at < RESTART_AFTER) {
+        onReply({ id: msg.id, error: exited.error });
+        return;
+      }
+      worker ??= start();
+      pending.add(msg.id);
+      worker.postMessage({ ...msg, root, tsconfig });
+    },
+    close() {
+      closed = true;
+      const w = worker;
+      worker = null;
+      return w?.terminate();
+    },
   };
 }

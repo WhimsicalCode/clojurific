@@ -6,9 +6,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { tsCompletions } from '../ts-completions.js';
+import { tsCompletions, tsCompletionsWorker } from '../ts-completions.js';
 
 const nodeModules = (() => {
   if (process.env.CLJF_TEST_NODE_MODULES) return path.resolve(process.env.CLJF_TEST_NODE_MODULES);
@@ -33,6 +34,11 @@ function project(files, withTypeScript = true) {
 }
 
 const names = r => r.entries.map(e => e.name);
+// the worker doesn't keep the process alive: a test waiting for it does
+const keepAlive = () => {
+  const t = setInterval(() => {}, 1000);
+  return () => clearInterval(t);
+};
 const at = (code, prefix, details) => ({ code, position: code.length, prefix, details });
 
 test('members of typed values, values only, with the details asked for', { skip }, () => {
@@ -91,4 +97,85 @@ test("a workspace's hoisted @types", { skip: skip || (!fs.existsSync(path.join(n
 test('an error without TypeScript', () => {
   const r = tsCompletions({ root: project({}, false) })(at('document.getE', 'getE'));
   assert.match(r.error, /TypeScript/);
+});
+
+test('the worker thread: answers by id, skips requests past their deadline once started', { skip }, async () => {
+  const release = keepAlive();
+  const replies = [];
+  let replied;
+  const root = project({});
+  const worker = tsCompletionsWorker({ root, onReply: r => { replies.push(r); replied?.(); }});
+  const next = () => new Promise(resolve => (replied = resolve));
+  try {
+    // the warm-up, past its deadline, still starts the service and answers
+    let got = next();
+    worker.request({ id: 1, ...at('', ''), deadline: Date.now() - 1 });
+    await got;
+    worker.request({ id: 2, ...at('document.getE', 'getE'), deadline: Date.now() - 1 });
+    got = next();
+    worker.request({ id: 3, ...at('document.getE', 'getE'), deadline: Date.now() + 10000 });
+    await got;
+    assert.deepEqual(replies.map(r => r.id), [1, 3]);
+    assert.ok(replies[1].entries.some(e => e.name === 'getElementById'));
+  } finally {
+    await worker.close();
+    release();
+  }
+});
+
+test('the worker thread without TypeScript answers with the error', async () => {
+  const release = keepAlive();
+  const worker = tsCompletionsWorker({ root: project({}, false), onReply: r => resolve(r)});
+  let resolve;
+  const reply = new Promise(r => (resolve = r));
+  worker.request({ id: 7, ...at('document.getE', 'getE') });
+  try {
+    const r = await reply;
+    assert.equal(r.id, 7);
+    assert.match(r.error, /TypeScript/);
+  } finally {
+    await worker.close();
+    release();
+  }
+});
+
+test("the worker thread doesn't keep the process alive once it answered", () => {
+  const module = new URL('../ts-completions.js', import.meta.url).href;
+  const root = project({}, false);
+  const script = `import { tsCompletionsWorker } from ${JSON.stringify(module)};
+    const keepAlive = setTimeout(() => {}, 60000);
+    tsCompletionsWorker({ root: ${JSON.stringify(root)}, onReply: r => { console.log(r.id); clearTimeout(keepAlive); } })
+      .request({ id: 5, code: '', position: 0 });`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(r.signal, null, 'exited by itself');
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout.trim(), '5');
+});
+
+test("a worker that exits: its requests and the next ones answered with an error, none after close", async () => {
+  const release = keepAlive();
+  const replies = [];
+  let replied;
+  const next = () => new Promise(resolve => (replied = resolve));
+  // a worker exiting once it gets a request
+  const workerURL = new URL(`data:text/javascript,${encodeURIComponent(
+    "import { parentPort } from 'node:worker_threads'; parentPort.on('message', () => process.exit(3));")}`);
+  const worker = tsCompletionsWorker({ root: project({}, false), workerURL, onReply: r => { replies.push(r); replied?.(); } });
+  try {
+    let got = next();
+    worker.request({ id: 1, code: '', position: 0 });
+    await got;
+    assert.equal(replies[0].id, 1);
+    assert.match(replies[0].error, /exited: code 3/);
+    // not started again right away: answered at once
+    worker.request({ id: 2, code: '', position: 0 });
+    assert.deepEqual(replies.map(r => r.id), [1, 2]);
+    assert.match(replies[1].error, /exited/);
+    await worker.close();
+    worker.request({ id: 3, code: '', position: 0 });
+    assert.equal(replies.length, 2);
+  } finally {
+    await worker.close();
+    release();
+  }
 });

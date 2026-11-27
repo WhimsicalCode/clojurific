@@ -250,14 +250,15 @@
   (see vite-plugin-cljs/ts-completions.js). Returns {:entries [{:name :type
   :signature :doc :deprecated}]}, {:error} when it has no TypeScript, nil
   when it doesn't answer before deadline (System/currentTimeMillis) or
-  doesn't complete with TypeScript."
+  doesn't complete with TypeScript. The plugin's worker thread skips a
+  request whose deadline passed before it got to it."
   [req deadline]
   (when (:ts-completions @dev-server-)
     (let [id (swap! request-ids inc)
           p  (promise)]
       (swap! ts-pending assoc id p)
       (try
-        (esm/event! "ts-complete" (assoc req :id id))
+        (esm/event! "ts-complete" (assoc req :id id :deadline deadline))
         (some-> (deref p (max 0 (- deadline (System/currentTimeMillis))) nil)
           (select-keys [:entries :error]))
         (finally

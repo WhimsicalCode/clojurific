@@ -20,7 +20,7 @@ import { ednValue } from './edn.js';
 import { normalizePath, watchWarnings } from './warnings.js';
 import { listenReplSocket } from './repl-socket.js';
 import { runtimeMessage } from './runtime-ops.js';
-import { tsCompletions } from './ts-completions.js';
+import { tsCompletionsWorker } from './ts-completions.js';
 import { WORKER_ENV, devWorkers, entryModule, importVite, workerHotChannel } from './dev-workers.js';
 
 const EVENT_PREFIX = '[cljf.esm] ';
@@ -1437,20 +1437,20 @@ export default function cljf(options) {
         if (server.httpServer) server.httpServer.once('listening', sayHello);
         else setTimeout(sayHello);
       }
-      // the REPL's completions of JavaScript interop (tsCompletions), the
-      // language service started by the first
-      let tsComplete;
+      // the REPL's completions of JavaScript interop (tsCompletions), in a
+      // worker thread started by the first: the language service is
+      // synchronous, and would hold up this thread
+      const tsComplete = options.tsCompletions && tsCompletionsWorker({
+        root: config.root,
+        tsconfig: options.tsCompletions.tsconfig,
+        // an error, i.e. the worker exited, is warned about by the REPL
+        onReply: reply => toRepl({ ...reply, op: 'ts-completions' }),
+      });
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
         if (event.type === 'repl-send') return replSend(event);
-        if (event.type === 'ts-complete' && options.tsCompletions) {
-          tsComplete ??= tsCompletions({ root: config.root, tsconfig: options.tsCompletions.tsconfig });
-          let result;
-          try {
-            result = tsComplete(event);
-          } catch (e) {
-            result = { error: String(e?.message ?? e) };
-          }
-          return toRepl({ op: 'ts-completions', id: event.id, ...result });
+        if (event.type === 'ts-complete' && tsComplete) {
+          const { type, ...request } = event;
+          return tsComplete.request(request);
         }
         if (event.type === 'watch-dirs') {
           // the compiler reads its stdin now, before its first build
@@ -1557,6 +1557,7 @@ export default function cljf(options) {
       const stop = () => {
         stopping = true;
         proc.kill();
+        if (tsComplete) tsComplete.close();
       };
       server.httpServer?.once('close', stop);
       process.once('exit', stop);
