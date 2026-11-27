@@ -29,8 +29,18 @@ function loadTypeScript(root) {
 // The compiler options of the tsconfig named, or of root's tsconfig.json,
 // with its declaration files, defaults without one. The snippet imports .ts files
 // and packages as Vite resolves them.
+// The names of the @types packages installed in root's node_modules and its
+// ancestors' (a workspace's hoisted ones), which resolve from root.
+function installedTypes(ts, root) {
+  const names = new Set();
+  for (let dir = root; ; dir = path.dirname(dir)) {
+    const atTypes = path.join(dir, 'node_modules', '@types');
+    if (ts.sys.directoryExists(atTypes)) for (const name of ts.sys.getDirectories(atTypes)) names.add(name);
+    if (path.dirname(dir) === dir) return [...names];
+  }
+}
+
 function projectConfig(ts, root, tsconfig) {
-  const atTypes = path.join(root, 'node_modules', '@types');
   const defaults = {
     target: ts.ScriptTarget.ESNext,
     module: ts.ModuleKind.ESNext,
@@ -42,7 +52,7 @@ function projectConfig(ts, root, tsconfig) {
     strict: true,
     // the installed @types (i.e. @types/node), which TypeScript 6 no
     // longer includes by default
-    types: ts.sys.directoryExists(atTypes) ? ts.sys.getDirectories(atTypes) : [],
+    types: installedTypes(ts, root),
   };
   // root's own: a tsconfig.json further up (i.e. a monorepo's, for its other
   // projects) may not describe this one

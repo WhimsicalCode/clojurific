@@ -83,6 +83,11 @@ test("a tsconfig.json above the root isn't the project's", { skip }, () => {
   assert.ok(names(tsCompletions({ root: path.join(root, 'app') })(at('document.getE', 'getE'))).includes('getElementById'));
 });
 
+test("a workspace's hoisted @types", { skip: skip || (!fs.existsSync(path.join(nodeModules ?? '', '@types', 'node')) && 'no @types/node') }, () => {
+  const root = project({ 'app/package.json': '{}' });
+  assert.deepEqual(names(tsCompletions({ root: path.join(root, 'app') })(at('process.ver', 'ver'))), ['version', 'versions']);
+});
+
 test('an error without TypeScript', () => {
   const r = tsCompletions({ root: project({}, false) })(at('document.getE', 'getE'));
   assert.match(r.error, /TypeScript/);
