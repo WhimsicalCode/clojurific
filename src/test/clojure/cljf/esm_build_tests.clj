@@ -97,9 +97,9 @@
 
 (deftest writes-closure-libraries-of-cached-namespaces
   (let [dir     (temp-dir)
-        sources (into {} [(write-source! dir 'test.c "(ns test.c (:require [goog.date.Interval]))"
+        sources (into {} [(write-source! dir 'test.c "(ns test.c (:require [goog.functions]))"
                             (- (System/currentTimeMillis) 60000))])
-        lib     (io/file dir "out" "goog-lib" "ns" "goog.date.Interval.js")]
+        lib     (io/file dir "out" "goog-lib" "ns" "goog.functions.js")]
     (build! dir sources 'test.c)
     (is (.exists lib))
     (testing "a build compiling none of its users"
@@ -1107,8 +1107,15 @@
                                          [goog.crypt.base64 :as base64]
                                          [goog.crypt.Sha256]
                                          [goog.math.Long]
-                                         [goog.async.nextTick])
-                               (:import [goog.string StringBuffer]))
+                                         [goog.async.nextTick]
+                                         [goog.date :as date]
+                                         [goog.date.UtcDateTime]
+                                         [goog.date.Interval]
+                                         [goog.date.duration :as duration])
+                               (:import [goog.string StringBuffer]
+                                        [goog.date Date]))
+                             (defprotocol Day (day-of [d]))
+                             (extend-type Date Day (day-of [d] (.getUTCDate d)))
                              (let [sha (goog.crypt.Sha256.)]
                                (.update sha (crypt/stringToUtf8ByteArray \"abc\"))
                                (goog.async.nextTick
@@ -1117,10 +1124,15 @@
                                     (base64/encodeByteArray (crypt/stringToUtf8ByteArray \"abc\")
                                       base64/Alphabet.WEBSAFE_NO_PADDING)
                                     (str (.add (goog.math.Long/fromBits 1 1) (goog.math.Long/getOne)))
-                                    (str (.append (StringBuffer. \"a\") \"b\")))))"
+                                    (str (.append (StringBuffer. \"a\") \"b\"))
+                                    (let [t (goog.date.UtcDateTime/fromIsoString \"2026-11-27T13:45:10Z\")]
+                                      (.add t (goog.date.Interval. goog.date.Interval/DAYS 5))
+                                      (str (.toUTCIsoString t true) \",\" (day-of t) \",\" (date/isLeapYear 2024)))
+                                    (duration/format 90060000))))"
                             (- (System/currentTimeMillis) 60000))])]
     (build! dir sources 'test.s)
     (testing "classes' namespaces and their statics are their parents' shims'"
       (is (not (.exists (io/file dir "out" "goog-lib"))))
-      (is (= "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad YWJj 4294967298 ab"
+      (is (= (str "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad YWJj 4294967298 ab "
+                  "2026-12-02T13:45:10,2,true 1 day 1 hour 1 minute")
              (string/trim (run-node (io/file dir "out" "test" "s.js"))))))))

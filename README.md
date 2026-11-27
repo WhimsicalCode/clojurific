@@ -604,7 +604,7 @@ Hello world: 177 KB / 35 KB gzipped (Closure advanced: 110 KB / 23 KB).
 - REPL: npm modules can't be required at the REPL.
 - FlowStorm: ClojureStorm instruments through its own build of the compiler, which doesn't have `cljf.esm`.
 - `cljs.core` references `goog.math.Long` / `goog.math.Integer` for `integer?`, which keeps them in every bundle.
-- Closure Library files run whole: `goog.i18n`'s locale data (from `goog.date`, e.g. cljs-time) has every locale, which Closure's advanced compilation reduces to `goog.LOCALE`'s, about 340 KB of a bundle.
+- Closure Library files run whole: `goog.i18n`'s locale data (i.e. from `goog.i18n.DateTimeFormat`) has every locale, which Closure's advanced compilation reduces to `goog.LOCALE`'s, about 340 KB of a bundle.
 - Closure's `:modules` aren't supported; lazy loading uses `import()`.
 - There's no classic compiler (`goog.provide` output, Closure's `:advanced` optimizations): `cljs.closure`, `cljs.build.api`, `cljs.compiler.api`, `cljs.main`, the classic REPLs (`cljs.repl/repl`, `cljs.repl.node`, `cljs.repl.browser`, `cljs.server.*`), `cljs.module-graph` and `cljs.loader` were removed, and so was self-hosted ClojureScript's `cljs.js`, which emits classic code (`:self-host`'s `cljf.selfhost` compiles in the page, see [Self-hosted REPL](#self-hosted-repl)). Tools calling them (figwheel, piggieback, `cljs.main` scripts) fail with a missing namespace; `cljs.repl` keeps its `doc`, `source`, `dir`, `apropos` and `find-doc` macros.
 - Keywords, `get` and map destructuring read plain JavaScript objects ([JavaScript objects](#javascript-objects)): a library relying on `(:k js-obj)` being `nil`, as in ClojureScript, sees the property.
@@ -632,9 +632,9 @@ export { my$app$greet as greet };
 
 ### Closure Library
 
-`cljs.core` uses little of the Closure Library. `src/main/cljs/cljf/esm/goog*` are ES module versions of what it uses (`goog.typeOf`, `goog.object`, `goog.string`, `goog.math.Long`, ...) and of what ClojureScript code commonly uses (`goog.crypt`, `goog.crypt.base64`, `goog.crypt.Sha256`, `goog.async.nextTick`, `goog.events`, `goog.dom`, ...). A class's namespace (`goog.math.Long`, `goog.crypt.Sha256`) is its parent's shim's when the shim exports the class.
+`cljs.core` uses little of the Closure Library. `src/main/cljs/cljf/esm/goog*` are ES module versions of what it uses (`goog.typeOf`, `goog.object`, `goog.string`, `goog.math.Long`, ...) and of what ClojureScript code commonly uses (`goog.crypt`, `goog.crypt.base64`, `goog.crypt.Sha256`, `goog.async.nextTick`, `goog.events`, `goog.dom`, cljs-time's `goog.date`, ...). A class's namespace (`goog.math.Long`, `goog.crypt.Sha256`) is its parent's shim's when the shim exports the class.
 
-Other code using the Closure Library (cljs-time's `goog.date`, cljs-http's `goog.Uri` and `goog.net.XhrIo`, ...) and other Closure style libraries (transit-js) gets the real thing: Closure Library files are wrapped as ES modules (`goog-lib/`) run by Closure Library's `base.js` with the debug loader disabled, and dependencies are imports. Members are resolved per reference: a shim is used if it exports the member, otherwise the Closure Library. Its direct `eval` calls (`goog.json.parse`, base.js' module loader) are made indirect, since a direct eval keeps minifiers from renaming the top level of the chunk it's in.
+Other code using the Closure Library (cljs-http's `goog.Uri` and `goog.net.XhrIo`, ...) and other Closure style libraries (transit-js) gets the real thing: Closure Library files are wrapped as ES modules (`goog-lib/`) run by Closure Library's `base.js` with the debug loader disabled, and dependencies are imports. Members are resolved per reference: a shim is used if it exports the member, otherwise the Closure Library. Its direct `eval` calls (`goog.json.parse`, base.js' module loader) are made indirect, since a direct eval keeps minifiers from renaming the top level of the chunk it's in.
 
 ### Externs
 

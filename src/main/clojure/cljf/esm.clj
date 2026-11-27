@@ -41,6 +41,8 @@
    "goog/async/nextTick.js"
    "goog/crypt.js"
    "goog/crypt/base64.js"
+   "goog/date.js"
+   "goog/date/duration.js"
    "goog/dom.js"
    "goog/events.js"
    "goog/events/EventType.js"
