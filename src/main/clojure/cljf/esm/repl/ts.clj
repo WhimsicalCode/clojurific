@@ -20,7 +20,8 @@
 
   where react is the alias of a string require, [\"react\" :as react], of
   the completion's namespace. Forms it can't translate (locals, ClojureScript
-  fns) aren't completed here: the runtime's (clj-suitable) are."
+  fns) aren't completed here, only by the runtime (clj-suitable), whose
+  candidates are merged with these."
   (:require [cljs.analyzer :as ana]
             [cljs.util :as util]
             [cljs.vendor.clojure.data.json :as json]
