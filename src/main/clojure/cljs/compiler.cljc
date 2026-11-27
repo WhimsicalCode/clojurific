@@ -231,14 +231,17 @@
   [nm]
   (str (munge nm js-reserved)))
 
-(declare esm-goog-shim-exports esm-goog-class-shim valid-define-value?)
+(declare esm-goog-shim-exports esm-goog-class-shim esm-goog-child-shim valid-define-value?)
 
 (defn- munge-esm-var
   ([ns nm] (munge-esm-var ns nm js-reserved))
   ([ns nm reserved]
-   (if-let [[parent class] #?(:clj (esm-goog-class-shim ns ana/*cljs-ns*) :cljs nil)]
-     ;; goog.math.Long/fromBits is goog.math's shim's Long.fromBits
-     (munge-esm-var parent (str class "." nm) reserved)
+   (if-let [[ns' nm'] #?(:clj (or (when-let [[parent class] (esm-goog-class-shim ns ana/*cljs-ns*)]
+                                    ;; goog.math.Long/fromBits is goog.math's shim's Long.fromBits
+                                    [parent (str class "." nm)])
+                                  (esm-goog-child-shim ns nm ana/*cljs-ns*))
+                        :cljs nil)]
+     (munge-esm-var ns' nm' reserved)
      (let [local? (and (not *esm-repl*) (= ns (str ana/*cljs-ns*)))
            ;; .. (the macro) is a name, not a property path
            idx    (if (= ".." nm) -1 (.indexOf ^String nm "."))
@@ -2094,6 +2097,23 @@
              class  (subs ns (inc i))]
          (when (contains? (esm-goog-shim-exports parent from-ns) class)
            [parent class])))))
+
+#?(:clj
+   (defn esm-goog-child-shim
+     "[child member] when the property path nm of Closure Library namespace
+     ns starts with a namespace that has a shim of its own and isn't one of
+     ns' shim's exports: goog/Uri.parse is goog.Uri's shim's parse, goog/Uri its
+     Uri (cljs.core keeps the goog shim's stub). A path the child's shim doesn't
+     export is the property path of its class (Uri.prototype.foo)."
+     [ns nm from-ns]
+     (when (or (= "goog" ns) (string/starts-with? ns "goog."))
+       (let [[c rest] (string/split nm #"\." 2)
+             child    (str ns "." c)]
+         (when-let [exports (and (not (contains? (esm-goog-shim-exports ns from-ns) (esm-var-name c)))
+                                 (esm-goog-shim-exports child from-ns))]
+           [child (if (and rest (contains? exports (esm-var-name (first (string/split rest #"\.")))))
+                    rest
+                    (cond-> c rest (str "." rest)))])))))
 
 #?(:clj
    (defn esm-goog-lib-path

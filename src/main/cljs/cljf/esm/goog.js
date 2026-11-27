@@ -71,12 +71,15 @@ export function define(name, defaultValue) {
 
 export const DEBUG = define('goog.DEBUG', true);
 
-// cljs.core only checks for instances of goog.Uri, instances of the Closure
-// Library's goog.Uri, when the compatibility layer loaded it, are instances too.
-// A stub, other namespaces get the Closure Library's goog.Uri.
+// cljs.core only checks for instances of goog.Uri (uri?): instances of the
+// goog.Uri shim (goog/Uri.js, which marks them, so cljs.core doesn't import
+// it), and of the Closure Library's goog.Uri when the compatibility layer
+// loaded it, are instances. A stub, other namespaces get the shim's goog.Uri.
+const URI_MARKER = Symbol.for('cljf.goog.Uri');
+
 export /* stub */ class Uri {
   static [Symbol.hasInstance](x) {
-    if (Function.prototype[Symbol.hasInstance].call(Uri, x)) return true;
+    if (x != null && x[URI_MARKER] === true) return true;
     const real = globalThis.goog && globalThis.goog.Uri;
     return real && real !== Uri ? x instanceof real : false;
   }

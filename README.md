@@ -632,9 +632,9 @@ export { my$app$greet as greet };
 
 ### Closure Library
 
-`cljs.core` uses little of the Closure Library. `src/main/cljs/cljf/esm/goog*` are ES module versions of what it uses (`goog.typeOf`, `goog.object`, `goog.string`, `goog.math.Long`, ...) and of what ClojureScript code commonly uses (`goog.crypt`, `goog.crypt.base64`, `goog.crypt.Sha256`, `goog.async.nextTick`, `goog.events`, `goog.dom`, cljs-time's `goog.date`, cljs-http's `goog.net.XhrIo`, ...). A class's namespace (`goog.math.Long`, `goog.crypt.Sha256`) is its parent's shim's when the shim exports the class.
+`cljs.core` uses little of the Closure Library. `src/main/cljs/cljf/esm/goog*` are ES module versions of what it uses (`goog.typeOf`, `goog.object`, `goog.string`, `goog.math.Long`, ...) and of what ClojureScript code commonly uses (`goog.crypt`, `goog.crypt.base64`, `goog.crypt.Sha256`, `goog.async.nextTick`, `goog.events`, `goog.dom`, cljs-time's `goog.date`, cljs-http's `goog.net.XhrIo`, cljs-http's and reitit's `goog.Uri`, ...). A class's namespace (`goog.math.Long`, `goog.crypt.Sha256`) is its parent's shim's when the shim exports the class.
 
-Other code using the Closure Library (cljs-http's and reitit's `goog.Uri`, ...) and other Closure style libraries (transit-js) gets the real thing: Closure Library files are wrapped as ES modules (`goog-lib/`) run by Closure Library's `base.js` with the debug loader disabled, and dependencies are imports. Members are resolved per reference: a shim is used if it exports the member, otherwise the Closure Library. Its direct `eval` calls (`goog.json.parse`, base.js' module loader) are made indirect, since a direct eval keeps minifiers from renaming the top level of the chunk it's in.
+Other code using the Closure Library and other Closure style libraries (transit-js) gets the real thing: Closure Library files are wrapped as ES modules (`goog-lib/`) run by Closure Library's `base.js` with the debug loader disabled, and dependencies are imports. Members are resolved per reference: a shim is used if it exports the member, otherwise the Closure Library. Its direct `eval` calls (`goog.json.parse`, base.js' module loader) are made indirect, since a direct eval keeps minifiers from renaming the top level of the chunk it's in.
 
 ### Externs
 

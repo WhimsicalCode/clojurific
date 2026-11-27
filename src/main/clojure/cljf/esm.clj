@@ -37,6 +37,7 @@
   reimplemented as ES modules. Paths are relative to the output directory and
   the cljf/esm resource directory."
   ["goog.js"
+   "goog/Uri.js"
    "goog/array.js"
    "goog/async/nextTick.js"
    "goog/crypt.js"
