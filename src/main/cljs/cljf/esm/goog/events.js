@@ -124,11 +124,26 @@ export class BrowserEvent extends Event {
   }
 }
 
+BrowserEvent.MouseButton = { LEFT: 0, MIDDLE: 1, RIGHT: 2, BACK: 3, FORWARD: 4 };
+BrowserEvent.PointerType = { MOUSE: 'mouse', PEN: 'pen', TOUCH: 'touch' };
+
 const isListenable = (src) =>
   src != null && typeof src.listen === 'function' && typeof src.unlistenByKey === 'function';
 
 const captureOf = (options) =>
   options !== null && typeof options === 'object' ? !!options.capture : !!options;
+
+// Objects with a handleEvent method listen through a function of their own,
+// which unlistening with the object finds, as Closure Library's wrapListener
+const listenerWrappers = new WeakMap();
+
+export function wrapListener(listener) {
+  if (typeof listener === 'function') return listener;
+  if (!listener || !listener.handleEvent) throw new Error('An object listener must have handleEvent method.');
+  let wrapper = listenerWrappers.get(listener);
+  if (!wrapper) listenerWrappers.set(listener, (wrapper = (e) => listener.handleEvent(e)));
+  return wrapper;
+}
 
 // The listeners of each event target, which listening again with the same
 // listener, type and capture finds, as Closure Library's ListenerMap
@@ -170,6 +185,7 @@ export function listen(src, type, listener, opt_options, opt_handler) {
     for (const t of type) listen(src, t, listener, opt_options, opt_handler);
     return null;
   }
+  listener = wrapListener(listener);
   if (isListenable(src)) return src.listen(type, listener, captureOf(opt_options), opt_handler);
   return listen_(src, type, listener, false, opt_options, opt_handler);
 }
@@ -179,6 +195,7 @@ export function listenOnce(src, type, listener, opt_options, opt_handler) {
     for (const t of type) listenOnce(src, t, listener, opt_options, opt_handler);
     return null;
   }
+  listener = wrapListener(listener);
   if (isListenable(src)) return src.listenOnce(type, listener, captureOf(opt_options), opt_handler);
   return listen_(src, type, listener, true, opt_options, opt_handler);
 }
@@ -207,11 +224,33 @@ export function unlisten(src, type, listener, opt_options, opt_handler) {
     return null;
   }
   const capture = captureOf(opt_options);
+  listener = wrapListener(listener);
   if (isListenable(src)) return src.unlisten(type, listener, capture, opt_handler);
-  if (!src) return false;
-  const key = (listenerMaps.get(src) || []).find((l) =>
-    l.type == type.toString() && l.listener == listener && l.capture == capture && l.handler == opt_handler);
+  const key = getListener(src, type, listener, capture, opt_handler);
   return key ? unlistenByKey(key) : false;
+}
+
+export function getListener(src, type, listener, opt_capt, opt_handler) {
+  const capture = !!opt_capt;
+  listener = wrapListener(listener);
+  if (isListenable(src)) return src.getListener(type, listener, capture, opt_handler);
+  if (!src) return null;
+  return (listenerMaps.get(src) || []).find((l) =>
+    l.type == type.toString() && l.listener == listener && l.capture == capture && l.handler == opt_handler) || null;
+}
+
+export function getListeners(obj, type, capture) {
+  if (isListenable(obj)) return obj.getListeners(type, capture);
+  if (!obj) return [];
+  return (listenerMaps.get(obj) || []).filter((l) => l.type == type.toString() && l.capture == !!capture);
+}
+
+export function hasListener(obj, opt_type, opt_capture) {
+  if (isListenable(obj)) return obj.hasListener(opt_type, opt_capture);
+  if (!obj) return false;
+  const type = opt_type === undefined ? undefined : opt_type.toString();
+  return (listenerMaps.get(obj) || []).some((l) =>
+    (type === undefined || l.type == type) && (opt_capture === undefined || l.capture == opt_capture));
 }
 
 export function removeAll(obj, opt_type) {

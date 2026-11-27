@@ -868,7 +868,7 @@
                              (defn greet [s] (str \"Hi \" (str/upper-case s)))
                              ;; not in the goog.string shim: the build runs the namespace
                              ;; with the compatibility layer
-                             (defn esc [s] (goog.string/htmlEscape s))"
+                             (defn esc [s] (goog.string/caseInsensitiveCompare s s))"
                             (- (System/currentTimeMillis) 60000))
                           (write-source! dir 'test.selfother "(ns test.selfother) (def a 1)"
                             (- (System/currentTimeMillis) 60000))])
@@ -919,7 +919,7 @@
                              '(ns test.page) (def x 5)',
                              '(ns test.page2 (:require [test.page :as p])) p/x',
                              // a Closure Library member the shim doesn't have
-                             '(goog.string/htmlEscape \"<\")']) {
+                             '(goog.string/caseInsensitiveCompare \"a\" \"B\")']) {
               try { res.push(await globalThis.cljs_selfhost_eval(f, { print: true })); }
               catch (e) { res.push('error: ' + e.message); }
             }
@@ -932,7 +932,7 @@
             "error: err" ":test.sh3/k"
             "error: lazy" "error: Unknown error"
             "#'test.page/x" "5"
-            "\"&lt;\""]
+            "-1"]
            (json/read-str (last (string/split-lines (string/trim (run-node runner)))))))))
 
 (deftest self-host-macros-with-optimize-constants
@@ -1114,7 +1114,8 @@
                                          [goog.date.duration :as duration]
                                          [goog.net.ErrorCode]
                                          [goog.Uri]
-                                         [goog.Uri.QueryData])
+                                         [goog.Uri.QueryData]
+                                         [goog.events.EventType])
                                (:import [goog.string StringBuffer]
                                         [goog.date Date]
                                         [goog.net EventType XhrIo Cookies]))
@@ -1142,14 +1143,18 @@
                                     (str (.resolve (goog.Uri/parse \"http://a.com/b/c?x=1\") (goog.Uri. \"../d?y=2#f\")))
                                     (str (goog.Uri.QueryData/createFromMap #js {:a 1 :b \"x y\"}))
                                     (uri? (goog.Uri. \"x\"))
-                                    (goog.Uri/haveSameDomain \"http://a.com/x\" \"http://a.com/y\"))))"
+                                    (goog.Uri/haveSameDomain \"http://a.com/x\" \"http://a.com/y\")
+                                    ;; a shim as a value, js/ references
+                                    (get (js->clj goog.events.EventType) \"CLICK\")
+                                    (str (js/goog.Uri. \"http://b.com\"))
+                                    (instance? js/goog.math.Long (goog.math.Long/getOne)))))"
                             (- (System/currentTimeMillis) 60000))])]
     (build! dir sources 'test.s)
     (testing "classes' namespaces and their statics are their parents' shims'"
       (is (not (.exists (io/file dir "out" "goog-lib"))))
       (is (= (str "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad YWJj 4294967298 ab "
                   "2026-12-02T13:45:10,2,true 1 day 1 hour 1 minute 22 0 blob complete 7 "
-                  "http://a.com/d?y=2#f a=1&b=x%20y true true")
+                  "http://a.com/d?y=2#f a=1&b=x%20y true true click http://b.com true")
              (string/trim (run-node (io/file dir "out" "test" "s.js"))))))))
 
 (deftest transit-shim
@@ -1170,3 +1175,22 @@
       (is (not (.exists (io/file dir "out" "goog-lib"))))
       (is (= "true true true 9007199254740993 true [\"^ \",\"~:x\",[\"~#set\",[1]],\"~:y\",[1.5,null]]"
              (string/trim (run-node (io/file dir "out" "test" "t.js"))))))))
+
+(deftest closure-library-beside-shims
+  (let [dir     (temp-dir)
+        sources (into {} [(write-source! dir 'test.b
+                            "(ns test.b
+                               (:require [goog.async.nextTick]
+                                         [goog.async.Delay]
+                                         [goog.net.XhrManager]
+                                         [goog.events.EventType])
+                               (:import [goog.net XhrManager XhrIo]
+                                        [goog.events EventType]))
+                             (goog.async.nextTick
+                               #(js/console.log (some? (goog.async.Delay. identity 10)) (some? (XhrManager.))
+                                  (some? (XhrIo.)) EventType.CLICK (count (js->clj EventType))))"
+                            (- (System/currentTimeMillis) 60000))])]
+    (build! dir sources 'test.b)
+    (testing "Closure Library classes under shimmed namespaces (goog.async, goog.net) are the Closure Library's"
+      (is (= "true true true click 162"
+             (string/trim (run-node (io/file dir "out" "test" "b.js"))))))))

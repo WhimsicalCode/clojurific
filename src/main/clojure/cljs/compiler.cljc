@@ -247,7 +247,13 @@
                                     [parent (str class "." nm)])
                                   (esm-goog-child-shim ns nm ana/*cljs-ns*))
                         :cljs nil)]
-     (munge-esm-var ns' nm' reserved)
+     (if (nil? nm')
+       ;; the shim's exports, i.e. goog.events.EventType's, as a plain
+       ;; object like Closure Library's namespaces (js->clj converts it, not
+       ;; a module namespace object)
+       (do (swap! (:refs *esm*) conj ns')
+           (str "({..." (esm-ns-alias ns') "})"))
+       (munge-esm-var ns' nm' reserved))
      (let [local? (and (not *esm-repl*) (= ns (str ana/*cljs-ns*)))
            ;; .. (the macro) is a name, not a property path
            idx    (if (= ".." nm) -1 (.indexOf ^String nm "."))
@@ -387,10 +393,20 @@
         (when (pos? n)
           (let [ns (string/join "." (take n segs))]
             (if (or (esm-module-ns? ns) (esm-goog-shim-member? ns (nth segs n nil)))
-              ;; as in munge-esm-var, Closure Library members without a shim
-              ;; come from the compatibility layer
-              (let [lib? (and (string/starts-with? ns "goog.")
-                              #?(:clj  (let [member (some-> (nth segs n nil) esm-var-name)
+              ;; as in munge-esm-var, a class's namespace is its parent's
+              ;; shim's (js/goog.date.UtcDateTime), a namespace that is a
+              ;; class its shim's class (js/goog.Uri), and Closure Library
+              ;; members without a shim come from the compatibility layer
+              (let [[ns path] #?(:clj  (or (when-let [[parent class] (esm-goog-class-shim ns ana/*cljs-ns*)]
+                                             [parent (cons class (drop n segs))])
+                                           (when (and (= n (count segs)) (string/starts-with? ns "goog.")
+                                                      (contains? (esm-goog-shim-exports ns ana/*cljs-ns*)
+                                                        (esm-var-name (last segs))))
+                                             [ns [(last segs)]])
+                                           [ns (drop n segs)])
+                                 :cljs [ns (drop n segs)])
+                    lib? (and (string/starts-with? ns "goog.")
+                              #?(:clj  (let [member (some-> (first path) esm-var-name)
                                              shim   (esm-goog-shim-exports ns ana/*cljs-ns*)]
                                          (if member (not (contains? shim member)) (nil? shim)))
                                  :cljs true))]
@@ -400,7 +416,7 @@
                   (reset! (:self-import *esm*) true)
                   lib?  (swap! (:goog-lib-refs *esm*) conj ns)
                   :else (swap! (:refs *esm*) conj ns))
-                (string/join "." (cons (str (esm-ns-alias ns) (when lib? "$")) (drop n segs))))
+                (string/join "." (cons (str (esm-ns-alias ns) (when lib? "$")) path)))
               (recur (dec n)))))))))
 
 (defn- esm-def!
@@ -2107,19 +2123,34 @@
 #?(:clj
    (defn esm-goog-child-shim
      "[child member] when the property path nm of Closure Library namespace
-     ns starts with a namespace that has a shim of its own and isn't one of
-     ns' shim's exports: goog/Uri.parse is goog.Uri's shim's parse, goog/Uri its
-     Uri (cljs.core keeps the goog shim's stub). A path the child's shim doesn't
-     export is the property path of its class (Uri.prototype.foo)."
+     ns starts with a namespace that has a shim of its own (the shortest one)
+     and isn't one of ns' shim's exports: goog/Uri.parse is goog.Uri's shim's
+     parse, goog/async.nextTick goog.async.nextTick's nextTick, goog/Uri its Uri
+     (cljs.core keeps the goog shim's stub), goog.events/EventType the
+     goog.events.EventType shim itself (member nil). A path the child's shim
+     doesn't export is the property path of its class named like it
+     (Uri.prototype.foo), or nil when there's no such class: the Closure
+     Library's (goog.net.XhrManager)."
      [ns nm from-ns]
-     (when (or (= "goog" ns) (string/starts-with? ns "goog."))
-       (let [[c rest] (string/split nm #"\." 2)
-             child    (str ns "." c)]
-         (when-let [exports (and (not (contains? (esm-goog-shim-exports ns from-ns) (esm-var-name c)))
-                                 (esm-goog-shim-exports child from-ns))]
-           [child (if (and rest (contains? exports (esm-var-name (first (string/split rest #"\.")))))
-                    rest
-                    (cond-> c rest (str "." rest)))])))))
+     (when (and (or (= "goog" ns) (string/starts-with? ns "goog."))
+                (not (contains? (esm-goog-shim-exports ns from-ns)
+                       (esm-var-name (first (string/split nm #"\."))))))
+       (let [segs (string/split nm #"\.")]
+         (some (fn [k]
+                 (let [child (string/join "." (cons ns (take k segs)))
+                       rest  (seq (drop k segs))
+                       c     (esm-var-name (nth segs (dec k)))]
+                   (when-let [exports (esm-goog-shim-exports child from-ns)]
+                     (cond
+                       (and rest (contains? exports (esm-var-name (first rest))))
+                       [child (string/join "." rest)]
+
+                       (contains? exports c)
+                       [child (string/join "." (cons c rest))]
+
+                       (nil? rest)
+                       [child nil]))))
+           (range 1 (inc (count segs))))))))
 
 #?(:clj
    (defn esm-goog-lib-path

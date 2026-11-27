@@ -210,7 +210,8 @@ export function htmlEscape(str, opt_isLikelyToContainHtmlChars) {
   return String(str).replace(/[&<>"'\x00]/g, (c) => HTML_ESCAPES[c]);
 }
 
-const XML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"' };
+// no prototype: unknown entities (&constructor;) stay as they are
+const XML_ENTITIES = { __proto__: null, amp: '&', lt: '<', gt: '>', quot: '"' };
 
 function unescapeNumericEntity(entity) {
   if (entity.charAt(0) == '#') {
@@ -226,7 +227,7 @@ export function unescapeEntities(str) {
   if (!str.includes('&')) return str;
   const document = globalThis.document;
   if (document) {
-    const seen = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"' };
+    const seen = { __proto__: null, '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"' };
     let textarea;
     return str.replace(/&([^;\s<&]+);?/g, (s, entity) => {
       let value = seen[s] || unescapeNumericEntity(entity);
