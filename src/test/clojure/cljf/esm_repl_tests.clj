@@ -681,10 +681,11 @@
                  (js {:prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"})))
           (is (empty? (candidates {:prefix "js/process.ver" :ns "cljs.user"}))))
         (testing "the Vite plugin's TypeScript completions (tsCompletions) first, the runtime's when it has none"
-          (let [asked (atom [])
+          (let [asked   (atom [])
+                silent? (atom false)
                 entries (atom [{:name "fromTs" :type "var" :signature "(property) fromTs: string" :doc "Docs."}])]
             (with-redefs [esm/event! (fn [type m]
-                                       (when (= "ts-complete" type)
+                                       (when (and (= "ts-complete" type) (not @silent?))
                                          (swap! asked conj (dissoc m :id))
                                          (future (repl/handle-message!
                                                    (json/write-str {:op "ts-completions" :id (:id m) :entries @entries})))))]
@@ -704,12 +705,19 @@
                 (testing "TypeScript completing nothing (i.e. any): the runtime's"
                   (reset! entries [])
                   (is (= #{"js/process.version" "js/process.versions"} (js {:prefix "js/process.ver" :ns "cljs.user"}))))
+                (testing "TypeScript not answering (starting, Vite busy): the runtime's, within the deadline"
+                  (reset! silent? true)
+                  (let [start (System/currentTimeMillis)]
+                    (is (= #{"js/process.version" "js/process.versions"} (js {:prefix "js/process.ver" :ns "cljs.user"})))
+                    (is (< (- (System/currentTimeMillis) start) 1500)))
+                  (reset! silent? false))
+                (testing "without tsCompletions, the plugin isn't asked"
+                  (repl/handle-message! (json/write-str {:op "dev-server" :urls [] :tsCompletions false}))
+                  (let [n (count @asked)]
+                    (is (= #{"js/process.version" "js/process.versions"} (js {:prefix "js/process.ver" :ns "cljs.user"})))
+                    (is (= n (count @asked)))))
                 (finally
-                  (reset! @#'repl/dev-server- nil))))
-            (testing "without tsCompletions, the plugin isn't asked"
-              (let [n (count @asked)]
-                (is (= #{"js/process.version" "js/process.versions"} (js {:prefix "js/process.ver" :ns "cljs.user"})))
-                (is (= n (count @asked)))))))
+                  (reset! @#'repl/dev-server- nil))))))
         (testing "values printed whole, whatever *print-length* (i.e. set in user.clj)"
           (let [root *print-length*]
             (alter-var-root #'*print-length* (constantly 3))
@@ -835,6 +843,8 @@
       (is (nil? (snippet ".-ver" "(__prefix__ (str js/process))")))
       (is (nil? (snippet ".-ver" "(__prefix__ js/process")))
       (is (nil? (snippet "-ver" "(-> js/process __prefix__)"))))
+    (testing "::alias/k of aliases the namespace doesn't require"
+      (is (= "process.ver" (code ".-ver" "(do ::m/k (__prefix__ js/process))"))))
     (testing "contexts are read without evaluating #= or #Class[]"
       (reset! reader-evaluated false)
       (is (nil? (snippet ".-ver" "(__prefix__ #=(do (reset! cljf.esm-repl-tests/reader-evaluated true) (quote js/process)))")))

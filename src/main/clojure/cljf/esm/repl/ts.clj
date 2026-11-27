@@ -141,7 +141,9 @@
       ;; the editor's buffer: no #= or #Class[], which run code
       (binding [reader/*read-eval*              false
                 reader/*default-data-reader-fn* (fn [_ v] v)
-                reader/*alias-map*              (into {} (filter #(symbol? (key %))) (:requires ns))]
+                ;; ::alias/k of any alias (:as-alias, :require-macros):
+                ;; keywords don't matter to the snippet
+                reader/*alias-map*              (fn [sym] sym)]
         (reader/read-string {:read-cond :allow :features #{:cljs} :eof nil} context))
       (catch Exception _ nil))))
 

@@ -370,7 +370,9 @@
   suitable.js-introspection loads in the runtime, during a compile, or when
   it doesn't answer before deadline."
   [{:keys [session prefix symbol] :as msg} deadline]
-  (or (ts-completions msg deadline)
+  ;; TypeScript gets half the time: one answering late (starting, or Vite's
+  ;; event loop busy) leaves the runtime the rest
+  (or (ts-completions msg (min deadline (+ (System/currentTimeMillis) (quot complete-timeout 2))))
       (try
         (when-let [complete! (:complete @suitable)]
           (when-let [runtime-id (repl/target-id (select-keys (:opts (get @session #'*cljs*)) [:runtime-id :tag]))]
