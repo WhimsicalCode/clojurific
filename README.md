@@ -636,6 +636,8 @@ export { my$app$greet as greet };
 
 transit-js, which transit-cljs uses, has a shim too (`com/cognitect/transit-js.js`): its sources run against the `goog.math.Long` and `goog.object` shims, so the large integers it reads are `cljs.core`'s `goog.math.Long`.
 
+`goog/date.js`, `goog/net.js`, `goog/Uri.js` and `com/cognitect/` are converted from the libraries' sources by `script/gen-goog-shims` (`script/gen_goog_shims/`), which reads them from the jars `deps.edn` resolves; run it after updating the Closure Library or transit-cljs. The other shims are hand written.
+
 Other code using the Closure Library and other Closure style libraries gets the real thing: Closure Library files are wrapped as ES modules (`goog-lib/`) run by Closure Library's `base.js` with the debug loader disabled, and dependencies are imports. Members are resolved per reference: a shim is used if it exports the member, otherwise the Closure Library. Its direct `eval` calls (`goog.json.parse`, base.js' module loader) are made indirect, since a direct eval keeps minifiers from renaming the top level of the chunk it's in.
 
 ### Externs

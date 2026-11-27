@@ -1,0 +1,42 @@
+#!/bin/sh
+
+# Regenerates the shims converted from library sources: goog/date.js,
+# goog/net.js and goog/Uri.js from the Closure Library's, com/cognitect/ from
+# transit-js', both from the jars deps.edn resolves (script/gen_goog_shims/).
+# Run it after updating org.clojure/google-closure-library or
+# com.cognitect/transit-cljs. The other shims in src/main/cljs/cljf/esm/ are
+# hand written. Needs python3, node and unzip.
+
+set -e
+cd "$(dirname "$0")/.."
+
+cp=$(clojure -Spath)
+jar() { printf '%s\n' "$cp" | tr ':' '\n' | grep "/$1-[0-9][^/]*\.jar$"; }
+closure_jar=$(jar google-closure-library)
+transit_jar=$(jar transit-js)
+transit_version=$(basename "$transit_jar" .jar | sed 's/^transit-js-//')
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+unzip -q "$closure_jar" -d "$tmp/closure"
+unzip -q "$transit_jar" -d "$tmp/transit"
+
+gen=script/gen_goog_shims
+esm=src/main/cljs/cljf/esm
+
+python3 $gen/convert_goog_date.py "$tmp/closure" $esm/goog/date.js
+
+python3 $gen/closure2esm.py $esm/goog/net.js "$tmp/closure" $gen/net-prelude.js \
+  'XhrIo=goog.net.XhrIo,Jsonp=goog.net.Jsonp,Cookies=goog.net.Cookies,cookies=goog.net.cookies,EventType=goog.net.EventType,ErrorCode=goog.net.ErrorCode,HttpStatus=goog.net.HttpStatus,XmlHttp=goog.net.XmlHttp' \
+  goog/disposable/idisposable.js goog/disposable/disposable.js goog/events/eventid.js goog/events/event.js \
+  goog/events/listenable.js goog/events/listenablekey.js goog/events/listener.js goog/events/listenermap.js \
+  goog/events/eventtarget.js goog/net/errorcode.js goog/net/eventtype.js goog/net/httpstatus.js goog/net/xhrlike.js \
+  goog/net/xmlhttpfactory.js goog/net/wrapperxmlhttpfactory.js goog/net/xmlhttp.js goog/net/xhrio.js goog/net/cookies.js \
+  --post $gen/net-jsonp.post.js
+
+python3 $gen/closure2esm.py $esm/goog/Uri.js "$tmp/closure" $gen/uri-prelude.js \
+  'Uri=goog.Uri,RANDOM_PARAM=goog.Uri.RANDOM_PARAM,create=goog.Uri.create,haveSameDomain=goog.Uri.haveSameDomain,parse=goog.Uri.parse,removeDotSegments=goog.Uri.removeDotSegments,resolve=goog.Uri.resolve,QueryData=goog.Uri.QueryData' \
+  goog/uri/utils.js goog/uri/uri.js --post $gen/uri-marker.post.js
+
+python3 $gen/transit2esm.py $esm/com/cognitect/transit-js.js "$tmp/transit" ../../ "$transit_version"
+node $gen/transit_ns.mjs "$PWD/$esm/com/cognitect"
