@@ -2186,7 +2186,7 @@ goog.date.UtcDateTime.prototype.setSeconds =
 goog.date.UtcDateTime.prototype.setMilliseconds =
     goog.date.DateTime.prototype.setUTCMilliseconds;
 
-const {
+let {
   Date: Date$,
   DateTime: DateTime$,
   Interval: Interval$,

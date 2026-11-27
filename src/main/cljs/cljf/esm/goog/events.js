@@ -242,7 +242,7 @@ export function getListener(src, type, listener, opt_capt, opt_handler) {
 export function getListeners(obj, type, capture) {
   if (isListenable(obj)) return obj.getListeners(type, capture);
   if (!obj) return [];
-  return (listenerMaps.get(obj) || []).filter((l) => l.type == type.toString() && l.capture == !!capture);
+  return (listenerMaps.get(obj) || []).filter((l) => l.type == type.toString() && l.capture == capture);
 }
 
 export function hasListener(obj, opt_type, opt_capture) {

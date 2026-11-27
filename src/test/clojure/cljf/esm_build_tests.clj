@@ -162,14 +162,13 @@
 (deftest js-references-to-closure-libraries-without-a-shim
   (let [dir     (temp-dir)
         sources (into {} [(write-source! dir 'test.n
-                            "(ns test.n (:require [goog.async.nextTick]))
-                             (defn f [g] (set! js/goog.async.nextTick.setImmediate_ g))"
+                            "(ns test.n (:require [goog.async.run]))
+                             (defn f [g] (set! js/goog.async.run.schedule_ g))"
                             (- (System/currentTimeMillis) 60000))])]
     (build! dir sources 'test.n)
     (let [out (output dir 'test.n)]
-      (is (string/includes? out "import goog$async$nextTick$ from \"../goog-lib/ns/goog.async.nextTick.js\""))
-      (is (string/includes? out "goog$async$nextTick$.setImmediate_ = g"))
-      (is (not (string/includes? out "goog/async/nextTick.js"))))))
+      (is (string/includes? out "import goog$async$run$ from \"../goog-lib/ns/goog.async.run.js\""))
+      (is (string/includes? out "goog$async$run$.schedule_ = g")))))
 
 (deftest builds-without-the-closure-compiler
   (let [dir     (temp-dir)
@@ -863,7 +862,7 @@
   (let [dir     (temp-dir)
         out     (io/file dir "out")
         sources (into {} [(write-source! dir 'test.selfhost
-                            "(ns test.selfhost (:require [clojure.string :as str] [goog.string] [test.selfother]))
+                            "(ns test.selfhost (:require [clojure.string :as str] [goog.string] [goog.crypt.base64 :as b64] [test.selfother]))
                              (defonce state (atom {:n 1}))
                              (defn greet [s] (str \"Hi \" (str/upper-case s)))
                              ;; not in the goog.string shim: the build runs the namespace
@@ -919,7 +918,9 @@
                              '(ns test.page) (def x 5)',
                              '(ns test.page2 (:require [test.page :as p])) p/x',
                              // a Closure Library member the shim doesn't have
-                             '(goog.string/caseInsensitiveCompare \"a\" \"B\")']) {
+                             '(goog.string/caseInsensitiveCompare \"a\" \"B\")',
+                             // a shim cljs.core doesn't use
+                             '(in-ns (quote test.selfhost)) (b64/encodeString \"abc\")']) {
               try { res.push(await globalThis.cljs_selfhost_eval(f, { print: true })); }
               catch (e) { res.push('error: ' + e.message); }
             }
@@ -932,7 +933,7 @@
             "error: err" ":test.sh3/k"
             "error: lazy" "error: Unknown error"
             "#'test.page/x" "5"
-            "-1"]
+            "-1" "\"YWJj\""]
            (json/read-str (last (string/split-lines (string/trim (run-node runner)))))))))
 
 (deftest self-host-macros-with-optimize-constants
@@ -1147,14 +1148,17 @@
                                     ;; a shim as a value, js/ references
                                     (get (js->clj goog.events.EventType) \"CLICK\")
                                     (str (js/goog.Uri. \"http://b.com\"))
-                                    (instance? js/goog.math.Long (goog.math.Long/getOne)))))"
+                                    (instance? js/goog.math.Long (goog.math.Long/getOne))
+                                    ;; set! of a shim's member, as of a Closure Library namespace's
+                                    (with-redefs [base64/encodeByteArray (fn [_] \"redef\")]
+                                      (base64/encodeByteArray #js [1])))))"
                             (- (System/currentTimeMillis) 60000))])]
     (build! dir sources 'test.s)
     (testing "classes' namespaces and their statics are their parents' shims'"
       (is (not (.exists (io/file dir "out" "goog-lib"))))
       (is (= (str "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad YWJj 4294967298 ab "
                   "2026-12-02T13:45:10,2,true 1 day 1 hour 1 minute 22 0 blob complete 7 "
-                  "http://a.com/d?y=2#f a=1&b=x%20y true true click http://b.com true")
+                  "http://a.com/d?y=2#f a=1&b=x%20y true true click http://b.com true redef")
              (string/trim (run-node (io/file dir "out" "test" "s.js"))))))))
 
 (deftest transit-shim

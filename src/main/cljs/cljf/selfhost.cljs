@@ -44,10 +44,22 @@
   to this module's output, which bundlers resolve to the modules the build's
   namespaces import."
   {"goog"                   #(js* "import(\"../goog.js\")")
+   "goog.Uri"               #(js* "import(\"../goog/Uri.js\")")
    "goog.array"             #(js* "import(\"../goog/array.js\")")
+   "goog.async.nextTick"    #(js* "import(\"../goog/async/nextTick.js\")")
+   "goog.crypt"             #(js* "import(\"../goog/crypt.js\")")
+   "goog.crypt.base64"      #(js* "import(\"../goog/crypt/base64.js\")")
+   "goog.date"              #(js* "import(\"../goog/date.js\")")
+   "goog.date.duration"     #(js* "import(\"../goog/date/duration.js\")")
+   "goog.dom"               #(js* "import(\"../goog/dom.js\")")
+   "goog.events"            #(js* "import(\"../goog/events.js\")")
+   "goog.events.EventType"  #(js* "import(\"../goog/events/EventType.js\")")
+   "goog.i18n.uChar"        #(js* "import(\"../goog/i18n/uChar.js\")")
    "goog.math"              #(js* "import(\"../goog/math.js\")")
+   "goog.net"               #(js* "import(\"../goog/net.js\")")
    "goog.object"            #(js* "import(\"../goog/object.js\")")
    "goog.string"            #(js* "import(\"../goog/string.js\")")
+   "goog.userAgent"         #(js* "import(\"../goog/userAgent.js\")")
    "goog.userAgent.product" #(js* "import(\"../goog/userAgent/product.js\")")})
 
 (def ^:private macro-imports

@@ -2835,14 +2835,14 @@ goog.Uri.QueryData.prototype.extend = function(var_args) {
 // class without importing it
 goog.Uri.prototype[Symbol.for('cljf.goog.Uri')] = true;
 
-const Uri$ = goog.Uri;
-const RANDOM_PARAM$ = goog.Uri.RANDOM_PARAM;
-const create$ = goog.Uri.create;
-const haveSameDomain$ = goog.Uri.haveSameDomain;
-const parse$ = goog.Uri.parse;
-const removeDotSegments$ = goog.Uri.removeDotSegments;
-const resolve$ = goog.Uri.resolve;
-const QueryData$ = goog.Uri.QueryData;
+let Uri$ = goog.Uri;
+let RANDOM_PARAM$ = goog.Uri.RANDOM_PARAM;
+let create$ = goog.Uri.create;
+let haveSameDomain$ = goog.Uri.haveSameDomain;
+let parse$ = goog.Uri.parse;
+let removeDotSegments$ = goog.Uri.removeDotSegments;
+let resolve$ = goog.Uri.resolve;
+let QueryData$ = goog.Uri.QueryData;
 export {
   Uri$ as Uri,
   RANDOM_PARAM$ as RANDOM_PARAM,

@@ -40,7 +40,7 @@ missing = sorted(r for r in refs if not covered(r))
 assert not missing, 'unhandled: ' + ' '.join(missing)
 
 exports = [e.split('=') for e in exports_spec.split(',')]
-footer = '\n' + ''.join(f'const {n}$ = {p};\n' for n, p in exports) + \
+footer = '\n' + ''.join(f'let {n}$ = {p};\n' for n, p in exports) + \
     'export {\n' + ''.join(f'  {n}$ as {n},\n' for n, _ in exports) + '};\n'
 prelude = re.sub(r'^//\n// provides: .*\n', '', prelude, flags=re.M)
 open(out, 'w').write(prelude.rstrip('\n') + '\n\n' + '\n\n'.join(bodies) + ('\n' + post if post else '') + footer)

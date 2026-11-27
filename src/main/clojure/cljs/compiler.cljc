@@ -250,9 +250,9 @@
      (if (nil? nm')
        ;; the shim's exports, i.e. goog.events.EventType's, as a plain
        ;; object like Closure Library's namespaces (js->clj converts it, not
-       ;; a module namespace object)
+       ;; a module namespace object), without its setter (cljf.esm/goog-shim-setter)
        (do (swap! (:refs *esm*) conj ns')
-           (str "({..." (esm-ns-alias ns') "})"))
+           (str "(({$$set: _, ...o}) => o)(" (esm-ns-alias ns') ")"))
        (munge-esm-var ns' nm' reserved))
      (let [local? (and (not *esm-repl*) (= ns (str ana/*cljs-ns*)))
            ;; .. (the macro) is a name, not a property path
@@ -399,10 +399,13 @@
               ;; members without a shim come from the compatibility layer
               (let [[ns path] #?(:clj  (or (when-let [[parent class] (esm-goog-class-shim ns ana/*cljs-ns*)]
                                              [parent (cons class (drop n segs))])
-                                           (when (and (= n (count segs)) (string/starts-with? ns "goog.")
-                                                      (contains? (esm-goog-shim-exports ns ana/*cljs-ns*)
-                                                        (esm-var-name (last segs))))
-                                             [ns [(last segs)]])
+                                           (let [exports (esm-goog-shim-exports ns ana/*cljs-ns*)
+                                                 c       (nth segs (dec n))]
+                                             (when (and (string/starts-with? ns "goog.")
+                                                        (contains? exports (esm-var-name c))
+                                                        (not (contains? exports (some-> (nth segs n nil) esm-var-name))))
+                                               ;; js/goog.Uri.prototype.foo is the class's
+                                               [ns (cons c (drop n segs))]))
                                            [ns (drop n segs)])
                                  :cljs [ns (drop n segs)])
                     lib? (and (string/starts-with? ns "goog.")
@@ -416,7 +419,10 @@
                   (reset! (:self-import *esm*) true)
                   lib?  (swap! (:goog-lib-refs *esm*) conj ns)
                   :else (swap! (:refs *esm*) conj ns))
-                (string/join "." (cons (str (esm-ns-alias ns) (when lib? "$")) path)))
+                (if (and (empty? path) (not lib?) (string/starts-with? ns "goog."))
+                  ;; a shim as a value, as in munge-esm-var
+                  (str "(({$$set: _, ...o}) => o)(" (esm-ns-alias ns) ")")
+                  (string/join "." (cons (str (esm-ns-alias ns) (when lib? "$")) path))))
               (recur (dec n)))))))))
 
 (defn- esm-def!

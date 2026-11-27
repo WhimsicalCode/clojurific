@@ -226,14 +226,46 @@
             (java.nio.file.Files/move (.toPath written) (.toPath cache)
               (into-array [java.nio.file.StandardCopyOption/REPLACE_EXISTING]))))))))
 
+(defn goog-shim-setter
+  "The $$set function a shim's source gets: set! (and with-redefs) of a
+  shim's member from another module calls it, as it does a namespace's, see
+  cljs.compiler's emit* :set!. Closure Library namespaces were objects whose
+  members could be set. Exports bound by a top level const can't be set
+  (bundlers reject the assignment), a shim declaring its own $$set keeps it."
+  [src]
+  (let [decls  (map (fn [[_ n]] [n n])
+                 (re-seq #"export\s+(?:/\*\s*stub\s*\*/\s*)?(?:async\s+)?(?:function\*?|class|let|var)\s+([\w$]+)" src))
+        listed (mapcat (fn [[_ names]]
+                         (keep (fn [spec]
+                                 (let [[local exported] (map string/trim (string/split spec #"\s+as\s+"))]
+                                   (when (seq local) [(or exported local) local])))
+                           (string/split names #",")))
+                 (re-seq #"export\s*\{([^}]*)\}" src))
+        consts (into #{}
+                 (mapcat (fn [[_ destructured nm]]
+                           (if destructured
+                             (map #(string/trim (last (string/split % #":"))) (string/split destructured #","))
+                             [nm])))
+                 (re-seq #"(?m)^(?:export\s+)?const\s+(?:\{([^}]*)\}|([\w$]+))" src))]
+    (str "\nexport function $$set(name, v) {\n"
+         "switch (name) {\n"
+         (apply str (for [[exported local] (distinct (concat decls listed))
+                          :when (not (consts local))]
+                      (str "case \"" exported "\": return (" local " = v);\n")))
+         "}\n"
+         "throw new Error(\"Can't set \" + name);\n"
+         "}\n")))
+
 (defn- install-goog-shims [{:keys [output-dir]}]
   (doseq [path goog-shims]
-    (let [res  (io/resource (str "cljf/esm/" path))
+    (let [src  (slurp (io/resource (str "cljf/esm/" path)))
+          ;; goog.js has its own
+          src  (cond-> src (not (string/includes? src "export function $$set")) (str (goog-shim-setter src)))
           dest (io/file output-dir path)]
       (when (or (not (.exists dest))
-                (not= (slurp res) (slurp dest)))
+                (not= src (slurp dest)))
         (util/mkdirs dest)
-        (spit dest (slurp res))))))
+        (spit dest src)))))
 
 (defn- spit-if-changed [^File f content]
   (when (or (not (.exists f)) (not= content (slurp f)))

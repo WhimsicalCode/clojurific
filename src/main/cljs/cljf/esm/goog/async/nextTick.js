@@ -3,8 +3,6 @@
 //
 // goog.async.nextTick as an ES module, from the Closure Library sources.
 
-let nextTickImpl;
-
 function getNextTickImpl() {
   if (typeof MessageChannel !== 'undefined') {
     const channel = new MessageChannel();
@@ -37,6 +35,7 @@ export function nextTick(callback, opt_context, opt_useSetImmediate) {
     globalThis.setImmediate(cb);
     return;
   }
-  if (!nextTickImpl) nextTickImpl = getNextTickImpl();
-  nextTickImpl(cb);
+  // nextTick.setImmediate_ as Closure Library's, which tests may replace
+  if (!nextTick.setImmediate_) nextTick.setImmediate_ = getNextTickImpl();
+  nextTick.setImmediate_(cb);
 }

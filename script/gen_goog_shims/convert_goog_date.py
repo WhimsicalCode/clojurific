@@ -56,6 +56,6 @@ const goog = {
 
 '''
 exports = [n for n in names if not n.endswith('_')]
-footer = '\nconst {\n' + ''.join(f'  {n}: {n}$,\n' for n in exports) + '} = goog.date;\n\n// goog.date.Date isn\'t a local binding: the sources use the global Date\nexport {\n' + ''.join(f'  {n}$ as {n},\n' for n in exports) + '};\n'
+footer = '\nlet {\n' + ''.join(f'  {n}: {n}$,\n' for n in exports) + '} = goog.date;\n\n// goog.date.Date isn\'t a local binding: the sources use the global Date\nexport {\n' + ''.join(f'  {n}$ as {n},\n' for n in exports) + '};\n'
 open(out, 'w').write(header + date.rstrip('\n') + '\n\n' + utc.rstrip('\n') + '\n' + footer)
 print(len(exports), 'exports:', ' '.join(exports))

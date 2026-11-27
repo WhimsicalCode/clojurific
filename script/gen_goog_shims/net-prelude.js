@@ -113,6 +113,8 @@ const goog = {
   Timer: {
     callOnce(listener, opt_delay, opt_handler) {
       const fn = typeof listener === 'function' ? listener.bind(opt_handler) : listener.handleEvent.bind(listener);
+      // as Closure Library's: no timeout past setTimeout's maximum (2^31 - 1 ms)
+      if (Number(opt_delay) > 2147483647) return -1;
       return setTimeout(fn, opt_delay || 0);
     },
     clear: (timerId) => clearTimeout(timerId),

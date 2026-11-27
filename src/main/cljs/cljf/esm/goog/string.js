@@ -207,6 +207,8 @@ export function padNumber(num, length, opt_precision) {
 const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '\x00': '&#0;' };
 
 export function htmlEscape(str, opt_isLikelyToContainHtmlChars) {
+  // unchanged without anything to escape, as Closure Library's (nil stays nil)
+  if (!/[&<>"'\x00]/.test(str)) return str;
   return String(str).replace(/[&<>"'\x00]/g, (c) => HTML_ESCAPES[c]);
 }
 

@@ -9,5 +9,5 @@ for (const [ns, file, key, from] of [['com.cognitect.transit', 'transit.js', 'tr
   ['com.cognitect.transit.eq', 'transit/eq.js', 'eq', '../transit-js.js']]) {
   const names = Object.keys(m[key]).filter((k) => key != 'transit' || !skip.has(k));
   writeFileSync(dir + '/' + file, `// ${ns}, see transit-js.js\n\nimport { ${key} as $ } from '${from}';\n\n` +
-    names.map((n) => `export const ${n} = $.${n};\n`).join(''));
+    names.map((n) => `export let ${n} = $.${n};\n`).join(''));
 }

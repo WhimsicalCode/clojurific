@@ -111,6 +111,8 @@ const goog = {
   Timer: {
     callOnce(listener, opt_delay, opt_handler) {
       const fn = typeof listener === 'function' ? listener.bind(opt_handler) : listener.handleEvent.bind(listener);
+      // as Closure Library's: no timeout past setTimeout's maximum (2^31 - 1 ms)
+      if (Number(opt_delay) > 2147483647) return -1;
       return setTimeout(fn, opt_delay || 0);
     },
     clear: (timerId) => clearTimeout(timerId),
@@ -4650,14 +4652,14 @@ goog.net.Jsonp.cleanup_ = function(id, deleteReplyHandler) {
   }
 };
 
-const XhrIo$ = goog.net.XhrIo;
-const Jsonp$ = goog.net.Jsonp;
-const Cookies$ = goog.net.Cookies;
-const cookies$ = goog.net.cookies;
-const EventType$ = goog.net.EventType;
-const ErrorCode$ = goog.net.ErrorCode;
-const HttpStatus$ = goog.net.HttpStatus;
-const XmlHttp$ = goog.net.XmlHttp;
+let XhrIo$ = goog.net.XhrIo;
+let Jsonp$ = goog.net.Jsonp;
+let Cookies$ = goog.net.Cookies;
+let cookies$ = goog.net.cookies;
+let EventType$ = goog.net.EventType;
+let ErrorCode$ = goog.net.ErrorCode;
+let HttpStatus$ = goog.net.HttpStatus;
+let XmlHttp$ = goog.net.XmlHttp;
 export {
   XhrIo$ as XhrIo,
   Jsonp$ as Jsonp,
