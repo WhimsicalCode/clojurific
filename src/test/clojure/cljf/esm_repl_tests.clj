@@ -17,6 +17,7 @@
             [cljf.esm.mcp :as mcp]
             [cljf.esm.repl :as repl]
             [cljf.esm.repl.nrepl :as repl.nrepl]
+            [cljf.esm.repl.ts :as repl.ts]
             [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as string]
@@ -679,6 +680,36 @@
           (is (= #{".-version" ".-versions"}
                  (js {:prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"})))
           (is (empty? (candidates {:prefix "js/process.ver" :ns "cljs.user"}))))
+        (testing "the Vite plugin's TypeScript completions (tsCompletions) first, the runtime's when it has none"
+          (let [asked (atom [])
+                entries (atom [{:name "fromTs" :type "var" :signature "(property) fromTs: string" :doc "Docs."}])]
+            (with-redefs [esm/event! (fn [type m]
+                                       (when (= "ts-complete" type)
+                                         (swap! asked conj (dissoc m :id))
+                                         (future (repl/handle-message!
+                                                   (json/write-str {:op "ts-completions" :id (:id m) :entries @entries})))))]
+              (try
+                (repl/handle-message! (json/write-str {:op "dev-server" :urls [] :tsCompletions true}))
+                (is (= #{"js/process.fromTs"} (js {:prefix "js/process.ver" :ns "cljs.user"})))
+                (is (= {:code "process.ver" :position 11 :prefix "ver" :details 0} (last @asked)))
+                (is (= #{".-fromTs"} (js {:prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"})))
+                (is (= [{:candidate ".-fromTs" :type "var" :doc "(property) fromTs: string\n\nDocs."}]
+                       (:completions (send {:op "complete" :prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"
+                                            :enhanced-cljs-completion? "t" :extra-metadata ["doc"]}))))
+                (is (= 50 (:details (last @asked))))
+                (testing "not asked for what isn't interop"
+                  (let [n (count @asked)]
+                    (js {:prefix ".-ver" :ns "cljs.user" :context "(__prefix__ (atom 1))"})
+                    (is (= n (count @asked)))))
+                (testing "TypeScript completing nothing (i.e. any): the runtime's"
+                  (reset! entries [])
+                  (is (= #{"js/process.version" "js/process.versions"} (js {:prefix "js/process.ver" :ns "cljs.user"}))))
+                (finally
+                  (reset! @#'repl/dev-server- nil))))
+            (testing "without tsCompletions, the plugin isn't asked"
+              (let [n (count @asked)]
+                (is (= #{"js/process.version" "js/process.versions"} (js {:prefix "js/process.ver" :ns "cljs.user"})))
+                (is (= n (count @asked)))))))
         (testing "values printed whole, whatever *print-length* (i.e. set in user.clj)"
           (let [root *print-length*]
             (alter-var-root #'*print-length* (constantly 3))
@@ -762,3 +793,50 @@
             (is (= "(if 1 (do 2))" (:expansion (send {:op "macroexpand" :code "(when 1 2)" :ns "esm-repl.app"}))))
             (is (identical? before (repl/compiler-env-snapshot)))))
         (send ":cljs/quit")))))
+
+(def reader-evaluated
+  ;; set by a completion context's #= if it's evaluated, see ts-snippets
+  (atom false))
+
+(deftest ts-snippets
+  (let [env     {::ana/namespaces {'esm-repl.app {:requires {'react "react" 'R "react$default" 'chart "./chart.ts"
+                                                             'gstr 'goog.string}
+                                                  :uses     {'createRoot "react-dom/client"}}}}
+        snippet #(repl.ts/snippet {:prefix %1 :context %2} 'esm-repl.app env)
+        code    (comp :code snippet)]
+    (testing "js/ globals and their properties"
+      (is (= {:code "document.getE" :position 13 :filter "getE" :candidate-prefix "js/document."}
+             (snippet "js/document.getE" nil)))
+      (is (= {:code "docu" :position 4 :filter "docu" :candidate-prefix "js/"} (snippet "js/docu" nil))))
+    (testing "string requires: aliases, $ paths, :refer names, relative to the namespace's file"
+      (is (= "import * as __cljf_m0 from \"react\";\n__cljf_m0.useSt" (code "react/useSt" nil)))
+      (is (= "import * as __cljf_m0 from \"react\";\n__cljf_m0.default.Comp" (code "R/Comp" nil)))
+      (is (= "import * as __cljf_m0 from \"react-dom/client\";\n__cljf_m0.createRoot((undefined as any)).ren"
+             (code ".ren" "(__prefix__ (createRoot el))")))
+      (is (= (str "import * as __cljf_m0 from \""
+                  (.getCanonicalPath (io/file (.getParentFile (io/file (io/resource "esm_repl/app.cljs"))) "chart.ts"))
+                  "\";\n__cljf_m0.dr")
+             (code "chart/dr" nil))))
+    (testing "interop forms: property access, method calls with literal arguments, .. chains, new"
+      (is (= ".-" (:candidate-prefix (snippet ".-ver" "(__prefix__ js/process)"))))
+      (is (= "process.ver" (code ".-ver" "(__prefix__ js/process)")))
+      (is (= "document.createElement(\"canvas\").getCo"
+             (code ".getCo" "(let [c 1] (__prefix__ (js/document.createElement \"canvas\") \"2d\"))")))
+      (is (= {:code "document.body.cl" :position 16 :filter "cl" :candidate-prefix "-"}
+             (snippet "-cl" "(.. js/document -body __prefix__)")))
+      (is (= {:code "document.createElement(\"a\", (undefined as any)).get" :position 51 :filter "get" :candidate-prefix ""}
+             (snippet "get" "(.. js/document (createElement \"a\" opts) __prefix__)")))
+      (is (= "new URL((undefined as any)).sea" (code ".sea" "(__prefix__ (js/URL. u))")))
+      (is (= "new URL(\"x\").sea" (code ".-sea" "(__prefix__ (new js/URL \"x\"))"))))
+    (testing "not interop: ClojureScript namespaces, locals, fns, unreadable contexts"
+      (is (nil? (snippet "gstr/tr" nil)))
+      (is (nil? (snippet "js/document.foo-bar" nil)))
+      (is (nil? (snippet ".-ver" "(__prefix__ el)")))
+      (is (nil? (snippet ".-ver" "(__prefix__ (str js/process))")))
+      (is (nil? (snippet ".-ver" "(__prefix__ js/process")))
+      (is (nil? (snippet "-ver" "(-> js/process __prefix__)"))))
+    (testing "contexts are read without evaluating #= or #Class[]"
+      (reset! reader-evaluated false)
+      (is (nil? (snippet ".-ver" "(__prefix__ #=(do (reset! cljf.esm-repl-tests/reader-evaluated true) (quote js/process)))")))
+      (is (nil? (snippet ".-ver" "(__prefix__ #java.util.ArrayList[1])")))
+      (is (false? @reader-evaluated)))))

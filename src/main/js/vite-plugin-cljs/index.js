@@ -20,6 +20,7 @@ import { ednValue } from './edn.js';
 import { normalizePath, watchWarnings } from './warnings.js';
 import { listenReplSocket } from './repl-socket.js';
 import { runtimeMessage } from './runtime-ops.js';
+import { tsCompletions } from './ts-completions.js';
 import { WORKER_ENV, devWorkers, entryModule, importVite, workerHotChannel } from './dev-workers.js';
 
 const EVENT_PREFIX = '[cljf.esm] ';
@@ -490,6 +491,11 @@ function hotUpdateCompiled(environment, mods, timestamp) {
  * @param {boolean} [options.hud] the dev server's pages show its status in
  *   a corner (hud.js): modules loading, compiling, a hot reload applied,
  *   the dev server or compiler gone. Defaults to true.
+ * @param {boolean|{tsconfig?: string}} [options.tsCompletions] the dev
+ *   server's nREPL sessions complete JavaScript interop with a TypeScript
+ *   language service over the project's tsconfig and node_modules
+ *   (ts-completions.js), before clj-suitable's runtime introspection.
+ *   Experimental, defaults to false.
  */
 export default function cljf(options) {
   const manifestName = options.manifest ?? 'manifest.json';
@@ -1262,6 +1268,7 @@ export default function cljf(options) {
         urls: server.resolvedUrls ? [...server.resolvedUrls.local, ...server.resolvedUrls.network] : [],
         config: config.configFile ? path.relative(cwd, config.configFile) : undefined,
         ignoreWarnings: !!options.ignoreWarnings,
+        tsCompletions: !!options.tsCompletions,
       });
       server.httpServer?.once('listening', () => setTimeout(devServerInfo, 0));
       // Vite's own errors for the REPL's MCP server (vite_errors): those the
@@ -1430,8 +1437,21 @@ export default function cljf(options) {
         if (server.httpServer) server.httpServer.once('listening', sayHello);
         else setTimeout(sayHello);
       }
+      // the REPL's completions of JavaScript interop (tsCompletions), the
+      // language service started by the first
+      let tsComplete;
       proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
         if (event.type === 'repl-send') return replSend(event);
+        if (event.type === 'ts-complete' && options.tsCompletions) {
+          tsComplete ??= tsCompletions({ root: config.root, tsconfig: options.tsCompletions.tsconfig });
+          let result;
+          try {
+            result = tsComplete(event);
+          } catch (e) {
+            result = { error: String(e?.message ?? e) };
+          }
+          return toRepl({ op: 'ts-completions', id: event.id, ...result });
+        }
         if (event.type === 'watch-dirs') {
           // the compiler reads its stdin now, before its first build
           devServerInfo();

@@ -12,6 +12,7 @@
   (cljf.esm.repl/repl) switched. Needs nREPL on the classpath, the compiler
   doesn't depend on it."
   (:require [cljf.esm.repl :as repl]
+            [cljf.esm.repl.ts :as ts]
             [cljs.analyzer :as ana]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -43,6 +44,9 @@
     ;; after :cljs/quit the session binds *cljs*, and nREPL stores the eval's
     ;; bindings in the session when it ends
     (when (thread-bound? #'*cljs*) (set! *cljs* cljs))
+    ;; starts the Vite plugin's TypeScript language service (tsCompletions,
+    ;; 1-3s), which would hold up the first completion past its deadline
+    (future (repl/ts-complete {:code "" :position 0} (System/currentTimeMillis)))
     (println (str "; ClojureScript REPL in namespace cljs.user, " (count (repl/runtimes))
                " runtime(s) connected, :cljs/quit to leave"))
     nil))
@@ -321,22 +325,62 @@
       (warn "clj-suitable not loaded, no JavaScript property completions:" (.getMessage e))
       false)))
 
+(def ^:private ts-details
+  ;; candidates whose signature and docs a completion asking for docs
+  ;; (extra-metadata) gets from the TypeScript language service
+  50)
+
+(defonce ^:private ts-warned
+  ;; the TypeScript language service's error warned about last
+  (atom nil))
+
+(defn- ts-completions
+  "Returns the completions of JavaScript interop of the Vite plugin's
+  TypeScript language service (its tsCompletions) for a complete message,
+  see cljf.esm.repl.ts. nil when the prefix isn't interop it translates,
+  TypeScript completes nothing there (i.e. any), or doesn't answer before
+  deadline."
+  [{:keys [prefix symbol ns extra-metadata] :as msg} deadline]
+  (try
+    (when (:ts-completions (repl/dev-server))
+      (let [ns-name (if (some-> ns repl/cljs-ns?) (clojure.core/symbol ns) 'cljs.user)]
+        (when-let [{:keys [code position filter candidate-prefix]}
+                   (ts/snippet (assoc msg :prefix (str (or prefix symbol))) ns-name (repl/compiler-env-snapshot))]
+          (let [doc? (some #{"doc"} extra-metadata)
+                {:keys [entries error]} (repl/ts-complete {:code code :position position :prefix filter
+                                                           :details (if doc? ts-details 0)}
+                                          deadline)]
+            (when (and error (not= error (first (reset-vals! ts-warned error))))
+              (warn "TypeScript completions unavailable, JavaScript completions are the runtime's:" error))
+            (seq (map (fn [{:keys [name type signature doc]}]
+                        (cond-> {:candidate (str candidate-prefix name) :type type}
+                          (and doc? (or signature doc))
+                          (assoc :doc (-> (string/join "\n\n" (remove nil? [signature doc]))
+                                          ;; the snippet's import names
+                                          (string/replace #"__cljf_m\d+\." "")))))
+                   entries))))))
+    (catch Throwable e
+      (warn "TypeScript completions failed:" (.getMessage e))
+      nil)))
+
 (defn- js-completions
-  "Returns clj-suitable's completions of JavaScript properties for a complete
-  message of a session switched to ClojureScript, nil while
+  "Returns the completions of JavaScript properties for a complete message
+  of a session switched to ClojureScript: the TypeScript language service's
+  (ts-completions), else clj-suitable's. clj-suitable's are nil while
   suitable.js-introspection loads in the runtime, during a compile, or when
   it doesn't answer before deadline."
   [{:keys [session prefix symbol] :as msg} deadline]
-  (try
-    (when-let [complete! (:complete @suitable)]
-      (when-let [runtime-id (repl/target-id (select-keys (:opts (get @session #'*cljs*)) [:runtime-id :tag]))]
-        (when (and (not (repl/compiling?)) (introspection! runtime-id deadline))
-          (complete! (assoc msg :symbol (str (or prefix symbol)))
-            (suitable-eval runtime-id deadline false)
-            (fn [_])))))
-    (catch Throwable e
-      (warn "JavaScript completions failed:" (.getMessage e))
-      nil)))
+  (or (ts-completions msg deadline)
+      (try
+        (when-let [complete! (:complete @suitable)]
+          (when-let [runtime-id (repl/target-id (select-keys (:opts (get @session #'*cljs*)) [:runtime-id :tag]))]
+            (when (and (not (repl/compiling?)) (introspection! runtime-id deadline))
+              (complete! (assoc msg :symbol (str (or prefix symbol)))
+                (suitable-eval runtime-id deadline false)
+                (fn [_])))))
+        (catch Throwable e
+          (warn "JavaScript completions failed:" (.getMessage e))
+          nil))))
 
 (defn- appending-transport
   "Returns a transport appending the candidates (a future) to the

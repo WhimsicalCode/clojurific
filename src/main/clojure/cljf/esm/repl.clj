@@ -67,7 +67,8 @@
 
 (defonce ^:private dev-server-
   ;; what the Vite plugin says of its dev server, {:urls [url] :config
-  ;; :ignore-warnings bool}, nil without one (i.e. cljf watch)
+  ;; :ignore-warnings bool :ts-completions bool}, nil without one (i.e. cljf
+  ;; watch)
   (atom nil))
 
 (defonce ^:private vite-errors-
@@ -85,6 +86,11 @@
   (atom {}))
 
 (defonce ^:private request-ids (atom 0))
+
+(defonce ^:private ts-pending
+  ;; the Vite plugin's TypeScript completions (ts-complete) waited for, {id
+  ;; promise}
+  (atom {}))
 
 (defonce ^:private snippets (atom 0))
 
@@ -205,7 +211,10 @@
       ;; the Vite plugin's dev server, once it listens
       "dev-server" (reset! dev-server- {:urls            (vec (:urls msg))
                                        :config          (:config msg)
-                                       :ignore-warnings (boolean (:ignoreWarnings msg))})
+                                       :ignore-warnings (boolean (:ignoreWarnings msg))
+                                       :ts-completions  (boolean (:tsCompletions msg))})
+      ;; the plugin's answer to a ts-complete event
+      "ts-completions" (some-> (get @ts-pending (:id msg)) (deliver msg))
       ;; a runtime only answers its own requests
       "result" (when-let [{:keys [promise] :as req} (get @pending (:id msg))]
                  (when (= runtime (:runtime req))
@@ -234,6 +243,25 @@
   its Vite config file, nil without one."
   []
   @dev-server-)
+
+(defn ts-complete
+  "Asks the Vite plugin's TypeScript language service (its tsCompletions)
+  for the completions of a snippet, req {:code :position :prefix :details}
+  (see vite-plugin-cljs/ts-completions.js). Returns {:entries [{:name :type
+  :signature :doc :deprecated}]}, {:error} when it has no TypeScript, nil
+  when it doesn't answer before deadline (System/currentTimeMillis) or
+  doesn't complete with TypeScript."
+  [req deadline]
+  (when (:ts-completions @dev-server-)
+    (let [id (swap! request-ids inc)
+          p  (promise)]
+      (swap! ts-pending assoc id p)
+      (try
+        (esm/event! "ts-complete" (assoc req :id id))
+        (some-> (deref p (max 0 (- deadline (System/currentTimeMillis))) nil)
+          (select-keys [:entries :error]))
+        (finally
+          (swap! ts-pending dissoc id))))))
 
 (defn vite-errors
   "The dev server's own errors: {:overlay [the overlay's error, until an
