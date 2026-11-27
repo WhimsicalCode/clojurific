@@ -363,44 +363,37 @@
       (warn "TypeScript completions failed:" (.getMessage e))
       nil)))
 
-(defn- runtime-completions
-  "Returns clj-suitable's completions of JavaScript properties for a complete
-  message, evaluated in the runtime. nil while suitable.js-introspection
-  loads in the runtime, during a compile, or when it doesn't answer before
-  deadline."
+(defn- js-completions
+  "Returns the completions of JavaScript properties for a complete message
+  of a session switched to ClojureScript: the TypeScript language service's
+  (ts-completions), else clj-suitable's. clj-suitable's are nil while
+  suitable.js-introspection loads in the runtime, during a compile, or when
+  it doesn't answer before deadline."
   [{:keys [session prefix symbol] :as msg} deadline]
-  (try
-    (when-let [complete! (:complete @suitable)]
-      (when-let [runtime-id (repl/target-id (select-keys (:opts (get @session #'*cljs*)) [:runtime-id :tag]))]
-        (when (and (not (repl/compiling?)) (introspection! runtime-id deadline))
-          (complete! (assoc msg :symbol (str (or prefix symbol)))
-            (suitable-eval runtime-id deadline false)
-            (fn [_])))))
-    (catch Throwable e
-      (warn "JavaScript completions failed:" (.getMessage e))
-      nil)))
-
-(defn- merge-candidates
-  "The candidates of the sources in order, a candidate several have only the
-  first's: TypeScript's, with its signature and docs, before the runtime's."
-  [sources]
-  (let [seen (volatile! #{})]
-    (filterv #(when-not (@seen (:candidate %)) (vswap! seen conj (:candidate %))) (apply concat sources))))
+  (or (ts-completions msg deadline)
+      (try
+        (when-let [complete! (:complete @suitable)]
+          (when-let [runtime-id (repl/target-id (select-keys (:opts (get @session #'*cljs*)) [:runtime-id :tag]))]
+            (when (and (not (repl/compiling?)) (introspection! runtime-id deadline))
+              (complete! (assoc msg :symbol (str (or prefix symbol)))
+                (suitable-eval runtime-id deadline false)
+                (fn [_])))))
+        (catch Throwable e
+          (warn "JavaScript completions failed:" (.getMessage e))
+          nil))))
 
 (defn- appending-transport
-  "Returns a transport appending the candidates of sources (futures) to the
-  :completions of the responses sent through it, waiting for each until
-  deadline: one that isn't there by then is left out, the others aren't."
-  [transport sources deadline]
+  "Returns a transport appending the candidates (a future) to the
+  :completions of the responses sent through it, waiting for them until
+  deadline."
+  [transport candidates deadline]
   (reify t/Transport
     (recv [_] (t/recv transport))
     (recv [_ timeout] (t/recv transport timeout))
     (send [this response]
       (t/send transport (if (contains? response :completions)
                           (update response :completions
-                            #(vec (concat % (merge-candidates
-                                              (map (fn [f] (deref f (max 0 (- deadline (System/currentTimeMillis))) nil))
-                                                sources)))))
+                            #(vec (concat % (deref candidates (max 0 (- deadline (System/currentTimeMillis))) nil))))
                           response))
       this)))
 
@@ -408,21 +401,15 @@
   "Completes JavaScript properties for CIDER's complete messages asking for
   them (:enhanced-cljs-completion?) in sessions switched to ClojureScript.
   cider-nrepl's own completions of them are clj-suitable's for piggieback and
-  shadow-cljs, which these sessions aren't. The Vite plugin's TypeScript
-  language service (ts-completions) and the runtime (runtime-completions)
-  are asked at once, while cider completes from the compiler environment,
-  and their candidates merged: TypeScript's first, the runtime adding what
-  TypeScript doesn't type (#js {} values, the page's own globals, APIs
-  newer than its lib.dom)."
+  shadow-cljs, which these sessions aren't. The runtime is asked while cider
+  completes from the compiler environment."
   [h]
   (fn [{:keys [op enhanced-cljs-completion?] :as msg}]
     (if (and (#{"complete" "cider/complete"} op) (cljs-session? msg))
       (let [msg (dissoc msg :enhanced-cljs-completion?)]
         (if enhanced-cljs-completion?
           (let [deadline (+ (System/currentTimeMillis) complete-timeout)]
-            (h (update msg :transport appending-transport
-                 [(future (ts-completions msg deadline)) (future (runtime-completions msg deadline))]
-                 deadline)))
+            (h (update msg :transport appending-transport (future (js-completions msg deadline)) deadline)))
           (h msg)))
       (h msg))))
 

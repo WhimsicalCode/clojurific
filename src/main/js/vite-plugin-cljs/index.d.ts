@@ -126,7 +126,7 @@ export interface CljfOptions {
   /**
    * Experimental: the dev server's nREPL sessions complete JavaScript interop (`js/document.getE…`,
    * `(.. js/document -body -cl…)`, `react/useSt…` of a string require) with a TypeScript language service over
-   * the project's tsconfig (or `tsconfig`, relative to Vite's root) and node_modules, merged with clj-suitable's runtime
+   * the project's tsconfig (or `tsconfig`, relative to Vite's root) and node_modules, before clj-suitable's runtime
    * introspection. Needs `typescript` 5 or 6 (or `@typescript/typescript6` next to TypeScript 7) in the project.
    * Defaults to false.
    */

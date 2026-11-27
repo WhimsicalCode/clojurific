@@ -680,7 +680,7 @@
           (is (= #{".-version" ".-versions"}
                  (js {:prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"})))
           (is (empty? (candidates {:prefix "js/process.ver" :ns "cljs.user"}))))
-        (testing "the Vite plugin's TypeScript completions (tsCompletions) merged with the runtime's"
+        (testing "the Vite plugin's TypeScript completions (tsCompletions) first, the runtime's when it has none"
           (let [asked (atom [])
                 entries (atom [{:name "fromTs" :type "var" :signature "(property) fromTs: string" :doc "Docs."}])]
             (with-redefs [esm/event! (fn [type m]
@@ -690,27 +690,13 @@
                                                    (json/write-str {:op "ts-completions" :id (:id m) :entries @entries})))))]
               (try
                 (repl/handle-message! (json/write-str {:op "dev-server" :urls [] :tsCompletions true}))
-                (is (= #{"js/process.fromTs" "js/process.version" "js/process.versions"}
-                       (js {:prefix "js/process.ver" :ns "cljs.user"})))
+                (is (= #{"js/process.fromTs"} (js {:prefix "js/process.ver" :ns "cljs.user"})))
                 (is (= {:code "process.ver" :position 11 :prefix "ver" :details 0} (last @asked)))
-                (is (= #{".-fromTs" ".-version" ".-versions"}
-                       (js {:prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"})))
-                (testing "a candidate both have is TypeScript's, with its docs, once"
-                  (reset! entries [{:name "version" :type "var" :signature "(property) version: string" :doc "Docs."}])
-                  (let [cs (:completions (send {:op "complete" :prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"
-                                                :enhanced-cljs-completion? "t" :extra-metadata ["doc"]}))]
-                    (is (= [".-version" ".-versions"] (map :candidate cs)))
-                    (is (= {:candidate ".-version" :type "var" :doc "(property) version: string\n\nDocs."} (first cs)))))
+                (is (= #{".-fromTs"} (js {:prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"})))
+                (is (= [{:candidate ".-fromTs" :type "var" :doc "(property) fromTs: string\n\nDocs."}]
+                       (:completions (send {:op "complete" :prefix ".-ver" :ns "cljs.user" :context "(__prefix__ js/process)"
+                                            :enhanced-cljs-completion? "t" :extra-metadata ["doc"]}))))
                 (is (= 50 (:details (last @asked))))
-                (testing "a source that doesn't answer before the deadline leaves the other's candidates"
-                  (reset! entries [{:name "fromTs" :type "var"}])
-                  (let [stalled (fn [_ deadline] (Thread/sleep (+ 300 (- deadline (System/currentTimeMillis)))) nil)]
-                    (with-redefs [repl.nrepl/runtime-completions stalled]
-                      (let [start (System/currentTimeMillis)]
-                        (is (= #{"js/process.fromTs"} (js {:prefix "js/process.ver" :ns "cljs.user"})))
-                        (is (< (- (System/currentTimeMillis) start) 1500))))
-                    (with-redefs [repl.nrepl/ts-completions stalled]
-                      (is (= #{"js/process.version" "js/process.versions"} (js {:prefix "js/process.ver" :ns "cljs.user"}))))))
                 (testing "not asked for what isn't interop"
                   (let [n (count @asked)]
                     (js {:prefix ".-ver" :ns "cljs.user" :context "(__prefix__ (atom 1))"})

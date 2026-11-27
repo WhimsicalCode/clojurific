@@ -9,7 +9,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 
 - The Vite plugin's REPL evaluates in every server environment of the dev server, i.e. a Cloudflare Worker run in workerd by `@cloudflare/vite-plugin`, not only the ssr environment and worker threads. A runtime that can't evaluate code from strings, as workerd can't, gets each form as a module its module runner loads, and runtimes whose hello was lost before the environment's channel listened are asked for it again once the dev server listens.
 - `create-clojurific`'s `cloudflare` template: a Hono app on Cloudflare Workers with a Durable Object, which `@cloudflare/vite-plugin` runs in workerd under `vite` and bundles for `wrangler deploy`.
-- Experimental: the Vite plugin's `tsCompletions` completes JavaScript interop in nREPL sessions (`js/document.getE…`, `(.. js/document -body -cl…)`, `react/useSt…` of a string require) with a TypeScript language service over the project's tsconfig and `node_modules`, without a connected page and with signatures and docs, merged with clj-suitable's runtime introspection, which adds what TypeScript doesn't type. It needs TypeScript 5 or 6 in the project.
+- Experimental: the Vite plugin's `tsCompletions` completes JavaScript interop in nREPL sessions (`js/document.getE…`, `(.. js/document -body -cl…)`, `react/useSt…` of a string require) with a TypeScript language service over the project's tsconfig and `node_modules`, without a connected page and with signatures and docs, before clj-suitable's runtime introspection, which completes what TypeScript doesn't type. It needs TypeScript 5 or 6 in the project.
 
 ### Changed
 

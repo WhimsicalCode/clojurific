@@ -494,7 +494,7 @@ function hotUpdateCompiled(environment, mods, timestamp) {
  * @param {boolean|{tsconfig?: string}} [options.tsCompletions] the dev
  *   server's nREPL sessions complete JavaScript interop with a TypeScript
  *   language service over the project's tsconfig and node_modules
- *   (ts-completions.js), merged with clj-suitable's runtime introspection.
+ *   (ts-completions.js), before clj-suitable's runtime introspection.
  *   Experimental, defaults to false.
  */
 export default function cljf(options) {
