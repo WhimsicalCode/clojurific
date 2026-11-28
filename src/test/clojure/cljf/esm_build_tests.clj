@@ -1249,4 +1249,16 @@
       (testing "interop TypeScript types fails at its line, ClojureScript (records, core fns) and ^js
                 locals don't, with :tsconfig's paths and declarations"
         (is (= [[10 "TS2345"] [11 "TS2554"] [12 "TS2339"] [14 "TS2345"] [15 "TS2345"]]
-               (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings))))))))
+               (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings)))))
+      (testing ":warnings {:ts-check :error} reports every diagnostic, then fails the build"
+        (reset! warnings [])
+        (binding [esm/*generated-sources* sources
+                  ana/*cljs-warning-handlers* (conj ana/*cljs-warning-handlers*
+                                                (fn [type env extra]
+                                                  (when (= :ts-check type)
+                                                    (swap! warnings conj [(:line env) (:message extra)]))))]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #":ts-check: 5 TypeScript errors"
+                (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
+                            :warnings {:ts-check :error}
+                            :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}}))))
+        (is (= 5 (count @warnings)))))))

@@ -21,7 +21,10 @@
   tsconfig with the project's: its compilerOptions (paths of packages the
   bundler aliases, types) apply, and the files its include and files name
   (declarations of globals pages load with script tags) are checked with the
-  copies."
+  copies.
+
+  :warnings {:ts-check :error} (or :warnings-as-errors) reports every
+  diagnostic, then fails the build with their count."
   (:require [cljs.analyzer :as ana]
             [cljs.source-map :as sm]
             [cljs.vendor.clojure.data.json :as json]
@@ -161,29 +164,37 @@
                         (.redirectErrorStream true)
                         (.start))
               lines (with-open [r (io/reader (.getInputStream proc))] (vec (line-seq r)))
-              maps  (atom {})]
+              maps  (atom {})
+              ;; :ts-check :error reports every diagnostic, then fails the
+              ;; build: the analyzer's :error throws at the first
+              error? (= :error (:ts-check ana/*cljs-warnings*))
+              n     (atom 0)]
           (.waitFor proc 1 TimeUnit/HOURS)
-          (doseq [l lines
-                  :let [[_ file line col code message] (re-matches diagnostic l)
-                        d {:code code :message message}]
-                  :when (and file (not (noise? d)))]
-            (let [path (canonical (io/file root file))
-                  {:keys [ns ^File js source-file]} (checked path)
-                  line (Long/parseLong line)
-                  col  (Long/parseLong col)]
-              (if-not js
-                (ana/warning :ts-check {} {:message (str path ":" line ":" col " " code " " message)})
-                (let [col  (cond-> col
-                             (string/starts-with? (nth (string/split-lines (slurp (io/file path))) (dec line) "") any-var)
-                             (- (count any-var)))
-                      smap (or (get @maps js)
-                               (let [f (io/file (str (.getPath js) ".map"))
-                                     m (when (.exists f) (sm/decode (json/read-str (slurp f) :key-fn keyword)))]
-                                 (swap! maps assoc js m)
-                                 m))
-                      [sl sc] (some-> smap (source-position line col))]
-                  (binding [ana/*cljs-file* (str source-file)
-                            ana/*cljs-ns*   ns]
-                    (ana/warning :ts-check {:line sl :column sc}
-                      {:message (str code " " message
-                                     (when-not sl (str " (" (.getName js) ":" line ":" col ")")))})))))))))))
+          (binding [ana/*cljs-warnings* (cond-> ana/*cljs-warnings* error? (assoc :ts-check :warning))]
+            (doseq [l lines
+                    :let [[_ file line col code message] (re-matches diagnostic l)
+                          d {:code code :message message}]
+                    :when (and file (not (noise? d)))]
+              (swap! n inc)
+              (let [path (canonical (io/file root file))
+                    {:keys [ns ^File js source-file]} (checked path)
+                    line (Long/parseLong line)
+                    col  (Long/parseLong col)]
+                (if-not js
+                  (ana/warning :ts-check {} {:message (str path ":" line ":" col " " code " " message)})
+                  (let [col  (cond-> col
+                               (string/starts-with? (nth (string/split-lines (slurp (io/file path))) (dec line) "") any-var)
+                               (- (count any-var)))
+                        smap (or (get @maps js)
+                                 (let [f (io/file (str (.getPath js) ".map"))
+                                       m (when (.exists f) (sm/decode (json/read-str (slurp f) :key-fn keyword)))]
+                                   (swap! maps assoc js m)
+                                   m))
+                        [sl sc] (some-> smap (source-position line col))]
+                    (binding [ana/*cljs-file* (str source-file)
+                              ana/*cljs-ns*   ns]
+                      (ana/warning :ts-check {:line sl :column sc}
+                        {:message (str code " " message
+                                       (when-not sl (str " (" (.getName js) ":" line ":" col ")")))})))))))
+          (when (and error? (pos? @n))
+            (throw (ex-info (str ":ts-check: " @n " TypeScript error" (when (< 1 @n) "s")) {:ts-check @n}))))))))
