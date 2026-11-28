@@ -1217,7 +1217,8 @@
           sources  (into {} [(write-source! src 'test.ts
                                "(ns test.ts
                                   (:require [goog.Uri]
-                                            [goog.string :as gstr])
+                                            [goog.string :as gstr]
+                                            [\"my-pkg\" :as my-pkg])
                                   (:import [goog.net XhrIo]))
                                 (defrecord R [a])
                                 (defn f [s]
@@ -1227,15 +1228,23 @@
                                     (gstr/padNumber 1 2 3 4)
                                     (set! (.-class (.createElement js/document \"a\")) \"c\")
                                     (assoc (->R 1) :b (map inc [(.getPort u)]))
+                                    (my-pkg/hi \"x\")
+                                    (js/Analytics.track 1)
                                     (.getDomain u)))"
                                (- (System/currentTimeMillis) 60000))])
+          ts       (doto (io/file dir "ts") .mkdirs)
+          _        (spit (io/file ts "globals.d.ts") "declare const Analytics: { track(event: string): void };\n")
+          _        (spit (io/file ts "my-pkg.d.ts") "export function hi(n: number): string;\n")
+          _        (spit (io/file ts "tsconfig.json")
+                     "{\"compilerOptions\": {\"paths\": {\"my-pkg\": [\"./my-pkg.d.ts\"]}}, \"include\": [\"globals.d.ts\"]}")
           warnings (atom [])]
       (binding [esm/*generated-sources* sources
                 ana/*cljs-warning-handlers* [(fn [type env extra]
                                                (when (= :ts-check type)
                                                  (swap! warnings conj [(:line env) (:message extra)])))]]
         (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
-                    :ts-check {:tsc test-tsc}}))
-      (testing "interop TypeScript types fails at its line, ClojureScript (records, core fns) doesn't"
-        (is (= [[9 "TS2345"] [10 "TS2554"] [11 "TS2339"]]
+                    :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}}))
+      (testing "interop TypeScript types fails at its line, ClojureScript (records, core fns) doesn't,
+                with :tsconfig's paths and declarations"
+        (is (= [[10 "TS2345"] [11 "TS2554"] [12 "TS2339"] [14 "TS2345"] [15 "TS2345"]]
                (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings))))))))

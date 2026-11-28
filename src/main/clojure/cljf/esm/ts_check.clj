@@ -15,7 +15,13 @@
   packages), goog shims (typed by their .d.ts) and what values flow from
   them through locals. tsc checks the copies (checkJs, not strict) and its
   diagnostics are reported as :ts-check warnings at the ClojureScript
-  position the output's source map gives."
+  position the output's source map gives.
+
+  :ts-check {:tsconfig \"tsconfig.ts-check.json\"} extends the generated
+  tsconfig with the project's: its compilerOptions (paths of packages the
+  bundler aliases, types) apply, and the files its include and files name
+  (declarations of globals pages load with script tags) are checked with the
+  copies."
   (:require [cljs.analyzer :as ana]
             [cljs.source-map :as sm]
             [cljs.vendor.clojure.data.json :as json]
@@ -130,12 +136,16 @@
             config  (io/file root "tsconfig.json")]
         (spit config
           (json/write-str
-            {:compilerOptions {:allowJs true :checkJs false :noEmit true :strict false :skipLibCheck true
-                               :target "es2022" :module "esnext" :moduleResolution "bundler"
-                               :lib ["esnext" "dom" "dom.iterable"]
-                               ;; the copies' relative imports of the goog shims
-                               :rootDirs [".." "."]}
-             :files (vec (sort (map #(subs % (inc (count (canonical root)))) (keys checked))))}
+            (cond-> {:compilerOptions {:allowJs true :checkJs false :noEmit true :strict false :skipLibCheck true
+                                       :target "es2022" :module "esnext" :moduleResolution "bundler"
+                                       :lib ["esnext" "dom" "dom.iterable"]
+                                       ;; the copies' relative imports of the goog shims
+                                       :rootDirs [".." "."]}
+                     ;; with :tsconfig's include, which a tsconfig extending
+                     ;; it keeps unless it sets one: its files are replaced
+                     :files (vec (sort (map #(subs % (inc (count (canonical root)))) (keys checked))))}
+              (and (map? (:ts-check opts)) (:tsconfig (:ts-check opts)))
+              (assoc :extends (canonical (:tsconfig (:ts-check opts)))))
             :escape-slash false))
         (let [proc  (-> (ProcessBuilder. ^java.util.List [tsc "-p" "tsconfig.json" "--pretty" "false"])
                         (.directory root)
@@ -153,7 +163,7 @@
                   line (Long/parseLong line)
                   col  (Long/parseLong col)]
               (if-not js
-                (ana/warning :ts-check {} {:message (str file ":" line ":" col " " code " " message)})
+                (ana/warning :ts-check {} {:message (str path ":" line ":" col " " code " " message)})
                 (let [col  (cond-> col
                              (string/starts-with? (nth (string/split-lines (slurp (io/file path))) (dec line) "") any-var)
                              (- (count any-var)))
