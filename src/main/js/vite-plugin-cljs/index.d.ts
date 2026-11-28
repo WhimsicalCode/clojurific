@@ -56,6 +56,11 @@ export interface CompilerOptions {
   languageOut?: string;
   /** false: don't write `.d.ts` files. */
   esmDts?: boolean;
+  /**
+   * Experimental: type checks the JavaScript interop of the project's namespaces with the project's
+   * TypeScript (`tsc`) after a build, reporting its errors as warnings. `{ tsc: path }` names the `tsc`.
+   */
+  tsCheck?: boolean | { tsc?: string };
   /** Fns run after hot reloads, like `^:dev/after-load`. */
   esmAfterLoad?: CljSymbol[];
   /** Fns run before hot reloads, like `^:dev/before-load`. */

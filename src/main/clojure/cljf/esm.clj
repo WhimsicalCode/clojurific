@@ -1115,6 +1115,8 @@
    (let [opts (prepare-opts opts)]
      (with-aot-macros opts #(build* opts compiler-env)))))
 
+(declare watch-dirs)
+
 (defn- build* [opts compiler-env]
   (with-bindings (assoc (compiler-bindings opts)
                    #'*generated-sources* (if (:test-runner opts)
@@ -1183,6 +1185,8 @@
             (install-goog-shims opts)
             (install-goog-libs compiler-env opts)
             (write-package-json opts)
+            (when (:ts-check opts)
+              ((requiring-resolve 'cljf.esm.ts-check/check!) inputs (watch-dirs opts) opts output-file goog-shims))
             (when (seq (:build-hooks opts))
               (ensure-analyzed! compiler-env inputs opts)
               (run-hooks! compiler-env inputs opts))

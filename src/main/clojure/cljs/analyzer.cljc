@@ -135,6 +135,7 @@
    :undeclared-ns true
    :undeclared-ns-form true
    :esm-unsupported-goog-ns true
+   :ts-check true
    :redef true
    :redef-in-file true
    :dynamic true
@@ -280,6 +281,10 @@
 (defmethod error-message :private-var-access
   [warning-type info]
   (str "var: " (:sym info) " is not public"))
+
+(defmethod error-message :ts-check
+  [warning-type {:keys [message]}]
+  (str "TypeScript: " message))
 
 (defmethod error-message :esm-unsupported-goog-ns
   [warning-type {:keys [ns] :as info}]

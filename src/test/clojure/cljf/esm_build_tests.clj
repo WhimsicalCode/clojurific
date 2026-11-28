@@ -1202,3 +1202,40 @@
     (testing "Closure Library classes under shimmed namespaces (goog.async, goog.net) are the Closure Library's"
       (is (= "true true true click 162"
              (string/trim (run-node (io/file dir "out" "test" "b.js"))))))))
+
+(def ^:private test-tsc
+  "tsc of CLJF_TEST_NODE_MODULES (a node_modules with TypeScript), nil without."
+  (some (fn [bin] (some-> (System/getenv "CLJF_TEST_NODE_MODULES") (io/file "typescript" "bin" bin)
+                    (#(when (.exists ^File %) (.getPath ^File %)))))
+    ["tsc" "tsc6"]))
+
+(deftest ts-check
+  (if-not test-tsc
+    (println "ts-check skipped: no TypeScript (set CLJF_TEST_NODE_MODULES)")
+    (let [dir      (temp-dir)
+          src      (doto (io/file dir "src") .mkdirs)
+          sources  (into {} [(write-source! src 'test.ts
+                               "(ns test.ts
+                                  (:require [goog.Uri]
+                                            [goog.string :as gstr])
+                                  (:import [goog.net XhrIo]))
+                                (defrecord R [a])
+                                (defn f [s]
+                                  (let [u (goog.Uri/parse s)
+                                        x (XhrIo.)]
+                                    (.setTimeoutInterval x \"1s\")
+                                    (gstr/padNumber 1 2 3 4)
+                                    (set! (.-class (.createElement js/document \"a\")) \"c\")
+                                    (assoc (->R 1) :b (map inc [(.getPort u)]))
+                                    (.getDomain u)))"
+                               (- (System/currentTimeMillis) 60000))])
+          warnings (atom [])]
+      (binding [esm/*generated-sources* sources
+                ana/*cljs-warning-handlers* [(fn [type env extra]
+                                               (when (= :ts-check type)
+                                                 (swap! warnings conj [(:line env) (:message extra)])))]]
+        (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
+                    :ts-check {:tsc test-tsc}}))
+      (testing "interop TypeScript types fails at its line, ClojureScript (records, core fns) doesn't"
+        (is (= [[9 "TS2345"] [10 "TS2554"] [11 "TS2339"]]
+               (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings))))))))

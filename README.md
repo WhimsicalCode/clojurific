@@ -141,6 +141,7 @@ Options are EDN maps, `@file.edn` to read them from a file, and `:profile` keywo
 | `:repl` | `{:nrepl-port 0 :nrepl-host "127.0.0.1" :port-files [".nrepl-port"] :middleware []}`, `watch` starts an nREPL server (`0` picks a port), writes its port to the port files no other live server's port is in, and deletes them on exit; needs nREPL on the classpath. `:middleware` adds nREPL middleware (names of vars holding middleware fns, or collections of names), as does the `:middleware` of the project's `.nrepl.edn`, whose other keys don't apply (see [Editors](#editors)) |
 | `:self-host true` | the ClojureScript compiler in the runtime (`cljf.selfhost`): with `:esm-repl`, `cljs_selfhost_eval("(+ 1 2)")` compiles and evaluates without the watcher (see [Self-hosted REPL](#self-hosted-repl)) |
 | `:esm-dts false` | don't write `.d.ts` files |
+| `:ts-check true` | experimental: type checks the JavaScript interop of the project's namespaces with TypeScript after a build, see [Type checking interop](#type-checking-interop); `{:tsc \"path/to/tsc\"}` names the `tsc`, else the nearest `node_modules/.bin/tsc` |
 | `:esm-after-load` / `:esm-before-load` | fns run around hot reloads, like `^:dev/after-load` |
 | `:watch-dirs` | source directories, defaults to the classpath directories without the compiler's own |
 | `:aot-macros true` | macro namespaces (Clojure) load from classes compiled by an earlier build, kept in the per-user cache's `macro-classes/` (see [Launcher](#launcher)) until a Clojure source on the classpath (or a jar) changes, shared by output directories: starting a watch loads them several times faster |
@@ -465,6 +466,17 @@ TypeScript imports ClojureScript modules like any other ES module, and the compi
 import { describe } from '../out/app/state.js';
 describe(1, 2); // error TS2554: Expected 1 arguments, but got 2.
 ```
+
+### Type checking interop
+
+Experimental: with `:ts-check true`, a build type checks its namespaces' JavaScript interop with the project's TypeScript (`tsc`, of the `node_modules` nearest to the output directory, or `:ts-check {:tsc "..."}`), and reports TypeScript's errors as `:ts-check` warnings at the ClojureScript line:
+
+```clojure
+(.setTimeoutInterval (XhrIo.) "1s")
+;; WARNING: TypeScript: TS2345 Argument of type 'string' is not assignable to parameter of type 'number'. at line 9 src/app/net.cljs
+```
+
+It checks the compiled modules of the namespaces in the source directories (`:watch-dirs`'s, not libraries'), copied into `<output-dir>/.ts-check/` with every ClojureScript value typed `any`: imports of other namespaces and top-level vars. What's typed is what TypeScript knows: `js/` globals (`lib.dom`), npm modules (their packages' types), the goog shims (their `.d.ts`), `#js` literals passed to them, and locals bound to their results. Errors about properties ClojureScript adds (`cljs$core$IFn$_invoke$arity$2`, protocol methods) are left out. TypeScript isn't strict here (no null checks), and the check runs after builds, not watch recompiles.
 
 ### JavaScript objects
 
