@@ -125,8 +125,12 @@
   {:checked namespaces :diagnostics [{:message :ns :file :line :column}]},
   :ns and :file the ClojureScript namespace and source a diagnostic is of
   (nil for the tsconfig's), :line and :column its position there (nil when
-  the source map has none, :message then names the output's)."
-  [inputs dirs {:keys [output-dir] :as opts} output-file shims]
+  the source map has none, :message then names the output's). hold calls
+  its fn while the outputs are copied, i.e. holding a watch's lock: tsc and
+  the mapping run on the copies (and their source maps) after."
+  ([inputs dirs opts output-file shims]
+   (diagnostics inputs dirs opts output-file shims #(%)))
+  ([inputs dirs {:keys [output-dir] :as opts} output-file shims hold]
   (let [output (canonical output-dir)
         root   (io/file output dir)
         shims  (into #{} (map #(canonical (io/file output %))) shims)
@@ -142,85 +146,93 @@
       {:failed ":ts-check needs TypeScript: no node_modules/.bin/tsc near the output directory, set :ts-check {:tsc path}"}
 
       :else
-      (let [core-dts (io/file root "cljs-core.d.ts")
-            _        (do (io/make-parents core-dts)
-                         (spit core-dts (slurp (io/resource "cljf/esm/ts_check_core.d.ts"))))
-            checked (into {}
-                      (keep (fn [{:keys [ns source-file]}]
-                              (let [^File js (output-file ns opts)]
-                                (when (.exists js)
-                                  (let [rel  (subs (canonical js) (inc (count output)))
-                                        copy (io/file root rel)]
-                                    (io/make-parents copy)
-                                    (spit copy (check-source js output shims core-dts))
-                                    [(canonical copy) {:ns ns :js js :source-file source-file}])))))
-                      own)
-            ;; not tsconfig.json, which Vite watches for, reloading pages
-            ;; when it changes
-            config  (io/file root "config.json")]
-        (spit config
-          (json/write-str
-            (cond-> {:compilerOptions {:allowJs true :checkJs false :noEmit true :strict false :skipLibCheck true
-                                       :target "es2022" :module "esnext" :moduleResolution "bundler"
-                                       :lib ["esnext" "dom" "dom.iterable"]
-                                       ;; the copies' relative imports of the goog shims
-                                       :rootDirs [".." "."]}
-                     ;; with :tsconfig's include, which a tsconfig extending
-                     ;; it keeps unless it sets one: its files are replaced
-                     :files (conj (vec (sort (map #(subs % (inc (count (canonical root)))) (keys checked))))
-                                   (.getName core-dts))}
-              (and (map? (:ts-check opts)) (:tsconfig (:ts-check opts)))
-              (assoc :extends (canonical (:tsconfig (:ts-check opts)))))
-            :escape-slash false))
-        (let [[lines exit] (try
-                             (let [proc  (-> (ProcessBuilder. ^java.util.List [tsc "-p" (.getName config) "--pretty" "false"])
-                                             (.directory root)
-                                             (.redirectErrorStream true)
-                                             (.start))
-                                   lines (with-open [r (io/reader (.getInputStream proc))] (vec (line-seq r)))]
-                               [lines (.waitFor proc)])
-                             (catch java.io.IOException e
-                               [[(.getMessage e)] -1]))
-              maps  (atom {})]
-          ;; tsc exits 1 on the diagnostics noise? leaves out too, but one
-          ;; that fails without any (a crash, a tsc that doesn't run) checked
-          ;; nothing
-          (if (and (not (zero? exit)) (not-any? #(re-matches diagnostic %) lines))
-            {:failed (str ":ts-check: " tsc " failed:\n" (string/join "\n" lines))}
-            {:checked     (mapv :ns (vals checked))
-             :diagnostics
-             (vec
-               (for [l lines
-                     :let [[_ file line col code message] (re-matches diagnostic l)]
-                     :when (and code (not (noise? {:code code :message message})))]
-                 (let [path (some->> file (io/file root) canonical)
-                       {:keys [ns ^File js source-file]} (checked path)
-                       line (some-> line Long/parseLong)
-                       col  (some-> col Long/parseLong)]
-                   (cond
-                     ;; tsconfig's: without a file, or of another file
-                     (not file)
-                     {:message (str code " " message)}
+      (let [;; the copies, taken holding hold
+            [checked config]
+            (hold
+              (fn []
+                (let [core-dts (io/file root "cljs-core.d.ts")
+                      _        (do (io/make-parents core-dts)
+                                   (spit core-dts (slurp (io/resource "cljf/esm/ts_check_core.d.ts"))))
+                      checked (into {}
+                                (keep (fn [{:keys [ns source-file]}]
+                                        (let [^File js (output-file ns opts)]
+                                          (when (.exists js)
+                                            (let [rel  (subs (canonical js) (inc (count output)))
+                                                  copy (io/file root rel)]
+                                              (io/make-parents copy)
+                                              (spit copy (check-source js output shims core-dts))
+                                              (let [m (io/file (str (.getPath js) ".map"))]
+                                                (when (.exists m)
+                                                  (io/copy m (io/file (str (.getPath copy) ".map")))))
+                                              [(canonical copy) {:ns ns :js js :source-file source-file}])))))
+                                own)
+                      ;; not tsconfig.json, which Vite watches for, reloading pages
+                      ;; when it changes
+                      config  (io/file root "config.json")]
+                  (spit config
+                    (json/write-str
+                      (cond-> {:compilerOptions {:allowJs true :checkJs false :noEmit true :strict false :skipLibCheck true
+                                                 :target "es2022" :module "esnext" :moduleResolution "bundler"
+                                                 :lib ["esnext" "dom" "dom.iterable"]
+                                                 ;; the copies' relative imports of the goog shims
+                                                 :rootDirs [".." "."]}
+                               ;; with :tsconfig's include, which a tsconfig extending
+                               ;; it keeps unless it sets one: its files are replaced
+                               :files (conj (vec (sort (map #(subs % (inc (count (canonical root)))) (keys checked))))
+                                             (.getName core-dts))}
+                        (and (map? (:ts-check opts)) (:tsconfig (:ts-check opts)))
+                        (assoc :extends (canonical (:tsconfig (:ts-check opts)))))
+                      :escape-slash false))
+                  [checked config])))
+            [lines exit] (try
+                           (let [proc  (-> (ProcessBuilder. ^java.util.List [tsc "-p" (.getName config) "--pretty" "false"])
+                                           (.directory root)
+                                           (.redirectErrorStream true)
+                                           (.start))
+                                 lines (with-open [r (io/reader (.getInputStream proc))] (vec (line-seq r)))]
+                             [lines (.waitFor proc)])
+                           (catch java.io.IOException e
+                             [[(.getMessage e)] -1]))
+            maps  (atom {})]
+        ;; tsc exits 1 on the diagnostics noise? leaves out too, but one
+        ;; that fails without any (a crash, a tsc that doesn't run) checked
+        ;; nothing
+        (if (and (not (zero? exit)) (not-any? #(re-matches diagnostic %) lines))
+          {:failed (str ":ts-check: " tsc " failed:\n" (string/join "\n" lines))}
+          {:checked     (mapv :ns (vals checked))
+           :diagnostics
+           (vec
+             (for [l lines
+                   :let [[_ file line col code message] (re-matches diagnostic l)]
+                   :when (and code (not (noise? {:code code :message message})))]
+               (let [path (some->> file (io/file root) canonical)
+                     {:keys [ns ^File js source-file]} (checked path)
+                     line (some-> line Long/parseLong)
+                     col  (some-> col Long/parseLong)]
+                 (cond
+                   ;; tsconfig's: without a file, or of another file
+                   (not file)
+                   {:message (str code " " message)}
 
-                     (not js)
-                     {:message (str path ":" line ":" col " " code " " message)}
+                   (not js)
+                   {:message (str path ":" line ":" col " " code " " message)}
 
-                     :else
-                     (let [col  (cond-> col
-                                  (string/starts-with? (nth (string/split-lines (slurp (io/file path))) (dec line) "") any-var)
-                                  (- (count any-var)))
-                           smap (or (get @maps js)
-                                    (let [f (io/file (str (.getPath js) ".map"))
-                                          m (when (.exists f) (sm/decode (json/read-str (slurp f) :key-fn keyword)))]
-                                      (swap! maps assoc js m)
-                                      m))
-                           [sl sc] (some-> smap (source-position line col))]
-                       {:ns      ns
-                        :file    (str source-file)
-                        :line    sl
-                        :column  sc
-                        :message (str code " " message
-                                      (when-not sl (str " (" (.getName js) ":" line ":" col ")")))})))))}))))))
+                   :else
+                   (let [col  (cond-> col
+                                (string/starts-with? (nth (string/split-lines (slurp (io/file path))) (dec line) "") any-var)
+                                (- (count any-var)))
+                         smap (or (get @maps js)
+                                  (let [f (io/file (str path ".map"))
+                                        m (when (.exists f) (sm/decode (json/read-str (slurp f) :key-fn keyword)))]
+                                    (swap! maps assoc js m)
+                                    m))
+                         [sl sc] (some-> smap (source-position line col))]
+                     {:ns      ns
+                      :file    (str source-file)
+                      :line    sl
+                      :column  sc
+                      :message (str code " " message
+                                    (when-not sl (str " (" (.getName js) ":" line ":" col ")")))})))))}))))))
 
 (defn check!
   "Runs :ts-check over the build's inputs ({:ns :source-file}) whose sources

@@ -9,13 +9,20 @@
 // a function, called directly or by the compiler's arity methods
 type Arities<R> = { [k: `cljs$core$IFn$_invoke$arity$${string}`]: (...args: any[]) => R };
 export type CljsFn<R> = ((...args: any[]) => R) & Arities<R> & { [k: string]: any };
+// a seq function, whose 1-arity (a transducer) is a function
+type SeqFn = ((...args: any[]) => any) & Arities<Seq> & {
+  cljs$core$IFn$_invoke$arity$1: (...args: any[]) => any;
+  [k: string]: any;
+};
 
 // what the compiler sets and reads on ClojureScript values: protocol methods
 // and masks, arity methods. Each class has its statics (EMPTY, fromArray, …),
 // which an index signature of this one wouldn't give it.
 declare class CljsValue {
   private __cljs: true;
-  [k: `cljs$${string}`]: any;
+  // its fields (state, key, meta, cnt, …), protocol methods and masks: any,
+  // which doesn't make a value a string or an options object
+  [k: string]: any;
   // collections and keywords called as functions
   call(...args: any[]): any;
   apply(...args: any[]): any;
@@ -262,26 +269,26 @@ export type Core = {
   cons: CljsFn<Seq>;
   keys: CljsFn<Seq>;
   vals: CljsFn<Seq>;
-  map: CljsFn<Seq>;
-  filter: CljsFn<Seq>;
-  remove: CljsFn<Seq>;
-  keep: CljsFn<Seq>;
-  mapcat: CljsFn<Seq>;
+  map: SeqFn;
+  filter: SeqFn;
+  remove: SeqFn;
+  keep: SeqFn;
+  mapcat: SeqFn;
   concat: CljsFn<Seq>;
-  map_indexed: CljsFn<Seq>;
+  map_indexed: SeqFn;
   range: CljsFn<Seq>;
-  take: CljsFn<Seq>;
-  drop: CljsFn<Seq>;
-  take_while: CljsFn<Seq>;
-  drop_while: CljsFn<Seq>;
+  take: SeqFn;
+  drop: SeqFn;
+  take_while: SeqFn;
+  drop_while: SeqFn;
   sort: CljsFn<Seq>;
   sort_by: CljsFn<Seq>;
-  distinct: CljsFn<Seq>;
+  distinct: SeqFn;
   reverse: CljsFn<Seq>;
   partition: CljsFn<Seq>;
-  partition_all: CljsFn<Seq>;
+  partition_all: SeqFn;
   interleave: CljsFn<Seq>;
-  interpose: CljsFn<Seq>;
+  interpose: SeqFn;
   into: CljsFn<Coll>;
   conj: CljsFn<Coll>;
   assoc: CljsFn<Coll>;
@@ -295,7 +302,6 @@ export type Core = {
   zipmap: CljsFn<Coll>;
   group_by: CljsFn<Coll>;
   frequencies: CljsFn<Coll>;
-  not_empty: CljsFn<Coll>;
   ex_info: CljsFn<ExceptionInfo>;
   [k: string]: any;
 };

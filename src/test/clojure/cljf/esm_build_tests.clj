@@ -1234,6 +1234,9 @@
                                     (.setAttribute (.createElement js/document \"a\") (name :x) (keys {:a 1}))
                                     (.focus (.querySelector js/document \"a\") (assoc {} :preventScroll true))
                                     (set! (.-title js/document) (pr-str (.-message (ex-info (name :x) {}))))
+                                    (set! (.-title js/document) (.toUpperCase (not-empty \"abc\")))
+                                    (.then (js/Promise.resolve 1) (map inc))
+                                    (js/console.log (.-state (atom 1)) (.-key (first {:a 1})))
                                     (.getDomain u)))"
                                (- (System/currentTimeMillis) 60000))])
           ts       (doto (io/file dir "ts") .mkdirs)
@@ -1321,6 +1324,7 @@
                       warnings to hold back hot reload"
               (let [checked (wait #(= "ts-check" (:type %)))]
                 (is (= 2 (:checked checked)))
+                (is (:full checked))
                 (is (= [[2 "TS2345"] [2 "TS2551"]] (lines checked)))
                 (is (= ["compiled" "ts-check"] (filterv #{"compiled" "ts-check"} (map :type @events))))
                 (is (empty? (:outstanding (wait #(= "compiled" (:type %))))))))
@@ -1330,7 +1334,18 @@
               (.setLastModified a now)
               (let [checked (wait #(= "ts-check" (:type %)))]
                 (is (= 1 (:checked checked)))
+                (is (not (:full checked)))
                 (is (= [[2 "TS2345"]] (lines checked)))
                 (is (empty? (:outstanding (wait #(= "compiled" (:type %))))))))
+            (testing "the problems of a namespace that left the build go"
+              (reset! events [])
+              (spit a "(ns w.a)\n(defn f [] (.querySelectr js/document \"a\"))\n")
+              (.setLastModified a (+ now 2000))
+              (is (= [[2 "TS2345"] [2 "TS2551"]] (lines (wait #(= "ts-check" (:type %))))))
+              (reset! events [])
+              (let [b (io/file src "b.cljs")]
+                (spit b "(ns w.b)\n(defn g [] (.setAttribute (.createElement js/document \"a\") \"role\" \"b\"))\n")
+                (.setLastModified b (+ now 4000)))
+              (is (= [] (lines (wait #(= "ts-check" (:type %)))))))
             (finally
               (future-cancel watch))))))))

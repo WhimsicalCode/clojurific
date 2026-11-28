@@ -711,6 +711,10 @@ export default function cljf(options) {
           replSend(event);
         } else if (event.type === 'compiling') {
           compiling = new Promise(resolve => (compiled = resolve));
+        } else if (event.type === 'ts-check') {
+          // tsCheck's: the compiler printed them
+          const problems = event.problems?.length ?? 0;
+          (config?.logger ?? console)[problems ? 'warn' : 'info'](`[cljf] TypeScript: ${problems} problem(s)`);
         } else if (event.type === 'compiled' || event.type === 'error') {
           compiled();
           const logger = config?.logger ?? console;
@@ -1463,7 +1467,10 @@ export default function cljf(options) {
         // an error, i.e. the worker exited, is warned about by the REPL
         onReply: reply => toRepl({ ...reply, op: 'ts-completions' }),
       });
-      proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), async event => {
+      // the handling of the last compiled or error event, which a ts-check
+      // event's waits for: its overlay after the compile's hot update
+      let compileHandled = Promise.resolve();
+      const onCompilerEvent = async event => {
         if (event.type === 'repl-send') return replSend(event);
         if (event.type === 'ts-complete' && tsComplete) {
           const { type, ...request } = event;
@@ -1493,12 +1500,15 @@ export default function cljf(options) {
         // tsCheck's diagnostics after a compile (the compiler's watch checks
         // the namespaces it wrote): on the overlay unless a compile's problem
         // is, they don't pause hot reload. The next hot update clears it.
+        // Not the first build's (:full), nor replayed to pages connecting:
+        // Vite reloads a page whose first hot update finds the overlay open.
         if (event.type === 'ts-check') {
+          await compileHandled;
           const problems = event.problems ?? [];
           config.logger[problems.length ? 'warn' : 'info'](
             `[cljf] TypeScript: ${problems.length} problem(s) after checking ${event.checked} namespace(s) in ${event.ms}ms`,
             { timestamp: true });
-          if (problems.length && !problem) {
+          if (problems.length && !problem && !event.full) {
             const [first] = problems;
             server.ws.send({
               type: 'error',
@@ -1580,6 +1590,11 @@ export default function cljf(options) {
           });
           ready(false);
         }
+      };
+      proc = run(compilerArgs('watch', { ':esm-hmr': true, ':exit-with-parent': true, ':watch-events': ':stdin' }), event => {
+        const handled = onCompilerEvent(event);
+        if (event.type === 'compiled' || event.type === 'error') compileHandled = handled.catch(() => {});
+        return handled;
       });
       // The compiler exiting stops the dev server's compiles and hot reloads:
       // before a successful compile, api.ready() and api.compiled() reject (a

@@ -1553,12 +1553,14 @@
 
 (defn- ts-checker
   "The watch's :ts-check: a fn of the namespaces a compile wrote (nil: all
-  of the build's), which checks them on a thread of its own, holding lock
-  (the output doesn't change meanwhile), not holding back the compile's
-  event and hot reload. Each check's diagnostics replace those of the
-  namespaces it checked, a ts-check event reports them all as :problems
-  (the Vite plugin's overlay shows them, they don't pause hot reload), and
-  it prints the new ones."
+  of the build's), which checks them on a thread of its own, not holding
+  back the compile's event and hot reload, holding lock only while it copies
+  their output (the next compile doesn't wait for tsc). Each check's
+  diagnostics replace those of the namespaces it checked, those of
+  namespaces no longer in the build are dropped, a ts-check event reports
+  them all as :problems (the Vite plugin shows them, they don't pause hot
+  reload; :full for the first build's), and it prints the new ones. A
+  watch reports them and never fails on them, whatever :warnings."
   [opts lock inputs-]
   (let [exec      (Executors/newSingleThreadExecutor
                     (reify java.util.concurrent.ThreadFactory
@@ -1569,34 +1571,36 @@
       (.submit exec
         ^Runnable
         (fn []
-          (locking* lock
-            (fn []
-              (binding [*out* @stdout
-                        *err* @stderr]
-                (try
-                  (let [start  (System/nanoTime)
-                        inputs (cond->> @inputs- nses (filter (comp (set nses) :ns)))
-                        {:keys [failed checked diagnostics]}
-                        ((requiring-resolve 'cljf.esm.ts-check/diagnostics) inputs dirs opts output-file goog-shims)]
-                    (cond
-                      failed
-                      (binding [*out* *err*] (println (str "WARNING: " failed)))
+          (binding [*out* @stdout
+                    *err* @stderr]
+            (try
+              (let [start  (System/nanoTime)
+                    all    @inputs-
+                    inputs (cond->> all nses (filter (comp (set nses) :ns)))
+                    {:keys [failed checked diagnostics]}
+                    ((requiring-resolve 'cljf.esm.ts-check/diagnostics) inputs dirs opts output-file goog-shims
+                     #(locking* lock %))]
+                (cond
+                  failed
+                  (binding [*out* *err*] (println (str "WARNING: " failed)))
 
-                      checked
-                      (let [by-ns (group-by :ns diagnostics)]
-                        ;; the tsconfig's (no namespace) are of every check
-                        (swap! problems- #(merge (apply dissoc % nil checked) by-ns))
-                        (binding [*out* *err*]
-                          (doseq [{:keys [file line message]} diagnostics]
-                            (println (str "WARNING: TypeScript: " message
-                                          (when file (str " at " (when line (str "line " line " ")) file))))))
-                        (event! "ts-check"
-                          {:checked  (count checked)
-                           :problems (vec (mapcat val (sort-by (comp str key) @problems-)))
-                           :ms       (long (/ (- (System/nanoTime) start) 1e6))}))))
-                  (catch Throwable e
+                  checked
+                  (let [by-ns (group-by :ns diagnostics)
+                        live  (into #{} (map :ns) all)]
+                    ;; the tsconfig's (no namespace) are of every check
+                    (swap! problems- #(merge (select-keys (dissoc (apply dissoc % checked) nil) live) by-ns))
                     (binding [*out* *err*]
-                      (println (str "WARNING: :ts-check failed: " e)))))))))))))
+                      (doseq [{:keys [file line message]} diagnostics]
+                        (println (str "WARNING: TypeScript: " message
+                                      (when file (str " at " (when line (str "line " line " ")) file))))))
+                    (event! "ts-check"
+                      (cond-> {:checked  (count checked)
+                               :problems (vec (mapcat val (sort-by (comp str key) @problems-)))
+                               :ms       (long (/ (- (System/nanoTime) start) 1e6))}
+                        (nil? nses) (assoc :full true))))))
+              (catch Throwable e
+                (binding [*out* *err*]
+                  (println (str "WARNING: :ts-check failed: " e)))))))))))
 
 (defn watch
   "Builds like build, then recompiles namespaces as their sources change.
