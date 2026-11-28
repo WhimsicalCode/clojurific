@@ -787,6 +787,68 @@
 
 (defmethod emit* :no-op [m])
 
+#?(:clj (declare esm-import-specifier))
+
+#?(:clj
+   (defn- ts-type
+     "The TypeScript type of a type tag, ^[...] (read as :param-tags), for
+     :ts-check's casts. The vector is a type: a symbol names one (a global,
+     js/Name, or alias/Name of an npm require), with arguments it applies a
+     generic ([Map string number]); [:or a b] is a union, [:fn [a b] r] a
+     function, a map an object type ({:x number :y [:? string]}, :? making
+     a property optional), [:ts \"...\"] TypeScript as is. nil is null,
+     strings, numbers and booleans are literal types."
+     [env tag]
+     (let [bad   #(throw (ana/error env (str "Invalid TypeScript type tag ^" (pr-str tag)
+                                          (when (not= % tag) (str ", at " (pr-str %))))))
+           tname (fn [sym]
+                   (let [ns (namespace sym)
+                         lib (when (and ns (not= "js" ns)) (ana/resolve-ns-alias env ns nil))]
+                     (cond
+                       (nil? ns) (name sym)
+                       (= "js" ns) (name sym)
+                       (and lib (ana/node-module-dep? lib) (nil? (second (ana/lib&sublib lib))))
+                       (str "import(" (pr-str (esm-import-specifier (first (ana/lib&sublib lib)))) ")." (name sym))
+                       :else (bad sym))))
+           prop  (fn [k]
+                   (let [s (cond (and (keyword? k) (nil? (namespace k))) (name k)
+                                 (string? k) k
+                                 :else (bad k))]
+                     (if (re-matches #"[A-Za-z_$][\w$]*" s) s (pr-str s))))
+           ty    (fn ty [x]
+                   (cond
+                     (nil? x) "null"
+                     (or (string? x) (boolean? x) (number? x)) (pr-str x)
+                     (symbol? x) (tname x)
+                     (map? x) (str "{" (string/join ", "
+                                         (for [[k v] x
+                                               :let [opt (and (vector? v) (= :? (first v)))]]
+                                           (if (and opt (not= 2 (count v)))
+                                             (bad v)
+                                             (str (prop k) (when opt "?") ": " (ty (if opt (second v) v))))))
+                                   "}")
+                     (and (vector? x) (seq x))
+                     (let [[h & args] x]
+                       (case h
+                         :or (if args (str "(" (string/join " | " (map ty args)) ")") (bad x))
+                         :fn (let [[params ret] args]
+                               (if (and (vector? params) (= 2 (count args)))
+                                 (str "((" (string/join ", " (map-indexed #(str "p" %1 ": " (ty %2)) params))
+                                      ") => " (ty ret) ")")
+                                 (bad x)))
+                         :ts (if (and (= 1 (count args)) (string? (first args)))
+                               (str "(" (first args) ")")
+                               (bad x))
+                         (cond
+                           (keyword? h) (bad x)
+                           (nil? args) (ty h)
+                           (symbol? h) (str (tname h) "<" (string/join ", " (map ty args)) ">")
+                           :else (bad x))))
+                     :else (bad x)))
+           t     (ty (if (vector? tag) tag (bad tag)))]
+       ;; inside the cast's comment
+       (if (string/includes? t "*/") (bad tag) t))))
+
 (defn emit-var
   [{:keys [info env form] :as ast}]
   (if-let [const-expr (:const-expr ast)]
@@ -842,11 +904,18 @@
                        (not= form 'js/-Infinity) (munge reserved))]
             (emit-wrap env
               ;; for :ts-check (cljf.esm.ts-check), ^js locals are any: tagged
-              ;; where used or bound, not inferred from an npm call's result
-              (if (and (:ts-check options) (= :local (:op ast))
-                       (or (= 'js (:tag (meta form))) (= 'js (-> ast :info :name meta :tag))))
-                (emits "/** @type {any} */ (" info ")")
-                (emits info)))))))))
+              ;; where used or bound, not inferred from an npm call's result;
+              ;; ^[...] type tags are casts to their TypeScript type
+              (let [local? (and (:ts-check options) (= :local (:op ast)))
+                    tagged #(or (% (meta form)) (% (-> ast :info :name meta)))]
+                (cond
+                  (and local? (tagged :param-tags))
+                  (emits "/** @type {" #?(:clj (ts-type env (tagged :param-tags)) :cljs "any") "} */ (" info ")")
+
+                  (and local? (= 'js (tagged :tag)))
+                  (emits "/** @type {any} */ (" info ")")
+
+                  :else (emits info))))))))))
 
 (defmethod emit* :var [expr] (emit-var expr))
 (defmethod emit* :binding [expr] (emit-var expr))

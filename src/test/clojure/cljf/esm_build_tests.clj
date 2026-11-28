@@ -1324,6 +1324,63 @@
                          0 19))
                 tsc)))))))
 
+(deftest ts-check-type-tags
+  (if-not test-tsc
+    (println "ts-check-type-tags skipped: no TypeScript (set CLJF_TEST_NODE_MODULES)")
+    (let [dir      (temp-dir)
+          src      (doto (io/file dir "src") .mkdirs)
+          source   (fn [code]
+                     (into {} [(write-source! src 'test.tags
+                                 (str "(ns test.tags (:require [\"my-pkg\" :as my-pkg] [\"./shapes.js\" :as shapes]))\n" code)
+                                 (- (System/currentTimeMillis) 60000))]))
+          _        (spit (io/file src "shapes.js") "export class Circle { constructor() { this.r = 1; } }\n")
+          _        (spit (io/file src "shapes.d.ts") "export class Circle { r: number }\n")
+          ts       (doto (io/file dir "ts") .mkdirs)
+          _        (spit (io/file ts "my-pkg.ts") "export class Box { size: number = 1 }\n")
+          _        (spit (io/file ts "tsconfig.json") "{\"compilerOptions\": {\"paths\": {\"my-pkg\": [\"./my-pkg.ts\"]}}}")
+          warnings (atom [])
+          build    #(binding [esm/*generated-sources* (source %)
+                              ana/*cljs-warning-handlers* [(fn [type env extra]
+                                                             (when (= :ts-check type)
+                                                               (swap! warnings conj [(:line env) (:message extra)])))]]
+                      (reset! warnings [])
+                      (esm/build {:main 'test.tags :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
+                                  :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}})
+                      (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings)))]
+      (testing "^[...] locals are cast to their TypeScript types: names, globals, npm and relative requires'
+                types, generics, unions, functions, object types with optional properties and TypeScript as is"
+        (is (= [[7 "TS2339"] [8 "TS2345"] [9 "TS2339"] [10 "TS2339"] [11 "TS2769"] [12 "TS2339"] [13 "TS2339"]
+                [14 "TS2322"]]
+               (build "(defn ok [^[MouseEvent] e ^[my-pkg/Box] b ^[shapes/Circle] c ^[:fn [MouseEvent] nil] on-click]
+                         (let [^[js/HTMLCanvasElement] cv (.getElementById js/document \"c\")
+                               ^[Map string [:or number nil]] m (js/Map.)
+                               ^[{:x number :y [:? string] \"a-b\" true}] p #js {:x 1 \"a-b\" true}
+                               ^[:ts \"Record<string, number>\"] r #js {}]
+                           (.toUpperCase ^[:or string number] e)
+                           (.set m 1 (.-clientX e))
+                           (.-nope b)
+                           (.toFixed (.-nope c))
+                           (.addEventListener js/document \"click\" (.-r c))
+                           (.toUpperCase (.-x p))
+                           (.nope cv)
+                           (set! (.-y p) 1)
+                           (.getContext cv \"2d\")
+                           (.set m \"a\" nil)
+                           (.toFixed (.-size b) (.-r c))
+                           (.addEventListener js/document \"click\" on-click)
+                           (js/console.log (aget r \"a\") (.-y p) (aget p \"a-b\"))))")))
+        (is (= [] (build "(defn f [^[my-pkg/Box] b] (.-size b))"))))
+      (testing "an invalid type tag fails the compile, naming it"
+        (doseq [tag ["[:fn string]" "[:nope string]" "[{:x [:? string number]}]" "[nope/T]" "[:ts \"*/\"]"]]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                (re-pattern (str "Invalid TypeScript type tag \\^" (java.util.regex.Pattern/quote tag)))
+                (try (build (str "(defn f [^" tag " x] (.-y x))"))
+                     (catch clojure.lang.ExceptionInfo e
+                       (throw (or (some #(when (re-find #"Invalid TypeScript" (str (ex-message %))) %)
+                                        (take-while some? (iterate ex-cause e)))
+                                  e)))))
+              tag))))))
+
 (deftest ts-check-watch
   (if-not test-tsc
     (println "ts-check-watch skipped: no TypeScript (set CLJF_TEST_NODE_MODULES)")

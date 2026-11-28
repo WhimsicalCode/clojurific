@@ -99,6 +99,8 @@
     (keyword? f) {f true}
     (symbol? f)  {:tag f}
     (string? f)  {:tag f}
+    ;; as tools.reader 1.5's, Clojure 1.12's ^[...]
+    (vector? f)  {:param-tags f}
     :else        f))
 
 (defn make-var

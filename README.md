@@ -478,6 +478,27 @@ Experimental: with `:ts-check true`, a build type checks its namespaces' JavaScr
 
 It checks the compiled modules of the namespaces in the source directories (`:watch-dirs`'s, not libraries'), copied into `<output-dir>/.ts-check/` with every ClojureScript value typed `any`: imports of other namespaces and top-level vars. Except for `cljs.core`'s values: keywords, symbols, UUIDs, the persistent collections, seqs and atoms are types of their own, which aren't strings, numbers or plain objects, so `(.setAttribute el "role" :button)` or an options map (`{:passive true}`) where an API takes a `#js` object fails. Collections are iterables, `ex-info`s are `Error`s, and `cljs.core` functions with known results are typed: `str`, `name` and `pr-str` are strings, `count` a number, predicates booleans, `keys`, `map` and `filter` seqs, `assoc`, `conj` and `merge` collections. Functions whose result is what a collection holds (`get`, `first`, `nth`) and the project's own functions are `any`. What's typed is what TypeScript knows: `js/` globals (`lib.dom`), npm modules (their packages' types), the goog shims (their `.d.ts`), `#js` literals passed to them, and locals bound to their results. Errors about properties ClojureScript adds (`cljs$core$IFn$_invoke$arity$2`, protocol methods) are left out. A `^js` local (`(let [^js el (.querySelector js/document \"#x\")] ...)`, `(.-name ^js this)`) is `any`, for values TypeScript types more narrowly than the code uses them. `:npm-interop :shadow` requires are typed as they bind: an ES module's namespace (its default export if that's all it exports), a CommonJS module's `export =`. TypeScript isn't strict here (no null checks).
 
+A type tag, `^[...]` (Clojure 1.12's syntax for `:param-tags`), gives a local a TypeScript type instead: where it's bound or used, the check casts it to the type. The vector is the type:
+
+| Tag | TypeScript |
+|---|---|
+| `^[HTMLCanvasElement]`, `^[js/HTMLCanvasElement]` | `HTMLCanvasElement` |
+| `^[pako/Inflate]`, of `(:require ["pako" :as pako])` | `import("pako").Inflate` |
+| `^[Map string number]` | `Map<string, number>` |
+| `^[Array [Map string number]]` | `Array<Map<string, number>>` |
+| `^[:or string number nil]` | `string \| number \| null` |
+| `^[:fn [MouseEvent] void]` | `(p0: MouseEvent) => void` |
+| `^[{:x number :y [:? string] "a-b" true}]` | `{x: number, y?: string, "a-b": true}` |
+| `^[:ts "Record<string, number>"]` | TypeScript as is |
+
+Strings, numbers and booleans in a tag are literal types. Like a `^js` local, a tagged one is trusted: a cast, of a value it overlaps with (a `string` can't be cast to `number`), not checked against what's bound to it. Calling a `:fn` local from ClojureScript isn't checked either (it's called through `.call`); passing it to JavaScript is. An invalid tag fails the compile. Without `:ts-check`, type tags are ignored.
+
+```clojure
+(defn draw [^[:or HTMLCanvasElement OffscreenCanvas] canvas ^[{:color string :width [:? number]}] opts]
+  (let [ctx (.getContext canvas "2d")]
+    (set! (.-strokeStyle ctx) (.-color opts))))
+```
+
 In a watch (the Vite plugin's dev server, with `tsCheck` in its `compilerOptions`), the check runs after the first build and after each recompile, over the namespaces the recompile wrote (about 0.1–0.2s with TypeScript 7's native `tsc`), on a thread of its own, holding the build only while it copies the output: neither the compile's hot reload nor the next compile waits for `tsc`, and its errors don't pause hot reload as compiler warnings do. The plugin logs them, and shows a recompile's on Vite's error overlay, which the next hot reload clears (the first build's are logged only: Vite reloads a page whose first hot update finds the overlay open). A namespace's errors stand until it's checked again or leaves the build. A watch never fails on them, whatever `:warnings`.
 
 `:warnings {:ts-check :error}` (or `:warnings-as-errors true`) fails the build after reporting every error, for CI to keep new interop errors out. It also fails when the check can't run: no `tsc`, or a `tsc` that fails without diagnostics.
