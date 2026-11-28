@@ -2056,10 +2056,14 @@ x                          (not (contains? ret :info)))
                    (and (nil? (next decl)) (seq? (first decl)) (vector? (ffirst decl)))
                    (ffirst decl))]
       (when (and params (not-any? '#{&} params))
-        {:fn-var          true
-         :variadic?       false
-         :max-fixed-arity (count params)
-         :method-params   [(vec (repeat (count params) '_))]}))))
+        (merge
+          {:fn-var          true
+           :variadic?       false
+           :max-fixed-arity (count params)
+           :method-params   [(vec (repeat (count params) '_))]}
+          ;; for :ts-check's casts of calls in its body, see parse 'def
+          (when-let [tag (:param-tags (meta params))]
+            {:cljf.esm/ts-returns {(count params) tag}}))))))
 
 (defmethod parse 'def
   [op env form _ _]
@@ -2195,17 +2199,17 @@ x                          (not (contains? ret :info)))
                :info (-> protocol-symbol meta :protocol-info)
                :impls #{}})
             ;; arities' ^[...] return type tags (:param-tags of their params
-            ;; vector), by fixed arity or :variadic, for :ts-check's casts of
-            ;; calls (cljs.compiler/emit* :invoke)
-            ;; (a multi-arity or variadic defn's from its :top-fn, see
-            ;; cljs.core/ts-returns)
+            ;; vector), by fixed arity or :variadic, nil for an untagged one,
+            ;; when one is tagged, for :ts-check's casts of calls
+            ;; (cljs.compiler/emit* :invoke); a multi-arity or variadic defn's
+            ;; from its :top-fn, see cljs.core/ts-returns
             (when-let [returns (when fn-var?
-                                 (or (not-empty
-                                       (into {}
-                                         (keep (fn [m]
-                                                 (when-let [tag (-> m :form first meta :param-tags)]
-                                                   [(if (:variadic? m) :variadic (:fixed-arity m)) tag])))
-                                         (:methods init-expr)))
+                                 (or (let [returns (into {}
+                                                     (map (fn [m]
+                                                            [(if (:variadic? m) :variadic (:fixed-arity m))
+                                                             (-> m :form first meta :param-tags)]))
+                                                     (:methods init-expr))]
+                                       (when (some some? (vals returns)) returns))
                                      (:cljf.esm/ts-returns (:top-fn sym-meta))))]
               {:cljf.esm/ts-returns returns})
             (when fn-var?

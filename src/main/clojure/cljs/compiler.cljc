@@ -811,7 +811,14 @@
                             ;; relative to the namespace's file: only in it
                             (or (= (-> env :ns :name) ana/*cljs-ns*)
                                 (not (string/starts-with? (str lib) "."))))
-                       (str "import(" (pr-str (esm-import-specifier (first (ana/lib&sublib lib)))) ")." (name sym))
+                       (let [lib  (str (first (ana/lib&sublib lib)))
+                             ^File src (:src *esm*)
+                             ;; a relative require's file by its absolute
+                             ;; path, which the check's copy resolves too
+                             spec (if (and src (or (string/starts-with? lib "./") (string/starts-with? lib "../")))
+                                    (.getCanonicalPath (io/file (.getParentFile (.getAbsoluteFile src)) lib))
+                                    (esm-import-specifier lib))]
+                         (str "import(" (pr-str spec) ")." (name sym)))
                        :else (bad sym))))
            prop  (fn [k]
                    (let [s (cond (and (keyword? k) (nil? (namespace k))) (name k)
@@ -839,8 +846,9 @@
                                  (str "((" (string/join ", " (map-indexed #(str "p" %1 ": " (ty %2)) params))
                                       ") => " (ty ret) ")")
                                  (bad x)))
+                         ;; on one line: the source map counts no newlines
                          :ts (if (and (= 1 (count args)) (string? (first args)))
-                               (str "(" (first args) ")")
+                               (str "(" (string/replace (first args) #"[\r\n\u2028\u2029]+" " ") ")")
                                (bad x))
                          (cond
                            (keyword? h) (bad x)
@@ -871,12 +879,24 @@
      (when (:ts-check (:options @env/*compiler*))
        (let [returns (:cljf.esm/ts-returns info)
              n       (count args)
-             tag     (or (get returns n)
-                         (when (>= n (:max-fixed-arity info 0)) (:variadic returns)))]
+             ;; a fixed arity's, tagged or not, before the variadic's
+             tag     (if (contains? returns n)
+                       (get returns n)
+                       (when (>= n (:max-fixed-arity info 0)) (:variadic returns)))]
          (when tag
            (try
              (ts-type (assoc env :ns (get-in @env/*compiler* [::ana/namespaces (:ns info)])) tag)
              (catch Exception _ nil)))))))
+
+(defn- local-ts-tag
+  "A local's :ts-check tag: its ^[...] type tag, js for ^js, nil for neither,
+  where it's used (form) before where it's bound (binding, its name)."
+  [form binding]
+  (some (fn [m]
+          (cond
+            (:param-tags m) (:param-tags m)
+            (= 'js (:tag m)) 'js))
+        [(meta form) (meta binding)]))
 
 (defn emit-var
   [{:keys [info env form] :as ast}]
@@ -935,13 +955,13 @@
               ;; for :ts-check (cljf.esm.ts-check), ^js locals are any: tagged
               ;; where used or bound, not inferred from an npm call's result;
               ;; ^[...] type tags are casts to their TypeScript type
-              (let [local? (and (:ts-check options) (= :local (:op ast)))
-                    tagged #(or (% (meta form)) (% (-> ast :info :name meta)))]
+              (let [tag (when (and (:ts-check options) (= :local (:op ast)))
+                          (local-ts-tag form (-> ast :info :name)))]
                 (cond
-                  (and local? (tagged :param-tags))
-                  (emits "/** @type {" #?(:clj (ts-type env (tagged :param-tags)) :cljs "any") "} */ (" info ")")
+                  (vector? tag)
+                  (emits "/** @type {" #?(:clj (ts-type env tag) :cljs "any") "} */ (" info ")")
 
-                  (and local? (= 'js (tagged :tag)))
+                  (= 'js tag)
                   (emits "/** @type {any} */ (" info ")")
 
                   :else (emits info))))))))))
@@ -1990,7 +2010,7 @@
         ;; a local whose type tag is a function, ^[:fn ...], is one: called
         ;; directly, which :ts-check checks the arguments of (not .call's)
         ts-fn? (and (= :local (:op f))
-                    (let [tag (or (:param-tags (meta (:form f))) (-> f :info :name meta :param-tags))]
+                    (let [tag (local-ts-tag (:form f) (-> f :info :name))]
                       (and (vector? tag) (= :fn (first tag)))))
         goog? (when ns
                 (or (= ns 'goog)

@@ -3421,15 +3421,16 @@
 
 (core/defn- ts-returns
   "The ^[...] return type tags of arglists (:param-tags of the vectors, which
-  this namespace's meta locals shadow), by arity or :variadic, as
-  cljs.analyzer records a fn's, for :ts-check's casts of calls."
+  this namespace's meta locals shadow), by arity or :variadic, nil for an
+  untagged one, when one is tagged, as cljs.analyzer records a fn's, for
+  :ts-check's casts of calls."
   [arglists]
-  (core/not-empty
-    (core/into {}
-      (core/keep (core/fn [sig]
-              (core/when-let [tag (:param-tags (core/meta sig))]
-                [(if (core/some '#{&} sig) :variadic (core/count sig)) tag])))
-      arglists)))
+  (core/let [returns (core/into {}
+                       (core/map (core/fn [sig]
+                                   [(if (core/some '#{&} sig) :variadic (core/count sig))
+                                    (:param-tags (core/meta sig))]))
+                       arglists)]
+    (core/when (core/some core/some? (core/vals returns)) returns)))
 
 (core/defn- variadic-fn [name meta [[arglist & body :as method] :as fdecl] emit-var?]
   (core/letfn [(dest-args [c]

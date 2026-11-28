@@ -1391,21 +1391,34 @@
                                      (.toFixed (vari 1 2 3) 2)
                                      (.toFixed (lib/el) 2)
                                      (.toUpperCase (label 1))
-                                     ((fn ^[number] [] \"x\")))"
+                                     ((fn ^[number] [] \"x\")))
+                                   (defn mv ([a] 1) (^[string] [a & more] (apply str a more)))
+                                   (defn single ^[string] [x] (if x (.toFixed (single false) 2) \"ok\"))
+                                   (defn uses [^[MouseEvent] e ^[:ts \"{a: number,
+                                                                  b: string}\"] o]
+                                     (.toFixed (mv 1) 2) (.toFixed (mv 1 2) 2)
+                                     (.-custom ^js e) (.toFixed (.-b o) 1))"
                                   ms)
                                 (write-source! src 'test.ret-lib
                                   "(ns test.ret-lib)\n(defn el ^[HTMLDivElement] [] (.createElement js/document \"div\"))"
                                   ms)])]
-          (reset! warnings [])
-          (binding [esm/*generated-sources* sources
-                    ana/*cljs-warning-handlers* [(fn [type env extra]
-                                                   (when (= :ts-check type)
-                                                     (swap! warnings conj [(:line env) (:message extra)])))]]
-            (esm/build {:main 'test.ret :output-dir (str (io/file dir "out-ret")) :watch-dirs [(str src)]
-                        :ts-check {:tsc test-tsc}}))
-          (is (= [[3 "TS2322"] [3 "TS2322"] [5 "TS2322"] [7 "TS2551"] [8 "TS2339"] [10 "TS2551"] [11 "TS2339"]
-                  [13 "TS2322"]]
-                 (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings))))))
+          (let [build-ret #(do (reset! warnings [])
+                               (binding [esm/*generated-sources* sources
+                                         ana/*cljs-warning-handlers* [(fn [type env extra]
+                                                                        (when (= :ts-check type)
+                                                                          (swap! warnings conj [(:line env) (:message extra)])))]]
+                                 (esm/build {:main 'test.ret :output-dir (str (io/file dir "out-ret")) :watch-dirs [(str src)]
+                                             :ts-check {:tsc test-tsc}}))
+                               (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings)))]
+            ;; an untagged fixed arity isn't its variadic's, a self call is cast, a use site's ^js wins, a
+            ;; multi-line :ts type keeps the lines after it
+            (is (= [[3 "TS2322"] [3 "TS2322"] [5 "TS2322"] [7 "TS2551"] [8 "TS2339"] [10 "TS2551"] [11 "TS2339"]
+                    [13 "TS2322"] [15 "TS2551"] [18 "TS2551"] [19 "TS2551"]]
+                   (build-ret)))
+            (testing "changing a return tag rechecks its callers"
+              (write-source! src 'test.ret-lib "(ns test.ret-lib)\n(defn el ^[string] [] \"div\")"
+                (System/currentTimeMillis))
+              (is (= [11 "TS2551"] (nth (build-ret) 6)))))))
       (testing "an invalid type tag fails the compile, naming it"
         (doseq [tag ["[:fn string]" "[:nope string]" "[{:x [:? string number]}]" "[nope/T]" "[:ts \"*/\"]"]]
           (is (thrown-with-msg? clojure.lang.ExceptionInfo

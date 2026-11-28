@@ -447,12 +447,13 @@
 (defn- ns-api
   "The parts of a namespace's analysis its dependents' compiled output
   depends on: its vars (cljs.test's run-tests lists a namespace's tests) and
-  arities of fns invoked directly under :static-fns."
+  arities of fns invoked directly under :static-fns, and their ^[...] return
+  type tags, which :ts-check casts calls to."
   [ns-analysis]
   (into {}
     (map (fn [[sym v]]
            [sym (-> (select-keys v [:fn-var :variadic? :max-fixed-arity :dynamic
-                                    :protocol-symbol :protocol])
+                                    :protocol-symbol :protocol :cljf.esm/ts-returns])
                     ;; arities, param names differ between compiles (gensyms)
                     (assoc :arities (map count (:method-params v))))]))
     (:defs ns-analysis)))

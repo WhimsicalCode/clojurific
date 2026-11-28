@@ -74,12 +74,6 @@
                       :else line))
                   (cond-> line
                     (string/starts-with? line "var ") (->> (str any-var))))))
-         ;; ^[alias/Name] type tags' casts of relative requires, from the
-         ;; copy's directory
-         (map (fn [line]
-                (string/replace line #"import\(\"(\.\.?/[^\"]*)\"\)"
-                  (fn [[_ spec]]
-                    (str "import(" (json/write-str (canonical (io/file parent spec)) :escape-slash false) ")")))))
          ;; only the copies are checked, not the JavaScript they import:
          ;; in place of the "Compiled by" comment, keeping lines
          (#(cons "// @ts-check" (rest %)))
