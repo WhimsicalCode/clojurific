@@ -1218,7 +1218,7 @@
                                "(ns test.ts
                                   (:require [goog.Uri]
                                             [goog.string :as gstr]
-                                            [\"my-pkg\" :as my-pkg])
+                                            [\"my-pkg\" :as my-pkg] [\"my-pkg\" :default my-default])
                                   (:import [goog.net XhrIo]))
                                 (defrecord R [a])
                                 (defn f [s]
@@ -1236,9 +1236,9 @@
                                (- (System/currentTimeMillis) 60000))])
           ts       (doto (io/file dir "ts") .mkdirs)
           _        (spit (io/file ts "globals.d.ts") "declare const Analytics: { track(event: string): void };\n")
-          _        (spit (io/file ts "my-pkg.d.ts") "export function hi(n: number): string;\n")
+          _        (spit (io/file ts "my-pkg.ts") "export function hi(n: number): string { return String(n); }\n")
           _        (spit (io/file ts "tsconfig.json")
-                     "{\"compilerOptions\": {\"paths\": {\"my-pkg\": [\"./my-pkg.d.ts\"]}}, \"include\": [\"globals.d.ts\"]}")
+                     "{\"compilerOptions\": {\"paths\": {\"my-pkg\": [\"./my-pkg.ts\"]}}, \"include\": [\"globals.d.ts\"]}")
           warnings (atom [])]
       (binding [esm/*generated-sources* sources
                 ana/*cljs-warning-handlers* [(fn [type env extra]
@@ -1247,8 +1247,9 @@
         (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
                     :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}}))
       (testing "interop TypeScript types fails at its line, ClojureScript (records, core fns) and ^js
-                locals don't, with :tsconfig's paths and declarations"
-        (is (= [[10 "TS2345"] [11 "TS2554"] [12 "TS2339"] [14 "TS2345"] [15 "TS2345"]]
+                locals don't, with :tsconfig's paths and declarations; a missing default export fails at
+                its import (no ClojureScript line)"
+        (is (= [[nil "TS1192"] [10 "TS2345"] [11 "TS2554"] [12 "TS2339"] [14 "TS2345"] [15 "TS2345"]]
                (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings)))))
       (testing ":warnings {:ts-check :error} reports every diagnostic, then fails the build"
         (reset! warnings [])
@@ -1257,11 +1258,11 @@
                                                 (fn [type env extra]
                                                   (when (= :ts-check type)
                                                     (swap! warnings conj [(:line env) (:message extra)]))))]
-          (is (thrown-with-msg? clojure.lang.ExceptionInfo #":ts-check: 5 TypeScript errors"
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #":ts-check: 6 TypeScript errors"
                 (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
                             :warnings {:ts-check :error}
                             :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}}))))
-        (is (= 5 (count @warnings))))
+        (is (= 6 (count @warnings))))
       (testing "under :error, a tsc that fails without diagnostics, or with one of no file, fails the build"
         (reset! warnings [])
         (binding [esm/*generated-sources* sources

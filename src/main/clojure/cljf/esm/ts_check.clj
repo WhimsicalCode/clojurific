@@ -103,10 +103,9 @@
   "Diagnostics of the output's shape rather than of interop: properties
   ClojureScript adds (cljs$core$IFn$_invoke$arity$2, protocol methods),
   whose names are munged, and comma expressions the compiler emits for
-  let-bound arguments. A failed default import of an ES module without one
-  (:npm-interop :shadow binds its namespace) leaves its binding any."
+  let-bound arguments."
   [{:keys [code message]}]
-  (or (#{"TS2695" "TS1192"} code)
+  (or (= "TS2695" code)
       (and (#{"TS2339" "TS2551"} code)
            (re-find #"^Property '[^']*\$[^']*' does not exist" message))))
 
