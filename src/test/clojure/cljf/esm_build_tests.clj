@@ -562,6 +562,30 @@
     (.waitFor proc)
     out))
 
+(deftest jsx-str-keys-skip-the-nil-check
+  ;; TypeScript reports `("" + ...) ?? undefined` unreachable. Keys typed string or number by
+  ;; hints or return tags can be nil (parse-long), so they keep the check, as locals and
+  ;; a local named str do.
+  (let [dir     (temp-dir)
+        sources (into {} [(write-source! dir 'test.keys
+                            "(ns test.keys)
+                             (defn view [n ^string h]
+                               (let [s (str \"s\" n)]
+                                 #js [#x [:b {:key (str \"b\" n)}]
+                                      #x [:i {:key (cljs.core/str \"i\" n)}]
+                                      #x [:u {:key s}]
+                                      #x [:p {:key (parse-long \"nope\")}]
+                                      #x [:a {:key h}]
+                                      (let [str (fn [_] nil)] #x [:q {:key (str n)}])]))
+                             (js/console.log (js/JSON.stringify (.map (view 1 nil) (fn [e] (.-key e)))))"
+                            (- (System/currentTimeMillis) 60000))])]
+    (stub-jsx-runtime! dir "react")
+    (binding [esm/*generated-sources* sources]
+      (esm/build {:main 'test.keys :output-dir (str (io/file dir "out"))}))
+    (let [out (output dir 'test.keys)]
+      (is (= 4 (count (re-seq #"\?\? undefined" out))) "only the str calls go without the check")
+      (is (= ["b1" "i1" "s1" nil nil nil] (json/read-str (run-node (io/file dir "out" "test" "keys.js"))))))))
+
 (deftest the-generated-test-runner-runs-the-block-its-runner-returns
   (let [dir     (temp-dir)
         ;; Outside dir: a watched directory holding the output isn't watched

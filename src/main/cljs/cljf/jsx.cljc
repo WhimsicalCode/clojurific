@@ -214,12 +214,15 @@
   "The code of an element's key, the runtime's key argument, nil without
   one: a literal :key (nil leaves the element without a key, as in
   Reagent), else the :key of the maps spread at runtime, the last one's
-  that has one (spread-forms, locals the element binds them to)."
-  [props spread-forms]
+  that has one (spread-forms, locals the element binds them to). A str
+  call, never nil, goes without the nil check, which TypeScript reports
+  unreachable for the string concatenation str compiles to."
+  [env props spread-forms]
   (let [[found? k] (literal-key props)]
     (cond
       (and found? (or (string? k) (number? k))) (arg k)
       (and found? (keyword? k)) (arg (name k))
+      (and found? (seq? k) ('#{str cljs.core/str} (first k)) (nil? (get-in env [:locals (first k)]))) (arg k)
       found? ["(~{} ?? undefined)" [k]]
       (seq spread-forms)
       [(str "(" (string/join " ?? " (repeat (count spread-forms) "~{}")) ")")
@@ -278,7 +281,7 @@
                                           [(str "[" (string/join ", " (map first cs)) "]")
                                            (vec (mapcat second cs))])]]))
         [pt pargs] (js-obj-code entries)
-        [kt kargs] (key-code props (runtime-spreads env props))]
+        [kt kargs] (key-code env props (runtime-spreads env props))]
     [(str "~{}(~{}, " pt (when kt (str ", " kt)) ")")
      (vec (concat [(rt (if (< 1 (count children)) 'jsxs 'jsx)) type]
                   pargs
