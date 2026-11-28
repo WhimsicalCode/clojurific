@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Regenerates the shims converted from library sources: goog/date.js,
+# Regenerates the shims converted from library sources, and their .d.ts: goog/date.js,
 # goog/net.js and goog/Uri.js from the Closure Library's, com/cognitect/ from
 # transit-js', both from the jars deps.edn resolves (script/gen_goog_shims/).
 # Run it after updating org.clojure/google-closure-library or
@@ -40,3 +40,10 @@ python3 $gen/closure2esm.py $esm/goog/Uri.js "$tmp/closure" $gen/uri-prelude.js 
 
 python3 $gen/transit2esm.py $esm/com/cognitect/transit-js.js "$tmp/transit" ../../ "$transit_version"
 node $gen/transit_ns.mjs "$PWD/$esm/com/cognitect"
+
+# their TypeScript declarations, from the sources' JSDoc
+dts() { f=$1; shift; python3 $gen/closure_dts.py "$esm/$f.js" "$esm/$f.d.ts" "$@"; }
+dts goog/date
+dts goog/net --extern goog.Uri=./Uri.js#Uri
+dts goog/Uri
+dts com/cognitect/transit-js --loose

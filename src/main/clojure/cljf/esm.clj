@@ -256,16 +256,22 @@
          "throw new Error(\"Can't set \" + name);\n"
          "}\n")))
 
-(defn- install-goog-shims [{:keys [output-dir]}]
+(defn- install-goog-shims [{:keys [output-dir esm-dts]}]
   (doseq [path goog-shims]
     (let [src  (slurp (io/resource (str "cljf/esm/" path)))
           ;; goog.js has its own
           src  (cond-> src (not (string/includes? src "export function $$set")) (str (goog-shim-setter src)))
-          dest (io/file output-dir path)]
-      (when (or (not (.exists dest))
-                (not= src (slurp dest)))
-        (util/mkdirs dest)
-        (spit dest src)))))
+          dts  (string/replace path #"\.js$" ".d.ts")]
+      (doseq [[dest src] [[path src]
+                          ;; the converted shims' declarations
+                          (when-let [r (and (not (false? esm-dts)) (io/resource (str "cljf/esm/" dts)))]
+                            [dts (slurp r)])]
+              :when dest
+              :let [dest (io/file output-dir dest)]]
+        (when (or (not (.exists dest))
+                  (not= src (slurp dest)))
+          (util/mkdirs dest)
+          (spit dest src))))))
 
 (defn- spit-if-changed [^File f content]
   (when (or (not (.exists f)) (not= content (slurp f)))

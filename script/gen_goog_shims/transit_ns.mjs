@@ -1,4 +1,5 @@
-// Writes the com.cognitect.transit{,.types,.eq} shims re-exporting transit-js.js' namespaces
+// Writes the com.cognitect.transit{,.types,.eq} shims re-exporting transit-js.js' namespaces,
+// and their .d.ts
 //   node transit_ns.mjs ABSOLUTE_DIR_OF_TRANSIT_JS_JS
 import { writeFileSync } from 'node:fs';
 const dir = process.argv[2];
@@ -10,4 +11,6 @@ for (const [ns, file, key, from] of [['com.cognitect.transit', 'transit.js', 'tr
   const names = Object.keys(m[key]).filter((k) => key != 'transit' || !skip.has(k));
   writeFileSync(dir + '/' + file, `// ${ns}, see transit-js.js\n\nimport { ${key} as $ } from '${from}';\n\n` +
     names.map((n) => `export let ${n} = $.${n};\n`).join(''));
+  writeFileSync(dir + '/' + file.replace(/\.js$/, '.d.ts'), `// ${ns}, see transit-js.d.ts\n\nimport { ${key} as $ } from '${from}';\n\n` +
+    names.map((n) => `export import ${n} = $.${n};\n`).join(''));
 }

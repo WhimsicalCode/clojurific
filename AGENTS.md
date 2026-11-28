@@ -78,7 +78,7 @@ commit `src/main/js/cljf/resolver.lock.json`. After changing the MCP server's to
 (`cljf.esm.mcp/tools`), run `script/gen-mcp-tools` and commit `src/main/js/cljf/mcp-tools.json`, the
 launcher's copy, which `cljf.esm-repl-tests/mcp-tools-copy` checks. After updating
 `org.clojure/google-closure-library` or `com.cognitect/transit-cljs`, run `script/gen-goog-shims` and
-commit the shims it rewrites in `src/main/cljs/cljf/esm/` (`goog/date.js`, `goog/net.js`,
+commit the shims and `.d.ts` it rewrites in `src/main/cljs/cljf/esm/` (`goog/date.js`, `goog/net.js`,
 `goog/Uri.js`, `com/cognitect/`); edit their conversion in `script/gen_goog_shims/`, not the shims.
 
 `cljs/repl.cljc` is only `cljs.repl`'s macros (`doc`, `source`, `dir`, `apropos`, `find-doc`) and

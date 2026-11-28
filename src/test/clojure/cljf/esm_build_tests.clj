@@ -1159,7 +1159,10 @@
       (is (= (str "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad YWJj 4294967298 ab "
                   "2026-12-02T13:45:10,2,true 1 day 1 hour 1 minute 22 0 blob complete 7 "
                   "http://a.com/d?y=2#f a=1&b=x%20y true true click http://b.com true redef")
-             (string/trim (run-node (io/file dir "out" "test" "s.js"))))))))
+             (string/trim (run-node (io/file dir "out" "test" "s.js"))))))
+    (testing "the converted shims' declarations are beside them"
+      (is (every? #(.exists (io/file dir "out" %)) ["goog/Uri.d.ts" "goog/net.d.ts" "goog/date.d.ts"
+                                                    "com/cognitect/transit-js.d.ts" "com/cognitect/transit.d.ts"])))))
 
 (deftest transit-shim
   (let [dir     (temp-dir)
