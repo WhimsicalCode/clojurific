@@ -18,7 +18,9 @@ const ts = (() => {
     const require = createRequire(process.env.CLJF_TEST_NODE_MODULES
       ? path.resolve(process.env.CLJF_TEST_NODE_MODULES, 'x.js')
       : import.meta.url);
-    return require('typescript');
+    const ts = require('typescript');
+    // TypeScript 7 (the native port) has no JavaScript API
+    return ts.ScriptTarget ? ts : null;
   } catch {
     return null;
   }
@@ -99,7 +101,7 @@ encodeString('abc', 7);
 import { goog } from '${esm}goog/Uri.js';
 `;
 
-test('the shims are typed', { skip: ts ? false : 'no typescript (set CLJF_TEST_NODE_MODULES)' }, async () => {
+test('the shims are typed', { skip: ts ? false : 'no TypeScript 5 or 6 (set CLJF_TEST_NODE_MODULES)' }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cljf-shim-types-'));
   const file = path.join(dir, 'user.ts');
   fs.writeFileSync(file, user);

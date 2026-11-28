@@ -1261,4 +1261,18 @@
                 (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
                             :warnings {:ts-check :error}
                             :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}}))))
-        (is (= 5 (count @warnings)))))))
+        (is (= 5 (count @warnings))))
+      (testing "under :error, a tsc that fails without diagnostics, or with one of no file, fails the build"
+        (reset! warnings [])
+        (binding [esm/*generated-sources* sources
+                  ana/*cljs-warning-handlers* [(fn [type _ extra]
+                                                 (when (= :ts-check type)
+                                                   (swap! warnings conj (:message extra))))]]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #":ts-check: \S*/false failed"
+                (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
+                            :warnings {:ts-check :error} :ts-check {:tsc "/bin/false"}})))
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #":ts-check: \d+ TypeScript errors"
+                (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
+                            :warnings {:ts-check :error}
+                            :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "missing.json"))}})))
+          (is (some #(re-find #"^TS5083 Cannot read file" %) @warnings)))))))

@@ -24,7 +24,8 @@
   copies.
 
   :warnings {:ts-check :error} (or :warnings-as-errors) reports every
-  diagnostic, then fails the build with their count."
+  diagnostic, then fails the build with their count, and fails a check that
+  can't run (no tsc, a tsc failing without diagnostics)."
   (:require [cljs.analyzer :as ana]
             [cljs.source-map :as sm]
             [cljs.vendor.clojure.data.json :as json]
@@ -52,12 +53,15 @@
   (let [parent (.getParentFile js)]
     (->> (string/split (slurp js) #"\n" -1)
          ;; :npm-interop :shadow's imports, which the Vite plugin resolves:
-         ;; an ES module's namespace, a CommonJS module's module.exports, as
-         ;; TypeScript's import types type them (export = for CommonJS)
+         ;; an ES module's namespace, its default export if that's all it
+         ;; exports, a CommonJS module's module.exports, as TypeScript's
+         ;; import types type them (export = for CommonJS)
          (map (fn [line]
                 (if-let [[_ alias spec] (re-matches #"import ([\w$]+) from \"cljs-npm-as:([^\"]+)\";" line)]
-                  (let [spec (if (string/starts-with? spec ".") (canonical (io/file parent spec)) spec)]
-                    (str "const " alias " = /** @type {typeof import(" (json/write-str spec :escape-slash false) ")} */ (null);"))
+                  (let [spec (if (string/starts-with? spec ".") (canonical (io/file parent spec)) spec)
+                        m    (str "typeof import(" (json/write-str spec :escape-slash false) ")")]
+                    (str "const " alias " = /** @type {[Exclude<keyof " m ", \"default\">] extends [never] ? ("
+                         m " extends {default: infer D} ? D : " m ") : " m "} */ (null);"))
                   line)))
          (map (fn [line]
                 (if-let [[_ star alias spec] (re-matches #"import (\* as )?([\w$]+) from \"(\.[^\"]*)\";" line)]
@@ -81,7 +85,10 @@
   "The tsc of the :ts-check option's :tsc, else of the node_modules nearest
   to the output directory or the working directory."
   [{:keys [ts-check output-dir]}]
-  (or (when (map? ts-check) (:tsc ts-check))
+  (or (when-let [tsc (when (map? ts-check) (:tsc ts-check))]
+        ;; tsc runs in <output-dir>/.ts-check: a path is the working
+        ;; directory's, a bare name is looked up on the PATH
+        (cond-> tsc (string/includes? tsc "/") canonical))
       (some (fn [start]
               (loop [d (io/file (canonical start))]
                 (when d
@@ -90,7 +97,7 @@
         [output-dir "."])))
 
 (def ^:private diagnostic
-  #"^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$")
+  #"^(?:(.+?)\((\d+),(\d+)\): )?error (TS\d+): (.*)$")
 
 (defn- noise?
   "Diagnostics of the output's shape rather than of interop: properties
@@ -131,8 +138,12 @@
       (empty? own) nil
 
       (not tsc)
-      (binding [*out* *err*]
-        (println "WARNING: :ts-check needs TypeScript: no node_modules/.bin/tsc near the output directory, set :ts-check {:tsc path}"))
+      (let [msg ":ts-check needs TypeScript: no node_modules/.bin/tsc near the output directory, set :ts-check {:tsc path}"]
+        ;; under :error, a check that can't run fails
+        (if (= :error (:ts-check ana/*cljs-warnings*))
+          (throw (ex-info msg {}))
+          (binding [*out* *err*]
+            (println (str "WARNING: " msg)))))
 
       :else
       (let [checked (into {}
@@ -169,19 +180,32 @@
               ;; build: the analyzer's :error throws at the first
               error? (= :error (:ts-check ana/*cljs-warnings*))
               n     (atom 0)]
-          (.waitFor proc 1 TimeUnit/HOURS)
+          (when-not (.waitFor proc 1 TimeUnit/HOURS)
+            (.destroyForcibly proc))
+          ;; tsc exits 1 on the diagnostics noise? leaves out too, but one
+          ;; that fails without any (a crash, a tsc that doesn't run) checked
+          ;; nothing
+          (when (and (not (zero? (.exitValue proc))) (not-any? #(re-matches diagnostic %) lines))
+            (throw (ex-info (str ":ts-check: " tsc " failed:\n" (string/join "\n" lines)) {:exit (.exitValue proc)})))
           (binding [ana/*cljs-warnings* (cond-> ana/*cljs-warnings* error? (assoc :ts-check :warning))]
             (doseq [l lines
                     :let [[_ file line col code message] (re-matches diagnostic l)
                           d {:code code :message message}]
-                    :when (and file (not (noise? d)))]
+                    :when (and code (not (noise? d)))]
               (swap! n inc)
-              (let [path (canonical (io/file root file))
-                    {:keys [ns ^File js source-file]} (checked path)
-                    line (Long/parseLong line)
-                    col  (Long/parseLong col)]
-                (if-not js
+              (let [path (some->> file (io/file root) canonical)
+                    {:keys [^File js source-file]} (checked path)
+                    line (some-> line Long/parseLong)
+                    col  (some-> col Long/parseLong)]
+                (cond
+                  ;; tsconfig's: without a file, or of another file
+                  (not file)
+                  (ana/warning :ts-check {} {:message (str code " " message)})
+
+                  (not js)
                   (ana/warning :ts-check {} {:message (str path ":" line ":" col " " code " " message)})
+
+                  :else
                   (let [col  (cond-> col
                                (string/starts-with? (nth (string/split-lines (slurp (io/file path))) (dec line) "") any-var)
                                (- (count any-var)))
@@ -191,8 +215,10 @@
                                    (swap! maps assoc js m)
                                    m))
                         [sl sc] (some-> smap (source-position line col))]
-                    (binding [ana/*cljs-file* (str source-file)
-                              ana/*cljs-ns*   ns]
+                    ;; not of the namespace (its output's warnings, which hold
+                    ;; back hot reload until it recompiles): the check runs
+                    ;; after builds only, the watch reports them once
+                    (binding [ana/*cljs-file* (str source-file)]
                       (ana/warning :ts-check {:line sl :column sc}
                         {:message (str code " " message
                                        (when-not sl (str " (" (.getName js) ":" line ":" col ")")))})))))))
