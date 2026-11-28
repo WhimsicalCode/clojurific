@@ -841,8 +841,10 @@
                 info (cond-> info
                        (not= form 'js/-Infinity) (munge reserved))]
             (emit-wrap env
-              ;; for :ts-check (cljf.esm.ts-check), ^js locals are any
-              (if (and (:ts-check options) (= :local (:op ast)) (= 'js (:tag ast)))
+              ;; for :ts-check (cljf.esm.ts-check), ^js locals are any: tagged
+              ;; where used or bound, not inferred from an npm call's result
+              (if (and (:ts-check options) (= :local (:op ast))
+                       (or (= 'js (:tag (meta form))) (= 'js (-> ast :info :name meta :tag))))
                 (emits "/** @type {any} */ (" info ")")
                 (emits info)))))))))
 

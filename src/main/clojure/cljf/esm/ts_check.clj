@@ -31,8 +31,7 @@
             [cljs.vendor.clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as string])
-  (:import [java.io File]
-           [java.util.concurrent TimeUnit]))
+  (:import [java.io File]))
 
 (def ^:private dir ".ts-check")
 
@@ -169,57 +168,65 @@
               (and (map? (:ts-check opts)) (:tsconfig (:ts-check opts)))
               (assoc :extends (canonical (:tsconfig (:ts-check opts)))))
             :escape-slash false))
-        (let [proc  (-> (ProcessBuilder. ^java.util.List [tsc "-p" "tsconfig.json" "--pretty" "false"])
-                        (.directory root)
-                        (.redirectErrorStream true)
-                        (.start))
-              lines (with-open [r (io/reader (.getInputStream proc))] (vec (line-seq r)))
-              maps  (atom {})
-              ;; :ts-check :error reports every diagnostic, then fails the
-              ;; build: the analyzer's :error throws at the first
+        (let [;; :ts-check :error reports every diagnostic, then fails the
+              ;; build: the analyzer's :error throws at the first. It fails a
+              ;; check that can't run too, which is otherwise a warning.
               error? (= :error (:ts-check ana/*cljs-warnings*))
+              fail!  (fn [msg]
+                       (if error?
+                         (throw (ex-info msg {}))
+                         (binding [*out* *err*] (println (str "WARNING: " msg)))))
+              [lines exit] (try
+                             (let [proc  (-> (ProcessBuilder. ^java.util.List [tsc "-p" "tsconfig.json" "--pretty" "false"])
+                                             (.directory root)
+                                             (.redirectErrorStream true)
+                                             (.start))
+                                   lines (with-open [r (io/reader (.getInputStream proc))] (vec (line-seq r)))]
+                               [lines (.waitFor proc)])
+                             (catch java.io.IOException e
+                               [[(.getMessage e)] -1]))
+              maps  (atom {})
               n     (atom 0)]
-          (when-not (.waitFor proc 1 TimeUnit/HOURS)
-            (.destroyForcibly proc))
           ;; tsc exits 1 on the diagnostics noise? leaves out too, but one
           ;; that fails without any (a crash, a tsc that doesn't run) checked
           ;; nothing
-          (when (and (not (zero? (.exitValue proc))) (not-any? #(re-matches diagnostic %) lines))
-            (throw (ex-info (str ":ts-check: " tsc " failed:\n" (string/join "\n" lines)) {:exit (.exitValue proc)})))
-          (binding [ana/*cljs-warnings* (cond-> ana/*cljs-warnings* error? (assoc :ts-check :warning))]
-            (doseq [l lines
-                    :let [[_ file line col code message] (re-matches diagnostic l)
-                          d {:code code :message message}]
-                    :when (and code (not (noise? d)))]
-              (swap! n inc)
-              (let [path (some->> file (io/file root) canonical)
-                    {:keys [^File js source-file]} (checked path)
-                    line (some-> line Long/parseLong)
-                    col  (some-> col Long/parseLong)]
-                (cond
-                  ;; tsconfig's: without a file, or of another file
-                  (not file)
-                  (ana/warning :ts-check {} {:message (str code " " message)})
-
-                  (not js)
-                  (ana/warning :ts-check {} {:message (str path ":" line ":" col " " code " " message)})
-
-                  :else
-                  (let [col  (cond-> col
-                               (string/starts-with? (nth (string/split-lines (slurp (io/file path))) (dec line) "") any-var)
-                               (- (count any-var)))
-                        smap (or (get @maps js)
-                                 (let [f (io/file (str (.getPath js) ".map"))
-                                       m (when (.exists f) (sm/decode (json/read-str (slurp f) :key-fn keyword)))]
-                                   (swap! maps assoc js m)
-                                   m))
-                        [sl sc] (some-> smap (source-position line col))]
-                    ;; not of the namespace (its output's warnings, which hold
-                    ;; back hot reload until it recompiles): the check runs
-                    ;; after builds only, the watch reports them once
-                    (binding [ana/*cljs-file* (str source-file)]
-                      (ana/warning :ts-check {:line sl :column sc}
-                        {:message (str code " " message
-                                       (when-not sl (str " (" (.getName js) ":" line ":" col ")")))})))))))
-          (when (and error? (pos? @n))
-            (throw (ex-info (str ":ts-check: " @n " TypeScript error" (when (< 1 @n) "s")) {:ts-check @n}))))))))
+          (if (and (not (zero? exit)) (not-any? #(re-matches diagnostic %) lines))
+            (fail! (str ":ts-check: " tsc " failed:\n" (string/join "\n" lines)))
+            (do
+              (binding [ana/*cljs-warnings* (cond-> ana/*cljs-warnings* error? (assoc :ts-check :warning))]
+                (doseq [l lines
+                        :let [[_ file line col code message] (re-matches diagnostic l)
+                              d {:code code :message message}]
+                        :when (and code (not (noise? d)))]
+                  (swap! n inc)
+                  (let [path (some->> file (io/file root) canonical)
+                        {:keys [^File js source-file]} (checked path)
+                        line (some-> line Long/parseLong)
+                        col  (some-> col Long/parseLong)]
+                    (cond
+                      ;; tsconfig's: without a file, or of another file
+                      (not file)
+                      (ana/warning :ts-check {} {:message (str code " " message)})
+    
+                      (not js)
+                      (ana/warning :ts-check {} {:message (str path ":" line ":" col " " code " " message)})
+    
+                      :else
+                      (let [col  (cond-> col
+                                   (string/starts-with? (nth (string/split-lines (slurp (io/file path))) (dec line) "") any-var)
+                                   (- (count any-var)))
+                            smap (or (get @maps js)
+                                     (let [f (io/file (str (.getPath js) ".map"))
+                                           m (when (.exists f) (sm/decode (json/read-str (slurp f) :key-fn keyword)))]
+                                       (swap! maps assoc js m)
+                                       m))
+                            [sl sc] (some-> smap (source-position line col))]
+                        ;; not of the namespace (its output's warnings, which hold
+                        ;; back hot reload until it recompiles): the check runs
+                        ;; after builds only, the watch reports them once
+                        (binding [ana/*cljs-file* (str source-file)]
+                          (ana/warning :ts-check {:line sl :column sc}
+                            {:message (str code " " message
+                                           (when-not sl (str " (" (.getName js) ":" line ":" col ")")))})))))))
+              (when (and error? (pos? @n))
+                (throw (ex-info (str ":ts-check: " @n " TypeScript error" (when (< 1 @n) "s")) {:ts-check @n}))))))))))
