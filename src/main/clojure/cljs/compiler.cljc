@@ -1958,6 +1958,11 @@
         ns (:ns info)
         ftag (ana/infer-tag env f)
         js? (or (= ns 'js) (= ns 'Math) (:foreign info)) ;; foreign - i.e. global / Node.js library
+        ;; a local whose type tag is a function, ^[:fn ...], is one: called
+        ;; directly, which :ts-check checks the arguments of (not .call's)
+        ts-fn? (and (= :local (:op f))
+                    (let [tag (or (:param-tags (meta (:form f))) (-> f :info :name meta :param-tags))]
+                      (and (vector? tag) (= :fn (first tag)))))
         goog? (when ns
                 (or (= ns 'goog)
                     (when-let [ns-str (str ns)]
@@ -2096,7 +2101,7 @@
                (cc "cljs.core.prim_seq.cljs$core$IFn$_invoke$arity$2([")
                (comma-sep (drop mfa args)) "], 0))"))
 
-       (or fn? js? goog?)
+       (or fn? js? goog? ts-fn?)
        (emits f "(" (comma-sep args)  ")")
 
        :else

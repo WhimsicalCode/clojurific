@@ -245,6 +245,17 @@
                           (fn [] (analyze aenv specify-test-code nil opts))))))))))))
 
 
+(deftest test-ts-fn-local-invoke-emit
+  ;; a local tagged ^[:fn ...] (:param-tags, which Clojure 1.10 doesn't
+  ;; read as ^[...]), where bound or called, is a JavaScript function:
+  ;; called directly, with or without :ts-check
+  (let [js (compile-simple-form '(def x (fn [^{:param-tags [:fn [string] number]} f g h]
+                                           [(f "a") (g "b") (^{:param-tags [:fn [] void]} h)])))]
+    (is (re-find #"\bf\(\"a\"\)" js))
+    (is (re-find #"\bh\(\)" js))
+    (is (not (re-find #"\bg\(\"b\"\)" js)))
+    (is (re-find #"\bg\.(call|cljs\$core\$IFn)" js))))
+
 (deftest test-optimized-invoke-emit
   (let [dir      (doto (java.nio.file.Files/createTempDirectory "invoke-test" (make-array java.nio.file.attribute.FileAttribute 0))
                    (-> .toFile .deleteOnExit))

@@ -491,7 +491,7 @@ A type tag, `^[...]` (Clojure 1.12's syntax for `:param-tags`), gives a local a 
 | `^[{:x number :y [:? string] "a-b" true}]` | `{x: number, y?: string, "a-b": true}` |
 | `^[:ts "Record<string, number>"]` | TypeScript as is |
 
-Strings, numbers and booleans in a tag are literal types. Like a `^js` local, a tagged one is trusted: a cast, of a value it overlaps with (a `string` can't be cast to `number`), not checked against what's bound to it. Calling a `:fn` local from ClojureScript isn't checked either (it's called through `.call`); passing it to JavaScript is. An invalid tag fails the compile. Without `:ts-check`, type tags are ignored.
+Strings, numbers and booleans in a tag are literal types. Like a `^js` local, a tagged one is trusted: a cast, of a value it overlaps with (a `string` can't be cast to `number`), not checked against what's bound to it. A `:fn` local is called directly (`f(x)`, not through `.call` and `IFn`'s arities), with or without `:ts-check`, so its calls' arguments are checked: tag only JavaScript functions or ClojureScript `fn`s, not keywords, maps or other callable values, `:fn`. An invalid tag fails a `:ts-check` compile; without `:ts-check`, type tags are otherwise ignored.
 
 ```clojure
 (defn draw [^[:or HTMLCanvasElement OffscreenCanvas] canvas ^[{:color string :width [:? number]}] opts]

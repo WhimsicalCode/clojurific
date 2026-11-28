@@ -1369,7 +1369,11 @@
                            (.toFixed (.-size b) (.-r c))
                            (.addEventListener js/document \"click\" on-click)
                            (js/console.log (aget r \"a\") (.-y p) (aget p \"a-b\"))))")))
-        (is (= [] (build "(defn f [^[my-pkg/Box] b] (.-size b))"))))
+        (is (= [] (build "(defn f [^[my-pkg/Box] b] (.-size b))")))
+        (testing "a ^[:fn ...] local's calls are checked"
+          (is (= [[3 "TS2345"] [3 "TS2554"]]
+                 (build "(defn f [^[:fn [MouseEvent] void] cb ^[MouseEvent] e] (cb e)
+                           (cb 1) (cb e e))")))))
       (testing "an invalid type tag fails the compile, naming it"
         (doseq [tag ["[:fn string]" "[:nope string]" "[{:x [:? string number]}]" "[nope/T]" "[:ts \"*/\"]"]]
           (is (thrown-with-msg? clojure.lang.ExceptionInfo
