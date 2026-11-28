@@ -807,7 +807,10 @@
                      (cond
                        (nil? ns) (name sym)
                        (= "js" ns) (name sym)
-                       (and lib (ana/node-module-dep? lib) (nil? (second (ana/lib&sublib lib))))
+                       (and lib (ana/node-module-dep? lib) (nil? (second (ana/lib&sublib lib)))
+                            ;; relative to the namespace's file: only in it
+                            (or (= (-> env :ns :name) ana/*cljs-ns*)
+                                (not (string/starts-with? (str lib) "."))))
                        (str "import(" (pr-str (esm-import-specifier (first (ana/lib&sublib lib)))) ")." (name sym))
                        :else (bad sym))))
            prop  (fn [k]
@@ -848,6 +851,32 @@
            t     (ty (if (vector? tag) tag (bad tag)))]
        ;; inside the cast's comment
        (if (string/includes? t "*/") (bad tag) t))))
+
+(defn- ts-return-doc
+  "For :ts-check, the JSDoc giving a fn method its params vector's ^[...]
+  return type tag, which TypeScript checks its returns against."
+  [{:keys [form env]}]
+  #?(:clj
+     (when (:ts-check (:options @env/*compiler*))
+       (when-let [tag (-> form first meta :param-tags)]
+         (str "/** @return {" (ts-type env tag) "} */ ")))))
+
+(defn- ts-call-type
+  "For :ts-check, the TypeScript type of a call of var info with args args
+  when the arity called has a ^[...] return type tag: its names resolved in
+  the var's namespace, nil when they can't be (relative requires of another
+  namespace's file)."
+  [env info args]
+  #?(:clj
+     (when (:ts-check (:options @env/*compiler*))
+       (let [returns (:cljf.esm/ts-returns info)
+             n       (count args)
+             tag     (or (get returns n)
+                         (when (>= n (:max-fixed-arity info 0)) (:variadic returns)))]
+         (when tag
+           (try
+             (ts-type (assoc env :ns (get-in @env/*compiler* [::ana/namespaces (:ns info)])) tag)
+             (catch Exception _ nil)))))))
 
 (defn emit-var
   [{:keys [info env form] :as ast}]
@@ -1414,10 +1443,10 @@
            (emitln "var " (comma-sep locals) ";"))))))
 
 (defn emit-fn-method
-  [{expr :body :keys [type name params env recurs]}]
+  [{expr :body :keys [type name params env recurs] :as f}]
   (let [async (:async env)]
     (emit-wrap env
-               (emits "(" (when async "async ") "function " (munge name) "(")
+               (emits "(" (ts-return-doc f) (when async "async ") "function " (munge name) "(")
                (emit-fn-params params)
                (emits "){")
                (emit-fn-body expr recurs type params)
@@ -1445,7 +1474,7 @@
           delegate-name (str mname "__delegate")
           async (:async env)]
       (emitln "/*@__PURE__*/(function() { ")
-      (emits "const " delegate-name " = " (when async "async ") "function (")
+      (emits "const " delegate-name " = " (ts-return-doc f) (when async "async ") "function (")
       (doseq [param params]
         (emit param)
         (when-not (= param (last params)) (emits ",")))
@@ -2010,8 +2039,11 @@
                         (update-in [:info]
                           #(-> % (dissoc :shadow) (dissoc :fn-self-name)))))) nil]
                  [f nil]))))
-          [f nil])]
+          [f nil])
+        ;; :ts-check's cast of a call to its arity's ^[...] return type tag
+        ts-ret (when (= :var (:op (:fn expr))) (ts-call-type env info args))]
     (emit-wrap env
+      (when ts-ret (emits "/** @type {" ts-ret "} */ ("))
       (cond
        opt-not?
        (emits "(!(" (first args) "))")
@@ -2113,7 +2145,8 @@
                     f "(" (comma-sep args) "))")
              (emits "(" f fprop " ? " f fprop "(" (comma-sep args) ") : "
                     f ".call(" (comma-sep (cons "null" args)) "))")))
-         (emits f ".call(" (comma-sep (cons "null" args)) ")"))))))
+         (emits f ".call(" (comma-sep (cons "null" args)) ")")))
+      (when ts-ret (emits ")")))))
 
 (defmethod emit* :new
   [{ctor :class :keys [args env]}]

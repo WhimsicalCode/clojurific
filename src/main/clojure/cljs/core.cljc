@@ -3392,7 +3392,11 @@
                             (. self# (~(get-delegate) (seq ~restarg))))))))]
        `(do
           (set! (. ~sym ~(get-delegate-prop))
-                (~(with-meta `fn (meta sym)) (~(vec sig) ~@body)))
+                ;; with its ^[...] return type tag, for :ts-check
+                (~(with-meta `fn (meta sym))
+                 (~(core/cond-> (vec sig)
+                     (:param-tags (core/meta arglist)) (with-meta (select-keys (core/meta arglist) [:param-tags])))
+                  ~@body)))
           ~@(core/when solo
               `[(set! (. ~sym ~'-cljs$lang$maxFixedArity)
                   ~(core/dec (count sig)))])
@@ -3415,6 +3419,18 @@
                 (core/drop 2 arglist)))
     arglists))
 
+(core/defn- ts-returns
+  "The ^[...] return type tags of arglists (:param-tags of the vectors, which
+  this namespace's meta locals shadow), by arity or :variadic, as
+  cljs.analyzer records a fn's, for :ts-check's casts of calls."
+  [arglists]
+  (core/not-empty
+    (core/into {}
+      (core/keep (core/fn [sig]
+              (core/when-let [tag (:param-tags (core/meta sig))]
+                [(if (core/some '#{&} sig) :variadic (core/count sig)) tag])))
+      arglists)))
+
 (core/defn- variadic-fn [name meta [[arglist & body :as method] :as fdecl] emit-var?]
   (core/letfn [(dest-args [c]
                  (map (core/fn [n] `(unchecked-get (js-arguments) ~n))
@@ -3431,7 +3447,8 @@
                         :max-fixed-arity mfa
                         :method-params (core/cond-> [sig] macro? elide-implicit-macro-args)
                         :arglists (core/cond-> (core/list arglist) macro? elide-implicit-macro-args)
-                        :arglists-meta (doall (map meta [arglist]))})
+                        :arglists-meta (doall (map meta [arglist]))
+                        :cljf.esm/ts-returns (core/when-not macro? (ts-returns [arglist]))})
                name  (with-meta name meta)]
       `(do
          (def ~name
@@ -3497,7 +3514,8 @@
                            :max-fixed-arity mfa
                            :method-params (core/cond-> sigs macro? elide-implicit-macro-args)
                            :arglists (core/cond-> arglists macro? elide-implicit-macro-args)
-                           :arglists-meta (doall (map meta arglists))})
+                           :arglists-meta (doall (map meta arglists))
+                           :cljf.esm/ts-returns (core/when-not macro? (ts-returns arglists))})
                args-sym (gensym "args")
                param-counts (map count arglists)
                name     (with-meta name meta)]

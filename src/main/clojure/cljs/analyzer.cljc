@@ -2194,6 +2194,20 @@ x                          (not (contains? ret :info)))
               {:protocol-symbol protocol-symbol
                :info (-> protocol-symbol meta :protocol-info)
                :impls #{}})
+            ;; arities' ^[...] return type tags (:param-tags of their params
+            ;; vector), by fixed arity or :variadic, for :ts-check's casts of
+            ;; calls (cljs.compiler/emit* :invoke)
+            ;; (a multi-arity or variadic defn's from its :top-fn, see
+            ;; cljs.core/ts-returns)
+            (when-let [returns (when fn-var?
+                                 (or (not-empty
+                                       (into {}
+                                         (keep (fn [m]
+                                                 (when-let [tag (-> m :form first meta :param-tags)]
+                                                   [(if (:variadic? m) :variadic (:fixed-arity m)) tag])))
+                                         (:methods init-expr)))
+                                     (:cljf.esm/ts-returns (:top-fn sym-meta))))]
+              {:cljf.esm/ts-returns returns})
             (when fn-var?
               (let [params (map #(vec (map :name (:params %))) (:methods init-expr))]
                 (merge

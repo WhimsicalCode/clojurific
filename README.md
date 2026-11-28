@@ -493,6 +493,8 @@ A type tag, `^[...]` (Clojure 1.12's syntax for `:param-tags`), gives a local a 
 
 Strings, numbers and booleans in a tag are literal types. Like a `^js` local, a tagged one is trusted: a cast, of a value it overlaps with (a `string` can't be cast to `number`), not checked against what's bound to it. A `:fn` local is called directly (`f(x)`, not through `.call` and `IFn`'s arities), with or without `:ts-check`, so its calls' arguments are checked: tag only JavaScript functions or ClojureScript `fn`s, not keywords, maps or other callable values, `:fn`. An invalid tag fails a `:ts-check` compile; without `:ts-check`, type tags are otherwise ignored.
 
+A params vector's tag is the function's return type: `(defn label ^[string] [x] ...)`, `(fn ^[number] [] ...)`, or per arity, `(defn f (^[number] [a] ...) (^[HTMLElement] [a b] ...))`. The check checks the body's returns against it, and casts calls of that arity to it, in other namespaces too (from the function's analysis), so callers' interop with the result is typed. Names in it resolve in the function's namespace; a call from another namespace isn't cast when they include a relative require's (`"./shapes.js"`). An `async` function's is its `Promise`'s type: `^[Promise string]`.
+
 ```clojure
 (defn draw [^[:or HTMLCanvasElement OffscreenCanvas] canvas ^[{:color string :width [:? number]}] opts]
   (let [ctx (.getContext canvas "2d")]

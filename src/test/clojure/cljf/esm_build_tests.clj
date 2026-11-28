@@ -1374,6 +1374,38 @@
           (is (= [[3 "TS2345"] [3 "TS2554"]]
                  (build "(defn f [^[:fn [MouseEvent] void] cb ^[MouseEvent] e] (cb e)
                            (cb 1) (cb e e))")))))
+      (testing "a params vector's ^[...] tag is its return type: the body's returns are checked against it and
+                calls of its arity are cast to it, of single, multi-arity and variadic defns, other namespaces' (from
+                their analysis) and fn literals"
+        (let [ms      (- (System/currentTimeMillis) 60000)
+              sources (into {} [(write-source! src 'test.ret
+                                  "(ns test.ret (:require [test.ret-lib :as lib]))
+                                   (defn label ^[string] [x] (str \"#\" x))
+                                   (defn bad ^[string] [x] (if x :a 1))
+                                   (defn multi (^[number] [a] (count a)) (^[HTMLElement] [a b] (.createElement js/document \"a\")))
+                                   (defn vari ^[string] [a & more] (if a (apply str a more) 1))
+                                   (defn use-them []
+                                     (.toFixed (label 1) 2)
+                                     (.toUpperCase (multi [1]))
+                                     (.focus (multi 1 2))
+                                     (.toFixed (vari 1 2 3) 2)
+                                     (.toFixed (lib/el) 2)
+                                     (.toUpperCase (label 1))
+                                     ((fn ^[number] [] \"x\")))"
+                                  ms)
+                                (write-source! src 'test.ret-lib
+                                  "(ns test.ret-lib)\n(defn el ^[HTMLDivElement] [] (.createElement js/document \"div\"))"
+                                  ms)])]
+          (reset! warnings [])
+          (binding [esm/*generated-sources* sources
+                    ana/*cljs-warning-handlers* [(fn [type env extra]
+                                                   (when (= :ts-check type)
+                                                     (swap! warnings conj [(:line env) (:message extra)])))]]
+            (esm/build {:main 'test.ret :output-dir (str (io/file dir "out-ret")) :watch-dirs [(str src)]
+                        :ts-check {:tsc test-tsc}}))
+          (is (= [[3 "TS2322"] [3 "TS2322"] [5 "TS2322"] [7 "TS2551"] [8 "TS2339"] [10 "TS2551"] [11 "TS2339"]
+                  [13 "TS2322"]]
+                 (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings))))))
       (testing "an invalid type tag fails the compile, naming it"
         (doseq [tag ["[:fn string]" "[:nope string]" "[{:x [:? string number]}]" "[nope/T]" "[:ts \"*/\"]"]]
           (is (thrown-with-msg? clojure.lang.ExceptionInfo
