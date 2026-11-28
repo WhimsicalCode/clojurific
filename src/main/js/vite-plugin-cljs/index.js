@@ -1470,6 +1470,8 @@ export default function cljf(options) {
       // the handling of the last compiled or error event, which a ts-check
       // event's waits for: its overlay after the compile's hot update
       let compileHandled = Promise.resolve();
+      // whether a ts-check event's overlay is open, unless a hot update closed it
+      let tsOverlay = false;
       const onCompilerEvent = async event => {
         if (event.type === 'repl-send') return replSend(event);
         if (event.type === 'ts-complete' && tsComplete) {
@@ -1508,7 +1510,14 @@ export default function cljf(options) {
           config.logger[problems.length ? 'warn' : 'info'](
             `[cljf] TypeScript: ${problems.length} problem(s) after checking ${event.checked} namespace(s) in ${event.ms}ms`,
             { timestamp: true });
-          if (problems.length && !problem && !event.full) {
+          if (!problems.length && tsOverlay && !problem) {
+            // a check for an earlier compile can open the overlay after a
+            // later compile's hot update: an update, even an empty one,
+            // closes it
+            tsOverlay = false;
+            server.ws.send({ type: 'update', updates: [] });
+          } else if (problems.length && !problem && !event.full) {
+            tsOverlay = true;
             const [first] = problems;
             server.ws.send({
               type: 'error',
@@ -1568,6 +1577,7 @@ export default function cljf(options) {
           config.logger.info(`[cljf] compiled ${event.namespaces} namespace(s) in ${event.ms}ms` +
             (ignored ? `, ${ignored} outstanding warning(s) ignored` : ''), { timestamp: true });
           problem = null;
+          tsOverlay = false;
           // the namespaces this compile wrote and those held back that it
           // didn't, together, in every environment: a server entry's (ssr) as
           // well as the pages'
