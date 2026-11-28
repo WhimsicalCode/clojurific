@@ -565,10 +565,15 @@
 (deftest jsx-str-keys-skip-the-nil-check
   ;; TypeScript reports `("" + ...) ?? undefined` unreachable. Keys typed string or number by
   ;; hints or return tags can be nil (parse-long), so they keep the check, as locals and
-  ;; a local named str do.
+  ;; a str that isn't cljs.core's do.
   (let [dir     (temp-dir)
-        sources (into {} [(write-source! dir 'test.keys
-                            "(ns test.keys)
+        sources (into {} [(write-source! dir 'test.ownstr
+                            "(ns test.ownstr (:refer-clojure :exclude [str]))
+                             (defn str [_] nil)
+                             (defn view [] #x [:o {:key (str 1)}])"
+                            (- (System/currentTimeMillis) 60000))
+                          (write-source! dir 'test.keys
+                            "(ns test.keys (:require [test.ownstr :as own]))
                              (defn view [n ^string h]
                                (let [s (str \"s\" n)]
                                  #js [#x [:b {:key (str \"b\" n)}]
@@ -576,15 +581,16 @@
                                       #x [:u {:key s}]
                                       #x [:p {:key (parse-long \"nope\")}]
                                       #x [:a {:key h}]
-                                      (let [str (fn [_] nil)] #x [:q {:key (str n)}])]))
+                                      (let [str (fn [_] nil)] #x [:q {:key (str n)}])
+                                      (own/view)]))
                              (js/console.log (js/JSON.stringify (.map (view 1 nil) (fn [e] (.-key e)))))"
                             (- (System/currentTimeMillis) 60000))])]
     (stub-jsx-runtime! dir "react")
     (binding [esm/*generated-sources* sources]
       (esm/build {:main 'test.keys :output-dir (str (io/file dir "out"))}))
-    (let [out (output dir 'test.keys)]
-      (is (= 4 (count (re-seq #"\?\? undefined" out))) "only the str calls go without the check")
-      (is (= ["b1" "i1" "s1" nil nil nil] (json/read-str (run-node (io/file dir "out" "test" "keys.js"))))))))
+    (let [out (str (output dir 'test.keys) (output dir 'test.ownstr))]
+      (is (= 5 (count (re-seq #"\?\? undefined" out))) "only the str calls go without the check")
+      (is (= ["b1" "i1" "s1" nil nil nil nil] (json/read-str (run-node (io/file dir "out" "test" "keys.js"))))))))
 
 (deftest the-generated-test-runner-runs-the-block-its-runner-returns
   (let [dir     (temp-dir)

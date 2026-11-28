@@ -222,7 +222,15 @@
     (cond
       (and found? (or (string? k) (number? k))) (arg k)
       (and found? (keyword? k)) (arg (name k))
-      (and found? (seq? k) ('#{str cljs.core/str} (first k)) (nil? (get-in env [:locals (first k)]))) (arg k)
+      ;; str is cljs.core's unless a local or the namespace (:refer-clojure :exclude or
+      ;; :rename, or its own str) hides it, as for the core macro's expansion
+      (and found? (seq? k)
+           (case (first k)
+             cljs.core/str true
+             str (and (nil? (get-in env [:locals 'str]))
+                      (not (contains? (get-in env [:ns :excludes]) 'str)))
+             false))
+      (arg k)
       found? ["(~{} ?? undefined)" [k]]
       (seq spread-forms)
       [(str "(" (string/join " ?? " (repeat (count spread-forms) "~{}")) ")")
