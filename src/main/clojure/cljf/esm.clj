@@ -1177,7 +1177,8 @@
             (install-goog-shims opts)
             (install-goog-libs compiler-env opts)
             (write-package-json opts)
-            (when (:ts-check opts)
+            ;; a watch checks after its compiles, see ts-checker
+            (when (and (:ts-check opts) (not (::watch opts)))
               ((requiring-resolve 'cljf.esm.ts-check/check!) inputs (watch-dirs opts) opts output-file goog-shims))
             (when (seq (:build-hooks opts))
               (ensure-analyzed! compiler-env inputs opts)
@@ -1484,7 +1485,7 @@
   runtimes connect over the Vite plugin's socket, see
   cljf.esm.repl-runtime/connect-socket!."
   [opts]
-  (let [opts (prepare-opts (merge {:esm-hmr true} opts))]
+  (let [opts (prepare-opts (merge {:esm-hmr true ::watch true} opts))]
     (cond-> opts
       (or (true? (:esm-repl opts))
           (and (:esm-hmr opts) (not (false? (:esm-repl opts)))))
@@ -1550,6 +1551,53 @@
       (when fresh
         (mapv #(or (fresh (:ns %)) %) inputs)))))
 
+(defn- ts-checker
+  "The watch's :ts-check: a fn of the namespaces a compile wrote (nil: all
+  of the build's), which checks them on a thread of its own, holding lock
+  (the output doesn't change meanwhile), not holding back the compile's
+  event and hot reload. Each check's diagnostics replace those of the
+  namespaces it checked, a ts-check event reports them all as :problems
+  (the Vite plugin's overlay shows them, they don't pause hot reload), and
+  it prints the new ones."
+  [opts lock inputs-]
+  (let [exec      (Executors/newSingleThreadExecutor
+                    (reify java.util.concurrent.ThreadFactory
+                      (newThread [_ r] (doto (Thread. ^Runnable r "cljf-ts-check") (.setDaemon true)))))
+        problems- (atom {})
+        dirs      (watch-dirs opts)]
+    (fn [nses]
+      (.submit exec
+        ^Runnable
+        (fn []
+          (locking* lock
+            (fn []
+              (binding [*out* @stdout
+                        *err* @stderr]
+                (try
+                  (let [start  (System/nanoTime)
+                        inputs (cond->> @inputs- nses (filter (comp (set nses) :ns)))
+                        {:keys [failed checked diagnostics]}
+                        ((requiring-resolve 'cljf.esm.ts-check/diagnostics) inputs dirs opts output-file goog-shims)]
+                    (cond
+                      failed
+                      (binding [*out* *err*] (println (str "WARNING: " failed)))
+
+                      checked
+                      (let [by-ns (group-by :ns diagnostics)]
+                        ;; the tsconfig's (no namespace) are of every check
+                        (swap! problems- #(merge (apply dissoc % nil checked) by-ns))
+                        (binding [*out* *err*]
+                          (doseq [{:keys [file line message]} diagnostics]
+                            (println (str "WARNING: TypeScript: " message
+                                          (when file (str " at " (when line (str "line " line " ")) file))))))
+                        (event! "ts-check"
+                          {:checked  (count checked)
+                           :problems (vec (mapcat val (sort-by (comp str key) @problems-)))
+                           :ms       (long (/ (- (System/nanoTime) start) 1e6))}))))
+                  (catch Throwable e
+                    (binding [*out* *err*]
+                      (println (str "WARNING: :ts-check failed: " e)))))))))))))
+
 (defn watch
   "Builds like build, then recompiles namespaces as their sources change.
   With :watch-events :stdin, the parent process (the Vite plugin) watches
@@ -1586,6 +1634,8 @@
         ;; the namespaces the current recompile wrote: an error event reports
         ;; them, the Vite plugin hot updates them once a compile succeeds
         written-     (atom [])
+        ;; :ts-check after compiles, see ts-checker
+        ts-check!    (when (:ts-check opts) (ts-checker opts lock inputs-))
         ;; the warnings of the output files, {path [warning]}: compiled
         ;; events report them as :outstanding, the Vite plugin holds back hot
         ;; reloads while there are any
@@ -1724,6 +1774,8 @@
                                                              :type "error"
                                                              :files (map #(.getPath (output-file % opts)) @written-))
                                                        (->> (event! "error")))))]
+                                     (when (and ts-check! (= "compiled" (:type event)))
+                                       (ts-check! (when-not full? (:compiled event))))
                                      (status! event files full?))
                                    (finally
                                      ;; the REPL's tools (cider-nrepl) answer
@@ -1741,7 +1793,10 @@
       (fn []
         (status!
           (try
-            (build!)
+            (let [event (build!)]
+              (when (and ts-check! (= "compiled" (:type event)))
+                (ts-check! nil))
+              event)
             (catch Throwable e
               (doto (assoc (error-data e) :type "error")
                 (->> (event! "error")))))

@@ -300,6 +300,11 @@ export type Core = {
   [k: string]: any;
 };
 
+// the hot reload code a watch's output has (:esm-hmr), which Vite provides
+declare global {
+  interface ImportMeta { hot?: any }
+}
+
 // cljs.core.constants of :optimize-constants: cst$kw$… and cst$sym$…
 export type Constants = {
   [k: `cst$kw$${string}`]: Keyword;

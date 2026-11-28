@@ -1290,3 +1290,47 @@
                                          :ts-check {:tsc tsc}})))
                          0 19))
                 tsc)))))))
+
+(deftest ts-check-watch
+  (if-not test-tsc
+    (println "ts-check-watch skipped: no TypeScript (set CLJF_TEST_NODE_MODULES)")
+    (let [dir    (temp-dir)
+          src    (doto (io/file dir "src" "w") .mkdirs)
+          a      (io/file src "a.cljs")
+          now    (System/currentTimeMillis)
+          events (atom [])
+          wait   (fn [pred]
+                   (loop [n 0]
+                     (or (some #(when (pred %) %) @events)
+                         (when (< n 1800) (Thread/sleep 100) (recur (inc n))))))]
+      (spit a "(ns w.a)\n(defn f [] (.querySelectr js/document \"a\"))\n")
+      (.setLastModified a (- now 60000))
+      (spit (io/file src "b.cljs")
+        "(ns w.b (:require [w.a]))\n(defn g [] (.setAttribute (.createElement js/document \"a\") \"role\" :b))\n")
+      (with-redefs [esm/event! (fn [type m] (swap! events conj (assoc m :type type)))]
+        (let [watch (future
+                      ;; the sources aren't on the classpath
+                      (binding [esm/*generated-sources* {'w.a a 'w.b (io/file src "b.cljs")}
+                                *err* (java.io.StringWriter.)]
+                        (esm/watch {:main 'w.b :output-dir (str (io/file dir "out"))
+                                    :watch-dirs [(str (io/file dir "src"))] :esm-repl false
+                                    :ts-check {:tsc test-tsc}})))
+              lines #(sort (map (juxt :line (comp (partial re-find #"TS\d+") :message)) (:problems %)))]
+          (try
+            (testing "the first build checks every namespace, after its compiled event, which has no TypeScript
+                      warnings to hold back hot reload"
+              (let [checked (wait #(= "ts-check" (:type %)))]
+                (is (= 2 (:checked checked)))
+                (is (= [[2 "TS2345"] [2 "TS2551"]] (lines checked)))
+                (is (= ["compiled" "ts-check"] (filterv #{"compiled" "ts-check"} (map :type @events))))
+                (is (empty? (:outstanding (wait #(= "compiled" (:type %))))))))
+            (testing "a recompile checks the namespaces it wrote, the others' problems stay"
+              (reset! events [])
+              (spit a "(ns w.a)\n(defn f [] (.querySelector js/document \"a\"))\n")
+              (.setLastModified a now)
+              (let [checked (wait #(= "ts-check" (:type %)))]
+                (is (= 1 (:checked checked)))
+                (is (= [[2 "TS2345"]] (lines checked)))
+                (is (empty? (:outstanding (wait #(= "compiled" (:type %))))))))
+            (finally
+              (future-cancel watch))))))))

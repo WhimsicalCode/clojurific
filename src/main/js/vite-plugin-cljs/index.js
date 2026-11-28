@@ -1490,6 +1490,31 @@ export default function cljf(options) {
           sendHud();
           return;
         }
+        // tsCheck's diagnostics after a compile (the compiler's watch checks
+        // the namespaces it wrote): on the overlay unless a compile's problem
+        // is, they don't pause hot reload. The next hot update clears it.
+        if (event.type === 'ts-check') {
+          const problems = event.problems ?? [];
+          config.logger[problems.length ? 'warn' : 'info'](
+            `[cljf] TypeScript: ${problems.length} problem(s) after checking ${event.checked} namespace(s) in ${event.ms}ms`,
+            { timestamp: true });
+          if (problems.length && !problem) {
+            const [first] = problems;
+            server.ws.send({
+              type: 'error',
+              err: {
+                stack: '',
+                plugin: 'cljf',
+                message: problems
+                  .map(p => `TypeScript: ${p.message}${p.file ? ` at ${path.relative(cwd, p.file)}${p.line ? `:${p.line}` : ''}` : ''}`)
+                  .join('\n') + '\n\nHot reload continues: these are type errors, not compile errors.',
+                id: first.file,
+                loc: first.file && first.line ? { file: first.file, line: first.line, column: first.column } : undefined,
+              },
+            });
+          }
+          return;
+        }
         // before the hot updates waiting for the compile
         const held = event.type === 'compiled' ? warnings.compiled(event) : null;
         // a failed compile's: those it wrote before failing, held back
