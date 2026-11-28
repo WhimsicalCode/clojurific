@@ -40,8 +40,11 @@
   shims) are any, as are top-level vars; relative imports of files outside
   the output directory are absolute; cljs-npm-as: imports (:npm-interop
   :shadow) import the package's namespace."
-  [^File js output shims]
-  (let [parent (.getParentFile js)]
+  [^File js output shims ^File core-dts]
+  (let [parent (.getParentFile js)
+        ;; cljs.core and its constants module typed by ts_check_core.d.ts
+        core   {(canonical (io/file output "cljs/core.js"))           "Core"
+                (canonical (io/file output "cljs/core/constants.js")) "Constants"}]
     (->> (string/split (slurp js) #"\n" -1)
          ;; :npm-interop :shadow's imports, which the Vite plugin resolves:
          ;; an ES module's namespace, its default export if that's all it
@@ -58,6 +61,10 @@
                 (if-let [[_ star alias spec] (re-matches #"import (\* as )?([\w$]+) from \"(\.[^\"]*)\";" line)]
                   (let [target (canonical (io/file parent spec))]
                     (cond
+                      (and star (core target))
+                      (str "var " alias " = /** @type {import(" (json/write-str (canonical core-dts) :escape-slash false)
+                           ")." (core target) "} */ (/** @type {any} */ (null));")
+
                       ;; another compiled namespace
                       (and star (string/starts-with? target (str output File/separator)) (not (shims target)))
                       (str "var " alias " = /** @type {any} */ (null);")
@@ -136,14 +143,17 @@
             (println (str "WARNING: " msg)))))
 
       :else
-      (let [checked (into {}
+      (let [core-dts (io/file root "cljs-core.d.ts")
+            _        (do (io/make-parents core-dts)
+                         (spit core-dts (slurp (io/resource "cljf/esm/ts_check_core.d.ts"))))
+            checked (into {}
                       (keep (fn [{:keys [ns source-file]}]
                               (let [^File js (output-file ns opts)]
                                 (when (.exists js)
                                   (let [rel  (subs (canonical js) (inc (count output)))
                                         copy (io/file root rel)]
                                     (io/make-parents copy)
-                                    (spit copy (check-source js output shims))
+                                    (spit copy (check-source js output shims core-dts))
                                     [(canonical copy) {:ns ns :js js :source-file source-file}])))))
                       own)
             config  (io/file root "tsconfig.json")]

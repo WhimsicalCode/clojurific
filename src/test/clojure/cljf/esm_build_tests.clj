@@ -1228,6 +1228,12 @@
                                     (.nope ^js u)
                                     (let [^js a (.createElement js/document \"a\")] (.nope a))
                                     (let [r (my-pkg/hi 1)] (.nope r))
+                                    (.setAttribute (.createElement js/document \"a\") \"role\" :button)
+                                    (.addEventListener js/document \"click\" identity {:passive true})
+                                    (js/Promise.all [(.toUpperCase (str 1)) (.toFixed (count [1]) 2)])
+                                    (.setAttribute (.createElement js/document \"a\") (name :x) (keys {:a 1}))
+                                    (.focus (.querySelector js/document \"a\") (assoc {} :preventScroll true))
+                                    (set! (.-title js/document) (pr-str (.-message (ex-info (name :x) {}))))
                                     (.getDomain u)))"
                                (- (System/currentTimeMillis) 60000))])
           ts       (doto (io/file dir "ts") .mkdirs)
@@ -1243,9 +1249,10 @@
         (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
                     :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}}))
       (testing "interop TypeScript types fails at its line, ClojureScript (records, core fns) and ^js
-                locals don't (a local of an npm call's result does), with :tsconfig's paths and declarations; a missing default export fails at
+                locals don't (a local of an npm call's result does), keywords and maps aren't strings or options
+                objects (vectors are iterables, str a string), with :tsconfig's paths and declarations; a missing default export fails at
                 its import (no ClojureScript line)"
-        (is (= [[nil "TS1192"] [10 "TS2345"] [11 "TS2554"] [12 "TS2339"] [14 "TS2345"] [15 "TS2345"] [18 "TS2339"]]
+        (is (= [[nil "TS1192"] [10 "TS2345"] [11 "TS2554"] [12 "TS2339"] [14 "TS2345"] [15 "TS2345"] [18 "TS2339"] [19 "TS2345"] [20 "TS2769"] [22 "TS2345"] [23 "TS2559"]]
                (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings)))))
       (testing ":warnings {:ts-check :error} reports every diagnostic, then fails the build"
         (reset! warnings [])
@@ -1254,11 +1261,11 @@
                                                 (fn [type env extra]
                                                   (when (= :ts-check type)
                                                     (swap! warnings conj [(:line env) (:message extra)]))))]
-          (is (thrown-with-msg? clojure.lang.ExceptionInfo #":ts-check: 7 TypeScript errors"
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #":ts-check: 11 TypeScript errors"
                 (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
                             :warnings {:ts-check :error}
                             :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}}))))
-        (is (= 7 (count @warnings))))
+        (is (= 11 (count @warnings))))
       (testing "under :error, a tsc that fails without diagnostics, or with one of no file, fails the build"
         (reset! warnings [])
         (binding [esm/*generated-sources* sources
