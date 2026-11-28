@@ -1230,6 +1230,8 @@
                                     (assoc (->R 1) :b (map inc [(.getPort u)]))
                                     (my-pkg/hi \"x\")
                                     (js/Analytics.track 1)
+                                    (.nope ^js u)
+                                    (let [^js a (.createElement js/document \"a\")] (.nope a))
                                     (.getDomain u)))"
                                (- (System/currentTimeMillis) 60000))])
           ts       (doto (io/file dir "ts") .mkdirs)
@@ -1244,7 +1246,7 @@
                                                  (swap! warnings conj [(:line env) (:message extra)])))]]
         (esm/build {:main 'test.ts :output-dir (str (io/file dir "out")) :watch-dirs [(str src)]
                     :ts-check {:tsc test-tsc :tsconfig (str (io/file ts "tsconfig.json"))}}))
-      (testing "interop TypeScript types fails at its line, ClojureScript (records, core fns) doesn't,
-                with :tsconfig's paths and declarations"
+      (testing "interop TypeScript types fails at its line, ClojureScript (records, core fns) and ^js
+                locals don't, with :tsconfig's paths and declarations"
         (is (= [[10 "TS2345"] [11 "TS2554"] [12 "TS2339"] [14 "TS2345"] [15 "TS2345"]]
                (mapv (fn [[line message]] [line (re-find #"TS\d+" message)]) (sort @warnings))))))))

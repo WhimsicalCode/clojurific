@@ -840,7 +840,11 @@
                            (set/difference ana/es5-allowed))
                 info (cond-> info
                        (not= form 'js/-Infinity) (munge reserved))]
-            (emit-wrap env (emits info))))))))
+            (emit-wrap env
+              ;; for :ts-check (cljf.esm.ts-check), ^js locals are any
+              (if (and (:ts-check options) (= :local (:op ast)) (= 'js (:tag ast)))
+                (emits "/** @type {any} */ (" info ")")
+                (emits info)))))))))
 
 (defmethod emit* :var [expr] (emit-var expr))
 (defmethod emit* :binding [expr] (emit-var expr))

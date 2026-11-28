@@ -44,12 +44,18 @@
   of other compiled modules (inside the output directory, but not the goog
   shims) are any, as are top-level vars; relative imports of files outside
   the output directory are absolute; cljs-npm-as: imports (:npm-interop
-  :shadow) import the package."
+  :shadow) import the package's namespace."
   [^File js output shims]
   (let [parent (.getParentFile js)]
     (->> (string/split (slurp js) #"\n" -1)
-         ;; :npm-interop :shadow's imports, which the Vite plugin resolves
-         (map #(string/replace % "from \"cljs-npm-as:" "from \""))
+         ;; :npm-interop :shadow's imports, which the Vite plugin resolves:
+         ;; an ES module's namespace, a CommonJS module's module.exports, as
+         ;; TypeScript's import types type them (export = for CommonJS)
+         (map (fn [line]
+                (if-let [[_ alias spec] (re-matches #"import ([\w$]+) from \"cljs-npm-as:([^\"]+)\";" line)]
+                  (let [spec (if (string/starts-with? spec ".") (canonical (io/file parent spec)) spec)]
+                    (str "const " alias " = /** @type {typeof import(" (json/write-str spec :escape-slash false) ")} */ (null);"))
+                  line)))
          (map (fn [line]
                 (if-let [[_ star alias spec] (re-matches #"import (\* as )?([\w$]+) from \"(\.[^\"]*)\";" line)]
                   (let [target (canonical (io/file parent spec))]
@@ -96,11 +102,14 @@
 
 (defn- source-position
   "The ClojureScript [line column] (1-based) of output js' 1-based line and
-  column, from its source map: the last mapping at or before it on the line."
+  column, from its source map: the last mapping at or before it on the line,
+  the innermost form of those starting at the same column (an enclosing let
+  and the call in it start where the call does)."
   [source-map line column]
   (when-let [segs (get source-map (dec line))]
-    (when-let [[_ [{:keys [line col]}]] (first (rsubseq segs <= (dec column)))]
-      [(inc line) (inc col)])))
+    (when-let [[_ ms] (first (rsubseq segs <= (dec column)))]
+      (let [{:keys [line col]} (peek ms)]
+        [(inc line) (inc col)]))))
 
 (defn check!
   "Runs :ts-check over the build's inputs ({:ns :source-file}) whose sources

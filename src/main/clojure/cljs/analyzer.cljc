@@ -5118,11 +5118,13 @@ x                          (not (contains? ret :info)))
 
 #?(:clj
    (defn build-affecting-options [opts]
-     (select-keys opts
-       [:static-fns :fn-invoke-direct :optimize-constants :elide-asserts :target :nodejs-rt
-        :cache-key :checked-arrays :language-out :lite-mode :elide-to-string
-        :esm-hmr :esm-repl :npm-interop :closure-defines :preloads :mode :load-tests
-        :checked-set-literals :warnings-as-errors :jsx-import-source])))
+     (cond-> (select-keys opts
+               [:static-fns :fn-invoke-direct :optimize-constants :elide-asserts :target :nodejs-rt
+                :cache-key :checked-arrays :language-out :lite-mode :elide-to-string
+                :esm-hmr :esm-repl :npm-interop :closure-defines :preloads :mode :load-tests
+                :checked-set-literals :warnings-as-errors :jsx-import-source])
+       ;; ^js casts (cljs.compiler/emit-var), whatever :ts-check's settings
+       (:ts-check opts) (assoc :ts-check true))))
 
 #?(:clj
    (defn build-affecting-options-sha [path opts]
