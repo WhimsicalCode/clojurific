@@ -820,6 +820,7 @@ declare namespace goog {
   }
 }
 
+export {};
 export import Date = goog.date.Date;
 export import DateTime = goog.date.DateTime;
 export import Interval = goog.date.Interval;

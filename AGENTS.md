@@ -80,6 +80,7 @@ launcher's copy, which `cljf.esm-repl-tests/mcp-tools-copy` checks. After updati
 `org.clojure/google-closure-library` or `com.cognitect/transit-cljs`, run `script/gen-goog-shims` and
 commit the shims and `.d.ts` it rewrites in `src/main/cljs/cljf/esm/` (`goog/date.js`, `goog/net.js`,
 `goog/Uri.js`, `com/cognitect/`); edit their conversion in `script/gen_goog_shims/`, not the shims.
+When changing a hand-written shim's exports, update its `.d.ts` next to it.
 
 `cljs/repl.cljc` is only `cljs.repl`'s macros (`doc`, `source`, `dir`, `apropos`, `find-doc`) and
 the docs they read, which `cljf.esm.repl` and cider's orchard use; the classic REPL is gone.

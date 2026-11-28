@@ -11,7 +11,7 @@ releases, see its [changelog](https://github.com/clojure/clojurescript/blob/mast
 - `create-clojurific`'s `cloudflare` template: a Hono app on Cloudflare Workers with a Durable Object, which `@cloudflare/vite-plugin` runs in workerd under `vite` and bundles for `wrangler deploy`.
 - Experimental: the Vite plugin's `tsCompletions` completes JavaScript interop in nREPL sessions (`js/document.getE…`, `(.. js/document -body -cl…)`, `react/useSt…` of a string require) with a TypeScript language service over the project's tsconfig and `node_modules`, without a connected page and with signatures and docs, before clj-suitable's runtime introspection, which completes what TypeScript doesn't type. It needs TypeScript 5 or 6 in the project.
 
-- The shims converted from the Closure Library's and transit-js' sources (`goog/Uri.js`, `goog/net.js`, `goog/date.js`, `com/cognitect/`) have TypeScript declarations, generated from their Closure JSDoc by `script/gen-goog-shims` and written next to them in a build (unless `:esm-dts false`): TypeScript importing `goog.Uri`, `goog.net.XhrIo`, `goog.date.DateTime` or transit type checks its calls, and editors complete them.
+- The Closure Library and transit-js shims have TypeScript declarations, written next to them in a build (unless `:esm-dts false`): TypeScript importing `goog.Uri`, `goog.net.XhrIo`, `goog.date.DateTime`, `goog.math.Long`, `goog.string`, transit or any other shim type checks its calls, and editors complete them. The converted shims' (`goog/Uri.js`, `goog/net.js`, `goog/date.js`, `com/cognitect/`) are generated from their Closure JSDoc by `script/gen-goog-shims`, the others' are hand written.
 
 ### Changed
 

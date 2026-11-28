@@ -1,8 +1,9 @@
-// The declarations of the shims converted from the Closure Library's and
-// transit-js' sources (src/main/cljs/cljf/esm/**/*.d.ts, which
-// script/gen-goog-shims writes from their JSDoc): they type-check with
-// --strict, and type a TypeScript module using the shims, which a wrong use
-// fails. Needs TypeScript 5 or 6, see ts-completions.test.js; skipped without.
+// The shims' declarations (src/main/cljs/cljf/esm/**/*.d.ts: the converted
+// shims' script/gen-goog-shims writes from their JSDoc, the others' are hand
+// written): they type-check with --strict, type a TypeScript module using the
+// shims, which a wrong use fails, and declare the values each shim exports, no
+// more, no less. Needs TypeScript 5 or 6, see ts-completions.test.js; skipped
+// without.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -27,8 +28,17 @@ const user = `
 import { parse, Uri, QueryData } from '${esm}goog/Uri.js';
 import { XhrIo, EventType, ErrorCode, Jsonp, cookies } from '${esm}goog/net.js';
 import { DateTime, Interval, UtcDateTime, Date as GDate } from '${esm}goog/date.js';
-import { reader, writer, isKeyword } from '${esm}com/cognitect/transit.js';
+import { reader, writer, isKeyword, integer } from '${esm}com/cognitect/transit.js';
 import { TaggedValue } from '${esm}com/cognitect/transit/types.js';
+import { Long } from '${esm}goog/math.js';
+import { typeOf, Uri as UriStub } from '${esm}goog.js';
+import { padNumber, StringBuffer } from '${esm}goog/string.js';
+import { getKeys } from '${esm}goog/object.js';
+import { listen, unlistenByKey, BrowserEvent } from '${esm}goog/events.js';
+import { CLICK } from '${esm}goog/events/EventType.js';
+import { Sha256, byteArrayToHex } from '${esm}goog/crypt.js';
+import { encodeString, Alphabet } from '${esm}goog/crypt/base64.js';
+import { format } from '${esm}goog/date/duration.js';
 
 const uri: Uri = parse('https://example.com/a?b=1');
 const domain: string = uri.getDomain();
@@ -55,6 +65,21 @@ const base: GDate = date;
 const json: string = writer('json').write(reader('json').read('[1]'));
 const tagged = new TaggedValue('t', 1);
 isKeyword(tagged);
+const big = integer('9007199254740993');
+if (typeof big !== 'number') { const l: Long = big; }
+
+const sum: string = Long.fromNumber(1).add(Long.getOne()).toString(16);
+const kind: 'array' | 'null' | string = typeOf(null);
+if (uri instanceof UriStub) { const d: string = uri.getDomain(); }
+const padded: string = new StringBuffer('a').append(padNumber(1, 2)).toString();
+const keys2: string[] = getKeys({ a: 1 });
+const key = listen(document, CLICK, (e) => { const b: BrowserEvent = e; e.preventDefault(); });
+unlistenByKey(key);
+const sha = new Sha256();
+sha.update('abc');
+const hex: string = byteArrayToHex(sha.digest());
+const b64: string = encodeString('abc', Alphabet.WEBSAFE);
+const took: string = format(90060000);
 
 // @ts-expect-error a port isn't a string
 const portString: string = uri.getPort();
@@ -66,14 +91,20 @@ xhr.setTimeoutInterval('1s');
 date.add(5);
 // @ts-expect-error parse takes a URI
 parse();
+// @ts-expect-error add takes a Long
+Long.getOne().add(1);
+// @ts-expect-error not an alphabet
+encodeString('abc', 7);
+// @ts-expect-error goog.Uri's namespace isn't exported
+import { goog } from '${esm}goog/Uri.js';
 `;
 
-test('the converted shims are typed', { skip: ts ? false : 'no typescript (set CLJF_TEST_NODE_MODULES)' }, () => {
+test('the shims are typed', { skip: ts ? false : 'no typescript (set CLJF_TEST_NODE_MODULES)' }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cljf-shim-types-'));
   const file = path.join(dir, 'user.ts');
   fs.writeFileSync(file, user);
   const dts = fs.globSync('**/*.d.ts', { cwd: esm }).map(f => path.join(esm, f));
-  assert.ok(dts.length >= 7, dts.join(' '));
+  assert.ok(dts.length >= 22, dts.join(' '));
   const program = ts.createProgram([file, ...dts], {
     strict: true, noEmit: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler, lib: ['lib.es2022.d.ts', 'lib.dom.d.ts'],
@@ -83,4 +114,14 @@ test('the converted shims are typed', { skip: ts ? false : 'no typescript (set C
     return where + ts.flattenDiagnosticMessageText(d.messageText, '\n');
   });
   assert.deepEqual(diagnostics, []);
+
+  const checker = program.getTypeChecker();
+  for (const f of dts) {
+    const declared = checker.getExportsOfModule(checker.getSymbolAtLocation(program.getSourceFile(f)))
+      .filter(s => (s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s).flags & ts.SymbolFlags.Value)
+      .map(s => s.name).sort();
+    // $$set is the build's, see cljf.esm/install-goog-shims
+    const exported = Object.keys(await import(f.replace(/\.d\.ts$/, '.js'))).filter(k => k !== '$$set').sort();
+    assert.deepEqual(declared, exported, path.relative(esm, f));
+  }
 });

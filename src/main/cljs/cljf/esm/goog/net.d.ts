@@ -1578,6 +1578,7 @@ declare namespace goog {
   }
 }
 
+export {};
 export import XhrIo = goog.net.XhrIo;
 export import Jsonp = goog.net.Jsonp;
 export import Cookies = goog.net.Cookies;

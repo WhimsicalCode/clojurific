@@ -842,6 +842,7 @@ declare namespace goog {
   }
 }
 
+export {};
 export import Uri = goog.Uri;
 export import RANDOM_PARAM = goog.Uri.RANDOM_PARAM;
 export import create = goog.Uri.create;

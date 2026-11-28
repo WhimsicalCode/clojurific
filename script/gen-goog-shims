@@ -46,4 +46,4 @@ dts() { f=$1; shift; python3 $gen/closure_dts.py "$esm/$f.js" "$esm/$f.d.ts" "$@
 dts goog/date
 dts goog/net --extern goog.Uri=./Uri.js#Uri
 dts goog/Uri
-dts com/cognitect/transit-js --loose
+dts com/cognitect/transit-js --loose --extern goog.math.Long=../../goog/math.js#Long
