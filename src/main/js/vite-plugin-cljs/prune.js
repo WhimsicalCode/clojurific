@@ -100,18 +100,43 @@ function collect(node, ids, props) {
   }
 }
 
+// The top-level bindings of a chunk initialized to an existing value (an
+// identifier or a member chain, i.e. `const p = goog$date.Date.prototype`):
+// they make no object of their own, so a property assigned through one is a
+// side effect on that value, kept whether or not the binding is read.
+function aliasNames(ast) {
+  const names = new Set();
+  for (const node of ast.body) {
+    if (node.type !== 'VariableDeclaration') continue;
+    for (const d of node.declarations) {
+      let init = unwrap(d.init);
+      while (init && init.type === 'MemberExpression') init = unwrap(init.object);
+      if (d.id.type === 'Identifier' && init && init.type === 'Identifier') names.add(d.id.name);
+    }
+  }
+  return names;
+}
+
 /**
  * The top-level statements of a chunk (code, its ESTree AST) with what they
  * declare and reference: {start, end, kind, names, object, prop, ids, props},
  * plain data a worker can send.
  */
 export function summarize(code, ast) {
+  const aliases = aliasNames(ast);
   return ast.body.map(node => {
     const s = { start: node.start, end: node.end };
     const ids = new Set(), props = new Set();
     const pa = propAssignment(node);
     const defonce = defonceDecl(node, code);
-    if (pa && isPureInit(pa.rhs, code) && (!pa.lhs.computed || isPureInit(pa.lhs.property, code))) {
+    if (pa && aliases.has(pa.object)) {
+      // kept, but setting a cljs$ property doesn't read it
+      s.kind = 'root';
+      collect(pa.rhs, ids, props);
+      if (pa.lhs.computed) collect(pa.lhs.property, ids, props);
+      ids.add(pa.object);
+    } else if (pa && isPureInit(pa.rhs, code) &&
+        (!pa.lhs.computed || isPureInit(pa.lhs.property, code))) {
       s.kind = 'prop'; s.object = pa.object; s.prop = pa.prop;
       collect(pa.rhs, ids, props);
       if (pa.lhs.computed) collect(pa.lhs.property, ids, props);

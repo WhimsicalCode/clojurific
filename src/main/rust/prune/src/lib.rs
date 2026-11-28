@@ -16,7 +16,7 @@ use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 const NONE: u32 = u32::MAX;
 const KIND_ROOT: u32 = 0;
@@ -254,6 +254,27 @@ fn prop_assignment<'b, 'a>(
     Some((obj.name.as_str(), prop.filter(|p| is_cljs_prop(p)), computed, &e.right))
 }
 
+/// prune.js `aliasNames`: the top-level bindings initialized to an existing
+/// value (an identifier or a member chain), whose property assignments are
+/// side effects on that value.
+fn alias_names<'b, 'a>(program: &'b Program<'a>) -> FxHashSet<&'b str> {
+    let mut names = FxHashSet::default();
+    for stmt in program.body.iter() {
+        let Statement::VariableDeclaration(v) = stmt else { continue };
+        for d in v.declarations.iter() {
+            let (BindingPattern::BindingIdentifier(id), Some(init)) = (&d.id, d.init.as_ref()) else { continue };
+            let mut e = unwrap(init);
+            while let Some(m) = e.as_member_expression() {
+                e = unwrap(member(m).0);
+            }
+            if matches!(e, Expression::Identifier(_)) {
+                names.insert(id.name.as_str());
+            }
+        }
+    }
+    names
+}
+
 /// prune.js `defonceDecl`: `if (typeof X !== "undefined") {} else var X = <pure>;`
 fn defonce_decl<'b, 'a>(stmt: &'b Statement<'a>, source: &str) -> Option<&'b str> {
     let Statement::IfStatement(s) = stmt else { return None };
@@ -387,10 +408,21 @@ fn summarize_in<'a>(allocator: &'a Allocator, source: &'a str) -> Result<(Vec<St
             (KIND_ROOT, None, None, vec![])
         });
     }
+    let aliases = alias_names(program);
     for stmt in program.body.iter() {
         s.add(stmt.span(), |c| {
+            if let Some((object, _, computed, rhs)) = prop_assignment(stmt).filter(|(object, ..)| aliases.contains(object)) {
+                // kept, but setting a cljs$ property doesn't read it
+                c.visit_expression(rhs);
+                if let Some(k) = computed {
+                    c.visit_expression(k);
+                }
+                c.id(object);
+                return (KIND_ROOT, None, None, vec![]);
+            }
             if let Some((object, prop, computed, rhs)) = prop_assignment(stmt).filter(|(_, _, computed, rhs)| {
-                is_pure_init(Some(rhs), source) && computed.map_or(true, |k| is_pure_init(Some(k), source))
+                is_pure_init(Some(rhs), source)
+                    && computed.map_or(true, |k| is_pure_init(Some(k), source))
             }) {
                 c.visit_expression(rhs);
                 if let Some(k) = computed {

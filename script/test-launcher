@@ -31,6 +31,8 @@ printf '(ns smoke.core)\n(println "smoke" (+ 1 2))\n' > "$project/src/smoke/core
   npm init -y > /dev/null
   npm pkg set type=module
   npm install --silent --no-audit --no-fund vite@8.2.2 "$OLDPWD/builds/clojurific-$version.tgz"
+  # the pruning tests, with this Vite's parser
+  CLJF_TEST_NODE_MODULES="$project/node_modules" node --test "$OLDPWD/src/main/js/vite-plugin-cljs/test/prune.test.js"
   npx cljf classpath | tr ':' '\n' | grep -qx "$project/m2/com/whimsical/clojurific/$version/clojurific-$version.jar"
   npx cljf build '{:main smoke.core :output-dir "out"}'
   output=$(node out/smoke/core.js)
