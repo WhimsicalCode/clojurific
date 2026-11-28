@@ -487,8 +487,11 @@
 
 (deftest jsx-literals-require-cljf-jsx-only-when-there-are-any
   (let [dir (temp-dir)
+        n   (atom 0)
+        ;; a file per source: whether a file has literals is cached by its
+        ;; path and modification time, which rewriting it can leave unchanged
         ns-requires (fn [source]
-                      (let [f (io/file dir "t.cljs")]
+                      (let [f (io/file dir (str "t" (swap! n inc) ".cljs"))]
                         (spit f source)
                         (set (:requires (ana/parse-ns f)))))]
     (is (contains? (ns-requires "(ns t) (defn f [] #x [:p])") 'cljf.jsx))
