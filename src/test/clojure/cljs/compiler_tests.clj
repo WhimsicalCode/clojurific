@@ -254,7 +254,11 @@
     (is (re-find #"\bf\(\"a\"\)" js))
     (is (re-find #"\bh\(\)" js))
     (is (not (re-find #"\bg\(\"b\"\)" js)))
-    (is (re-find #"\bg\.(call|cljs\$core\$IFn)" js))))
+    (is (re-find #"\bg\.(call|cljs\$core\$IFn)" js)))
+  ;; on an expression, a type tag isn't runtime meta: a fn stays a function
+  (let [js (compile-simple-form '(def x (fn [el] (.addEventListener el "click" ^{:param-tags [:fn [MouseEvent] void]} (fn [e] e)))))]
+    (is (re-find #"addEventListener\(\"click\",\(function" js))
+    (is (not (re-find #"with_meta|param-tags" js)))))
 
 (deftest test-optimized-invoke-emit
   (let [dir      (doto (java.nio.file.Files/createTempDirectory "invoke-test" (make-array java.nio.file.attribute.FileAttribute 0))

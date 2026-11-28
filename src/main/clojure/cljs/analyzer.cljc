@@ -4692,7 +4692,9 @@ x                          (not (contains? ret :info)))
 
 (defn analyze-wrap-meta [expr]
   (let [form (:form expr)
-        m    (elide-irrelevant-meta (meta form))]
+        ;; ^[...] type tags are :ts-check's, of locals and params vectors:
+        ;; on a literal (a fn's) they aren't runtime meta
+        m    (dissoc (elide-irrelevant-meta (meta form)) :param-tags)]
     (if (some? (seq m))
       (let [env (:env expr) ; take on expr's context ourselves
             expr (assoc-in expr [:env :context] :expr) ; change expr to :expr
